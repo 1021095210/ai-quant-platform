@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>量化研究平台 · 规则模块</title>
+    <link rel="stylesheet" href="/assets/theme.css" />
+  </head>
+  <body>
+    <div class="layout">
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand-mark">Q</div>
+          <div>
+            <h1>规则模块</h1>
+            <p>A 股默认研究规则与 AI 术语理解库</p>
+          </div>
+        </div>
+        <nav class="nav">
+          <a class="nav-link" data-nav href="/">总览</a>
+          <a class="nav-link" data-nav href="/strategy">策略工坊</a>
+          <a class="nav-link" data-nav href="/indicators">指标设置</a>
+          <a class="nav-link" data-nav href="/rules">规则模块</a>
+          <a class="nav-link" data-nav href="/backtests">回测中心</a>
+          <a class="nav-link" data-nav href="/replay">交易复盘</a>
+        </nav>
+      </header>
+
+      <div id="status-banner" class="status-banner">这里统一管理市场默认规则和 AI 需要理解的交易术语。</div>
+
+      <section class="hero">
+        <div>
+          <p class="eyebrow">Rule Studio</p>
+          <h2>让平台先理解市场规则和术语，再去解释你的策略语言。</h2>
+          <p>默认规则帮助平台理解中国股票 / ETF 的研究语境，自定义术语库帮助 AI 正确解释“四连板、炸板、地天板”等交易口语。</p>
+        </div>
+      </section>
+
+      <section class="grid two" style="margin-top: 22px">
+        <section class="card">
+          <div class="panel-header">
+            <h3>默认研究规则</h3>
+          </div>
+          <div id="default-rules" class="list empty-state">正在加载默认规则。</div>
+        </section>
+
+        <section class="card">
+          <div class="panel-header">
+            <h3>新增 AI 术语解释</h3>
+          </div>
+          <div class="form-grid">
+            <label class="field">
+              <span>术语</span>
+              <input id="glossary-term" value="地天板" />
+            </label>
+            <label class="field">
+              <span>意思</span>
+              <textarea id="glossary-meaning">个股盘中大跌后强力拉升，最低点接近跌停，最高点接近涨停，情绪非常极端。</textarea>
+            </label>
+            <label class="field">
+              <span>示例</span>
+              <textarea id="glossary-example">如果策略里写“地天板次日不追高”，AI 应理解为高情绪反转后控制次日追价风险。</textarea>
+            </label>
+            <div class="actions">
+              <button id="save-glossary-btn">保存术语解释</button>
+            </div>
+          </div>
+        </section>
+      </section>
+
+      <section class="card" style="margin-top: 22px">
+        <div class="panel-header">
+          <h3>术语理解库</h3>
+          <span class="muted-note">策略工坊会自动读取这里的术语，帮助 AI 更准确解释自然语言提示。</span>
+        </div>
+        <div id="glossary-library" class="list empty-state">正在加载术语库。</div>
+      </section>
+    </div>
+
+    <script type="module" src="/assets/rules.js"></script>
+  </body>
+</html>

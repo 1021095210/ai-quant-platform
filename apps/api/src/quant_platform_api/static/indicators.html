@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>量化研究平台 · 指标设置</title>
+    <link rel="stylesheet" href="/assets/theme.css" />
+  </head>
+  <body>
+    <div class="layout">
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand-mark">Q</div>
+          <div>
+            <h1>指标设置</h1>
+            <p>传统指标代码核验、自定义指标生成与保存</p>
+          </div>
+        </div>
+        <nav class="nav">
+          <a class="nav-link" data-nav href="/">总览</a>
+          <a class="nav-link" data-nav href="/strategy">策略工坊</a>
+          <a class="nav-link" data-nav href="/indicators">指标设置</a>
+          <a class="nav-link" data-nav href="/rules">规则模块</a>
+          <a class="nav-link" data-nav href="/backtests">回测中心</a>
+          <a class="nav-link" data-nav href="/replay">交易复盘</a>
+        </nav>
+      </header>
+
+      <div id="status-banner" class="status-banner">传统指标默认折叠展示，自定义指标可通过自然语言生成并保存到指标库。</div>
+
+      <section class="hero">
+        <div>
+          <p class="eyebrow">Indicator Lab</p>
+          <h2>先看懂传统指标，再把你的经验沉淀成可复用的自定义指标库。</h2>
+          <p>每个传统指标都提供计算思路和 Python 代码，自定义指标支持自然语言生成、保存，并能在策略工坊直接被 AI 调用。</p>
+        </div>
+      </section>
+
+      <section class="grid two" style="margin-top: 22px">
+        <section class="card">
+          <div class="panel-header">
+            <h3>传统技术指标</h3>
+            <span class="muted-note">默认全部折叠，点击标题展开细节</span>
+          </div>
+          <div id="builtin-indicators" class="accordion-list empty-state">正在加载传统指标。</div>
+        </section>
+
+        <section class="card">
+          <div class="panel-header">
+            <h3>自定义指标设计器</h3>
+          </div>
+          <div class="form-grid">
+            <label class="field">
+              <span>自然语言描述</span>
+              <textarea id="custom-indicator-prompt">我想做一个量价共振指标：价格站上20日均线且成交量高于10日均量时，指标显著增强。</textarea>
+            </label>
+            <div class="actions">
+              <button id="generate-custom-indicator-btn">生成自定义指标</button>
+              <button id="save-custom-indicator-btn" class="btn secondary">保存到自定义指标库</button>
+            </div>
+            <div id="custom-indicator-summary" class="result-box light">等待生成自定义指标。</div>
+            <label class="field">
+              <span>指标名称</span>
+              <input id="custom-indicator-name" value="" />
+            </label>
+            <label class="field">
+              <span>公式说明</span>
+              <textarea id="custom-indicator-formula"></textarea>
+            </label>
+            <label class="field">
+              <span>Python 计算代码</span>
+              <textarea id="custom-indicator-code" class="mono-input"></textarea>
+            </label>
+            <label class="field">
+              <span>使用建议</span>
+              <textarea id="custom-indicator-usage"></textarea>
+            </label>
+          </div>
+        </section>
+      </section>
+
+      <section class="card" style="margin-top: 22px">
+        <div class="panel-header">
+          <h3>自定义指标库</h3>
+          <span class="muted-note">这里保存的指标可在策略工坊的自然语言提示中直接引用名称。</span>
+        </div>
+        <div id="custom-indicator-library" class="list empty-state">自定义指标库为空。</div>
+      </section>
+    </div>
+
+    <script type="module" src="/assets/indicators.js"></script>
+  </body>
+</html>

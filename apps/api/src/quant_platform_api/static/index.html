@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AI 量化交易研究平台</title>
+    <link rel="stylesheet" href="/assets/app.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark">Q</div>
+          <div>
+            <h1>AI 量化研究平台</h1>
+            <p>策略生成、回测、优化与复盘</p>
+          </div>
+        </div>
+
+        <section class="panel">
+          <div class="panel-header">
+            <h2>项目列表</h2>
+            <button id="refresh-projects-btn" class="ghost-btn">刷新</button>
+          </div>
+          <div id="project-list" class="project-list empty-state">
+            还没有项目，先生成并保存一个策略。
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2>状态</h2>
+          <div id="status-box" class="status-box">系统就绪。</div>
+        </section>
+      </aside>
+
+      <main class="main-content">
+        <section class="hero">
+          <div>
+            <p class="eyebrow">试用版工作台</p>
+            <h2>把交易想法直接变成可验证策略</h2>
+            <p class="hero-copy">
+              先输入自然语言生成策略，再保存、回测、参数优化，最后上传交割单做 AI 复盘。
+            </p>
+          </div>
+          <div class="hero-metrics">
+            <div class="metric-card">
+              <span>当前策略版本</span>
+              <strong id="current-version-id">未保存</strong>
+            </div>
+            <div class="metric-card">
+              <span>最新上传记录</span>
+              <strong id="current-upload-id">未上传</strong>
+            </div>
+          </div>
+        </section>
+
+        <section class="workspace-grid">
+          <section class="panel">
+            <div class="panel-header">
+              <h2>1. 自然语言生成策略</h2>
+            </div>
+            <label class="field">
+              <span>策略描述</span>
+              <textarea id="strategy-prompt" rows="6">当 5 日均线上穿 20 日均线，且成交量大于过去 10 根均量的 1.2 倍时做多；止盈 8%，止损 3%。</textarea>
+            </label>
+            <div class="form-row">
+              <label class="field">
+                <span>市场</span>
+                <input id="strategy-market" value="BTCUSDT" />
+              </label>
+              <label class="field">
+                <span>周期</span>
+                <input id="strategy-timeframe" value="1h" />
+              </label>
+            </div>
+            <div class="actions">
+              <button id="generate-strategy-btn">生成策略</button>
+            </div>
+            <label class="field">
+              <span>生成结果</span>
+              <textarea id="strategy-dsl-output" rows="12" readonly></textarea>
+            </label>
+            <div id="strategy-summary" class="result-box muted">等待生成。</div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-header">
+              <h2>2. 保存策略项目</h2>
+            </div>
+            <label class="field">
+              <span>项目标题</span>
+              <input id="project-title" value="放量均线突破策略" />
+            </label>
+            <div class="actions">
+              <button id="save-project-btn">保存项目</button>
+            </div>
+            <div id="project-save-result" class="result-box muted">尚未保存。</div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-header">
+              <h2>3. 回测执行</h2>
+            </div>
+            <div class="form-row">
+              <label class="field">
+                <span>开始时间</span>
+                <input id="backtest-from" type="datetime-local" value="2024-01-01T00:00" />
+              </label>
+              <label class="field">
+                <span>结束时间</span>
+                <input id="backtest-to" type="datetime-local" value="2024-12-31T23:59" />
+              </label>
+            </div>
+            <div class="actions">
+              <button id="run-backtest-btn">开始回测</button>
+            </div>
+            <div id="backtest-result" class="result-box muted">尚未运行回测。</div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-header">
+              <h2>4. 参数优化</h2>
+            </div>
+            <p class="helper-text">默认会搜索两组均线参数，输出最优组合。</p>
+            <div class="actions">
+              <button id="run-optimization-btn">运行参数优化</button>
+            </div>
+            <div id="optimization-result" class="result-box muted">尚未运行优化。</div>
+          </section>
+
+          <section class="panel panel-span-2">
+            <div class="panel-header">
+              <h2>5. 交易复盘</h2>
+            </div>
+            <div class="form-row">
+              <label class="field">
+                <span>CSV 文件</span>
+                <input id="trade-file" type="file" accept=".csv,text/csv" />
+              </label>
+              <label class="field">
+                <span>或直接粘贴 CSV</span>
+                <textarea id="trade-csv-text" rows="8">symbol,side,entry_time,exit_time,pnl
+BTCUSDT,long,2024-05-03T10:00:00Z,2024-05-03T14:00:00Z,-230.5
+BTCUSDT,long,2024-05-05T10:00:00Z,2024-05-05T16:00:00Z,420.0
+ETHUSDT,short,2024-05-08T08:00:00Z,2024-05-08T12:00:00Z,-95.0
+ETHUSDT,long,2024-05-09T09:00:00Z,2024-05-09T17:00:00Z,210.0</textarea>
+              </label>
+            </div>
+            <div class="actions">
+              <button id="upload-trades-btn">上传并解析交割单</button>
+              <button id="run-replay-btn">运行 AI 复盘</button>
+            </div>
+            <div class="split-results">
+              <div>
+                <h3>解析记录</h3>
+                <pre id="trade-records-result" class="result-box muted">尚未上传。</pre>
+              </div>
+              <div>
+                <h3>复盘建议</h3>
+                <pre id="replay-result" class="result-box muted">尚未运行复盘。</pre>
+              </div>
+            </div>
+          </section>
+        </section>
+      </main>
+    </div>
+
+    <script src="/assets/app.js" type="module"></script>
+  </body>
+</html>

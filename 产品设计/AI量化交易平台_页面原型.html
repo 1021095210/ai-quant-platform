@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI量化交易平台低保真原型</title>
+    <style>
+      :root {
+        --bg: #f3f1ea;
+        --panel: #fffaf2;
+        --line: #d7ccb9;
+        --text: #1f2328;
+        --muted: #6d6256;
+        --accent: #0d5c63;
+        --accent-soft: #d9ecee;
+        --warn: #9f4a1d;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+        background: linear-gradient(180deg, #efe7db 0%, var(--bg) 100%);
+        color: var(--text);
+      }
+      .shell {
+        max-width: 1440px;
+        margin: 0 auto;
+        padding: 24px;
+      }
+      .topbar {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 16px 20px;
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        background: rgba(255, 250, 242, 0.92);
+        margin-bottom: 18px;
+      }
+      .brand {
+        font-weight: 700;
+        letter-spacing: 0.04em;
+      }
+      .nav {
+        display: flex;
+        gap: 10px;
+      }
+      .nav span, .pill {
+        border: 1px solid var(--line);
+        padding: 8px 12px;
+        border-radius: 999px;
+        background: #fff;
+        color: var(--muted);
+        font-size: 14px;
+      }
+      .hero {
+        display: grid;
+        grid-template-columns: 2fr 1fr;
+        gap: 18px;
+        margin-bottom: 18px;
+      }
+      .card {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 22px;
+        padding: 18px;
+        box-shadow: 0 10px 30px rgba(31, 35, 40, 0.05);
+      }
+      h1, h2, h3, h4 { margin: 0 0 12px; }
+      h1 { font-size: 28px; }
+      h2 { font-size: 20px; }
+      h3 { font-size: 16px; }
+      p { margin: 0 0 10px; line-height: 1.6; color: var(--muted); }
+      .cta-row {
+        display: flex;
+        gap: 10px;
+        margin-top: 14px;
+      }
+      .button {
+        padding: 10px 14px;
+        border-radius: 14px;
+        border: 1px solid var(--accent);
+        background: var(--accent);
+        color: #fff;
+        font-weight: 600;
+      }
+      .button.secondary {
+        background: var(--accent-soft);
+        color: var(--accent);
+      }
+      .grid-2 {
+        display: grid;
+        grid-template-columns: 1.25fr 1.1fr 0.95fr;
+        gap: 18px;
+        margin-bottom: 18px;
+      }
+      .stack { display: grid; gap: 14px; }
+      .muted-box, .stat, .row {
+        border: 1px dashed var(--line);
+        border-radius: 14px;
+        padding: 12px;
+        background: rgba(255,255,255,0.6);
+      }
+      .textarea {
+        min-height: 180px;
+        border: 1px dashed var(--line);
+        border-radius: 16px;
+        padding: 14px;
+        background: #fff;
+        color: var(--muted);
+      }
+      .rule {
+        padding: 10px 12px;
+        border-left: 4px solid var(--accent);
+        background: #fff;
+        border-radius: 10px;
+        margin-bottom: 10px;
+      }
+      .metrics {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 10px;
+      }
+      .stat strong {
+        display: block;
+        font-size: 22px;
+        margin-top: 8px;
+        color: var(--accent);
+      }
+      .chart {
+        height: 180px;
+        border-radius: 16px;
+        background: linear-gradient(135deg, #d9ecee, #f8f3e9);
+        border: 1px solid var(--line);
+        position: relative;
+        overflow: hidden;
+      }
+      .chart:after {
+        content: "";
+        position: absolute;
+        inset: 18px;
+        border-left: 2px solid rgba(0,0,0,0.15);
+        border-bottom: 2px solid rgba(0,0,0,0.15);
+      }
+      .trade-table .row {
+        display: grid;
+        grid-template-columns: 1.1fr 0.8fr 0.8fr 0.7fr;
+        gap: 10px;
+      }
+      .replay {
+        display: grid;
+        grid-template-columns: 1fr 1.1fr 1fr;
+        gap: 18px;
+      }
+      .tag {
+        display: inline-block;
+        padding: 6px 10px;
+        border-radius: 999px;
+        background: #fff;
+        border: 1px solid var(--line);
+        margin: 4px 6px 0 0;
+        font-size: 13px;
+      }
+      .warn { color: var(--warn); }
+      .footer-note {
+        font-size: 13px;
+        color: var(--muted);
+        text-align: center;
+        margin-top: 16px;
+      }
+      @media (max-width: 1100px) {
+        .hero, .grid-2, .replay { grid-template-columns: 1fr; }
+        .metrics { grid-template-columns: 1fr 1fr; }
+      }
+      @media (max-width: 700px) {
+        .metrics { grid-template-columns: 1fr; }
+        .nav { flex-wrap: wrap; justify-content: flex-end; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <div class="topbar">
+        <div class="brand">AI Quant Lab</div>
+        <div class="nav">
+          <span>首页</span>
+          <span>策略实验室</span>
+          <span>回测结果</span>
+          <span>交易复盘</span>
+          <span>指标管理</span>
+        </div>
+      </div>
+
+      <section class="hero">
+        <div class="card">
+          <h1>AI 量化交易研究与复盘平台</h1>
+          <p>目标：让用户通过自然语言生成策略、运行回测、上传交割单复盘，并把复盘建议重新反馈到策略迭代中。</p>
+          <div class="cta-row">
+            <div class="button">新建策略研究</div>
+            <div class="button secondary">上传交割单复盘</div>
+          </div>
+        </div>
+        <div class="card">
+          <h3>最近摘要</h3>
+          <div class="stack">
+            <div class="muted-box">最近策略：放量均线突破 v3</div>
+            <div class="muted-box">最近回测：收益 18.4%，最大回撤 -7.1%</div>
+            <div class="muted-box">最近复盘：亏损更常出现在跌破 20MA 且缩量场景</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="grid-2">
+        <div class="card">
+          <h2>策略实验室</h2>
+          <div class="textarea">
+            当 5 日均线上穿 20 日均线，且 RSI 小于 70，且当前成交量大于过去 10 根均量的 1.2 倍时做多；止盈 8%，止损 3%。
+          </div>
+          <div class="cta-row">
+            <div class="button">生成策略</div>
+            <div class="button secondary">解释策略</div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>结构化策略规则</h2>
+          <div class="rule">入场条件：SMA(5) 上穿 SMA(20)</div>
+          <div class="rule">过滤条件：RSI(14) &lt; 70</div>
+          <div class="rule">过滤条件：Volume / SMA(Volume, 10) &gt; 1.2</div>
+          <div class="rule">出场条件：止盈 8% 或 止损 3%</div>
+        </div>
+
+        <div class="card">
+          <h2>指标与参数</h2>
+          <div class="stack">
+            <div class="muted-box">内置指标：MA / EMA / RSI / ATR / MACD / 布林带</div>
+            <div class="muted-box">自定义指标：<strong>volume_ratio_10</strong></div>
+            <div class="muted-box">市场：BTCUSDT</div>
+            <div class="muted-box">周期：1h</div>
+            <div class="muted-box">时间范围：2024-01-01 ~ 2024-12-31</div>
+          </div>
+          <div class="cta-row">
+            <div class="button">新增自定义指标</div>
+            <div class="button secondary">开始回测</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="card" style="margin-bottom:18px;">
+        <h2>回测结果</h2>
+        <div class="metrics">
+          <div class="stat">总收益<strong>18.4%</strong></div>
+          <div class="stat">最大回撤<strong>-7.1%</strong></div>
+          <div class="stat">胜率<strong>54.2%</strong></div>
+          <div class="stat">盈亏比<strong>1.68</strong></div>
+          <div class="stat">交易次数<strong>47</strong></div>
+          <div class="stat">平均持仓<strong>6.3h</strong></div>
+        </div>
+        <div class="stack" style="margin-top:14px;">
+          <div class="chart"></div>
+          <div class="trade-table">
+            <div class="row"><strong>时间</strong><strong>标的</strong><strong>方向</strong><strong>盈亏</strong></div>
+            <div class="row"><span>2024-03-14</span><span>BTCUSDT</span><span>Long</span><span>+320</span></div>
+            <div class="row"><span>2024-03-17</span><span>BTCUSDT</span><span>Long</span><span>-140</span></div>
+            <div class="row"><span>2024-03-21</span><span>BTCUSDT</span><span>Long</span><span>+260</span></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="replay">
+        <div class="card">
+          <h2>交易复盘输入</h2>
+          <div class="muted-box">上传交割单：orders_2024_q1.xlsx</div>
+          <div class="muted-box">字段映射已确认</div>
+          <div class="muted-box">分析维度：量价关系 + 均线结构</div>
+          <div class="cta-row">
+            <div class="button">运行复盘分析</div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>结构化差异分析</h2>
+          <div class="muted-box">盈利交易更常出现在 <strong>站上 20MA + 放量</strong> 场景</div>
+          <div class="muted-box">亏损交易更常出现在 <strong>跌破 20MA + 缩量</strong> 场景</div>
+          <div class="muted-box">高风险模式：<span class="warn">价格位于均线下方且量能不足时强行入场</span></div>
+          <div>
+            <span class="tag">price_above_ma20</span>
+            <span class="tag">volume_ratio &gt; 1.0</span>
+            <span class="tag">low_volatility_breakout</span>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>AI 复盘建议</h2>
+          <div class="stack">
+            <div class="muted-box">建议 1：避免在价格跌破 20MA 且低于 10 周期均量时入场</div>
+            <div class="muted-box">建议 2：优先选择放量突破的信号</div>
+            <div class="muted-box">建议 3：亏损交易持仓时间显著更长，可增加超时退出规则</div>
+          </div>
+          <div class="cta-row">
+            <div class="button">应用建议生成新规则</div>
+            <div class="button secondary">重新回测</div>
+          </div>
+        </div>
+      </section>
+
+      <div class="footer-note">
+        低保真原型：用于表达页面布局、信息结构和交互关系，不代表最终视觉稿。
+      </div>
+    </div>
+  </body>
+  </html>

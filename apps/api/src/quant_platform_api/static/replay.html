@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>量化研究平台 · 交易复盘</title>
+    <link rel="stylesheet" href="/assets/theme.css" />
+  </head>
+  <body>
+    <div class="layout">
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand-mark">Q</div>
+          <div>
+            <h1>交易复盘</h1>
+            <p>交割单解析、模式识别与 AI 建议</p>
+          </div>
+        </div>
+        <nav class="nav">
+          <a class="nav-link" data-nav href="/">总览</a>
+          <a class="nav-link" data-nav href="/strategy">策略工坊</a>
+          <a class="nav-link" data-nav href="/indicators">指标设置</a>
+          <a class="nav-link" data-nav href="/rules">规则模块</a>
+          <a class="nav-link" data-nav href="/backtests">回测中心</a>
+          <a class="nav-link" data-nav href="/replay">交易复盘</a>
+        </nav>
+      </header>
+
+      <div id="status-banner" class="status-banner">导入交割单后，系统会先标准化记录，再生成复盘总结和建议。</div>
+
+      <section class="hero">
+        <div>
+          <p class="eyebrow">Replay Studio</p>
+          <h2>把历史交割单转成结构化记录，再用 AI 输出能落回策略里的建议。</h2>
+          <p>复盘分析会基于你上传的实际交易记录做盈亏方向和持仓时长统计，而不是只返回静态模板。</p>
+        </div>
+        <div class="hero-panel">
+          <div class="card muted">
+            <span class="mini-label">最新上传 ID</span>
+            <strong id="current-upload-id" class="metric-value">未上传</strong>
+          </div>
+        </div>
+      </section>
+
+      <section class="grid two" style="margin-top: 22px">
+        <section class="card">
+          <div class="panel-header">
+            <h3>上传交割单</h3>
+          </div>
+          <div class="form-grid">
+            <label class="field">
+              <span>CSV 文件</span>
+              <input id="trade-file" type="file" accept=".csv,text/csv" />
+            </label>
+            <label class="field">
+              <span>或直接粘贴 CSV</span>
+              <textarea id="trade-csv-text">symbol,side,entry_time,exit_time,pnl
+600519.SH,long,2024-03-01T09:30:00Z,2024-03-12T15:00:00Z,8200
+600519.SH,long,2024-04-08T09:30:00Z,2024-04-15T15:00:00Z,-3600
+510300.SH,long,2024-05-06T09:30:00Z,2024-05-14T15:00:00Z,1300
+510300.SH,long,2024-06-03T09:30:00Z,2024-06-11T15:00:00Z,-900</textarea>
+            </label>
+            <div class="actions">
+              <button id="upload-trades-btn">上传并解析</button>
+              <button id="run-replay-btn" class="btn secondary">运行 AI 复盘</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="card">
+          <div class="panel-header">
+            <h3>解析结果</h3>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>标的</th>
+                  <th>方向</th>
+                  <th>入场</th>
+                  <th>出场</th>
+                  <th>盈亏</th>
+                </tr>
+              </thead>
+              <tbody id="replay-records-body">
+                <tr><td colspan="5" class="empty-state">尚未上传。</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+
+      <section class="grid two" style="margin-top: 22px">
+        <section class="card">
+          <div class="panel-header">
+            <h3>复盘总结</h3>
+          </div>
+          <pre id="replay-summary" class="result-box light">尚未运行复盘。</pre>
+        </section>
+        <section class="card">
+          <div class="panel-header">
+            <h3>建议规则</h3>
+          </div>
+          <div id="replay-rules" class="list empty-state">尚未生成建议规则。</div>
+        </section>
+      </section>
+    </div>
+
+    <script type="module" src="/assets/replay.js"></script>
+  </body>
+</html>

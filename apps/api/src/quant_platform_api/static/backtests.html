@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>量化研究平台 · 回测中心</title>
+    <link rel="stylesheet" href="/assets/theme.css" />
+  </head>
+  <body>
+    <div class="layout">
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand-mark">Q</div>
+          <div>
+            <h1>回测中心</h1>
+            <p>真实日线数据 + 每次回测历史沉淀</p>
+          </div>
+        </div>
+        <nav class="nav">
+          <a class="nav-link" data-nav href="/">总览</a>
+          <a class="nav-link" data-nav href="/strategy">策略工坊</a>
+          <a class="nav-link" data-nav href="/indicators">指标设置</a>
+          <a class="nav-link" data-nav href="/rules">规则模块</a>
+          <a class="nav-link" data-nav href="/backtests">回测中心</a>
+          <a class="nav-link" data-nav href="/replay">交易复盘</a>
+        </nav>
+      </header>
+
+      <div id="status-banner" class="status-banner">这里会展示每一次回测的完整结果和数据来源。</div>
+
+      <section class="hero">
+        <div>
+          <p class="eyebrow">Backtest Center</p>
+          <h2>把每次回测都当作一条可追踪记录，而不是只看当前这一轮。</h2>
+          <p>回测默认使用中国股票 / ETF 日线数据；如果 Tushare token 没有权限，系统会自动回退到公开可访问数据源，并在结果里标明实际来源。</p>
+        </div>
+        <div class="hero-panel">
+          <div class="card muted">
+            <span class="mini-label">当前策略版本</span>
+            <strong id="selected-version" class="metric-value">未选择</strong>
+          </div>
+          <div class="card muted">
+            <span class="mini-label">数据来源</span>
+            <strong id="latest-provider" class="metric-value">待回测</strong>
+          </div>
+        </div>
+      </section>
+
+      <section class="grid two stretch" style="margin-top: 22px">
+        <section class="card equal-panel">
+          <div class="panel-header">
+            <h3>运行新回测</h3>
+          </div>
+          <div class="form-grid">
+            <label class="field">
+              <span>选择策略</span>
+              <select id="project-version-select"></select>
+            </label>
+            <div class="form-grid two">
+              <label class="field">
+                <span>标的代码</span>
+                <input id="backtest-market" value="600519.SH" />
+              </label>
+              <label class="field">
+                <span>资产类型</span>
+                <select id="backtest-asset-type">
+                  <option value="stock">股票</option>
+                  <option value="etf">ETF</option>
+                </select>
+              </label>
+            </div>
+            <div class="form-grid two">
+              <label class="field">
+                <span>开始日期</span>
+                <input id="backtest-from" type="date" value="2024-01-02" />
+              </label>
+              <label class="field">
+                <span>结束日期</span>
+                <input id="backtest-to" type="date" value="2024-12-31" />
+              </label>
+            </div>
+            <div class="actions">
+              <button id="run-backtest-btn">运行回测</button>
+              <button id="refresh-backtests-btn" class="btn secondary">刷新历史</button>
+            </div>
+            <div class="muted-note">每次运行后，结果会保存在右侧“回测历史”里。</div>
+          </div>
+        </section>
+
+        <section class="card equal-panel">
+          <div class="panel-header">
+            <h3>回测历史</h3>
+          </div>
+          <div id="backtest-history" class="list scroll-list empty-state">暂无回测记录。</div>
+        </section>
+      </section>
+
+      <section class="card" style="margin-top: 22px">
+        <div class="panel-header">
+          <h3>当前回测详情</h3>
+        </div>
+        <div id="backtest-metrics" class="metric-grid"></div>
+        <div id="backtest-source-pills" class="pill-row" style="margin-top: 18px"></div>
+        <div id="equity-sparkline" class="sparkline" style="margin-top: 18px"></div>
+        <div class="grid two" style="margin-top: 18px">
+          <section class="card muted">
+            <div class="panel-header">
+              <h4>策略 Python</h4>
+            </div>
+            <pre id="backtest-strategy-python" class="code-block">等待回测。</pre>
+          </section>
+          <section class="card muted">
+            <div class="panel-header">
+              <h4>成交明细</h4>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>入场</th>
+                    <th>出场</th>
+                    <th>方向</th>
+                    <th>收益</th>
+                    <th>原因</th>
+                  </tr>
+                </thead>
+                <tbody id="trade-table-body">
+                  <tr><td colspan="5" class="empty-state">等待回测。</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+      </section>
+    </div>
+
+    <script type="module" src="/assets/backtests.js"></script>
+  </body>
+</html>

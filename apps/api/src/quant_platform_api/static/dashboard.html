@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>量化研究平台 · 总览</title>
+    <link rel="stylesheet" href="/assets/theme.css" />
+  </head>
+  <body>
+    <div class="layout">
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand-mark">Q</div>
+          <div>
+            <h1>中国股票 / ETF 量化研究平台</h1>
+            <p>Python 策略生成、回测记录、交易复盘</p>
+          </div>
+        </div>
+        <nav class="nav">
+          <a class="nav-link" data-nav href="/">总览</a>
+          <a class="nav-link" data-nav href="/strategy">策略工坊</a>
+          <a class="nav-link" data-nav href="/indicators">指标设置</a>
+          <a class="nav-link" data-nav href="/rules">规则模块</a>
+          <a class="nav-link" data-nav href="/backtests">回测中心</a>
+          <a class="nav-link" data-nav href="/replay">交易复盘</a>
+        </nav>
+      </header>
+
+      <div id="status-banner" class="status-banner">系统就绪，当前默认市场为中国股票 / ETF。</div>
+
+      <section class="hero">
+        <div>
+          <p class="eyebrow">Research Dashboard</p>
+          <h2>像真正的量化研究工作台一样组织策略、数据和回测历史。</h2>
+          <p>
+            策略页负责把自然语言变成 Python 策略草稿；回测页负责拉取 A 股 / ETF 历史数据并沉淀每一次回测结果；
+            复盘页负责导入交割单并输出 AI 建议。
+          </p>
+        </div>
+        <div class="hero-panel">
+          <div class="card muted">
+            <span class="mini-label">当前选中策略版本</span>
+            <strong id="current-version" class="metric-value">未选择</strong>
+          </div>
+          <div class="card muted">
+            <span class="mini-label">最近一次回测状态</span>
+            <strong id="latest-backtest-status" class="metric-value">暂无</strong>
+          </div>
+        </div>
+      </section>
+
+      <section class="grid three" style="margin-top: 22px">
+        <a class="card" href="/strategy">
+          <p class="eyebrow">Step 1</p>
+          <h3>策略工坊</h3>
+          <p>输入自然语言，生成 Python 策略和机器可执行的规则规格。</p>
+        </a>
+        <a class="card" href="/indicators">
+          <p class="eyebrow">Step 2</p>
+          <h3>指标设置</h3>
+          <p>查看传统指标计算代码，生成并保存自定义指标，供策略随时调用。</p>
+        </a>
+        <a class="card" href="/rules">
+          <p class="eyebrow">Step 3</p>
+          <h3>规则模块</h3>
+          <p>查看 A 股 / ETF 默认研究规则，并补充 AI 要理解的交易术语。</p>
+        </a>
+        <a class="card" href="/backtests">
+          <p class="eyebrow">Step 4</p>
+          <h3>回测中心</h3>
+          <p>按股票 / ETF 日线运行回测，查看每次结果、数据来源和交易明细。</p>
+        </a>
+        <a class="card" href="/replay">
+          <p class="eyebrow">Step 5</p>
+          <h3>交易复盘</h3>
+          <p>上传历史交割单，分析成功与失败模式，并把建议回灌到策略。</p>
+        </a>
+      </section>
+
+      <section class="grid two" style="margin-top: 22px">
+        <section class="card">
+          <div class="panel-header">
+            <h3>最近策略项目</h3>
+            <a class="btn secondary" href="/strategy">继续编辑</a>
+          </div>
+          <div id="recent-projects" class="list empty-state">暂无策略项目。</div>
+        </section>
+        <section class="card">
+          <div class="panel-header">
+            <h3>最近回测历史</h3>
+            <a class="btn secondary" href="/backtests">查看全部</a>
+          </div>
+          <div id="recent-backtests" class="list empty-state">暂无回测记录。</div>
+        </section>
+      </section>
+    </div>
+
+    <script type="module" src="/assets/dashboard.js"></script>
+  </body>
+</html>

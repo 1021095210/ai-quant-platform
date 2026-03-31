@@ -1,0 +1,38 @@
+services:
+  api:
+    build:
+      context: ..
+      dockerfile: apps/api/Dockerfile
+    environment:
+      APP_NAME: AI Quant Platform API
+      API_PREFIX: /api/v1
+      DATABASE_URL: postgresql+psycopg://quant_user:quant_pass@postgres:5432/quant_ai
+      JOB_EXECUTION_MODE: background
+      JOB_SIMULATION_LATENCY_MS: 100
+      BACKTEST_ENGINE_VERSION: engine_v1
+      STRATEGY_PROMPT_VERSION: v1
+      REPLAY_PROMPT_VERSION: v1
+    ports:
+      - "8000:8000"
+    depends_on:
+      - redis
+      - postgres
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: quant_ai
+      POSTGRES_USER: quant_user
+      POSTGRES_PASSWORD: quant_pass
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+volumes:
+  postgres-data:

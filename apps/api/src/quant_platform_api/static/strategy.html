@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>量化研究平台 · 策略工坊</title>
+    <link rel="stylesheet" href="/assets/theme.css" />
+  </head>
+  <body>
+    <div class="layout">
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand-mark">Q</div>
+          <div>
+            <h1>策略工坊</h1>
+            <p>自然语言生成 Python 策略代码</p>
+          </div>
+        </div>
+        <nav class="nav">
+          <a class="nav-link" data-nav href="/">总览</a>
+          <a class="nav-link" data-nav href="/strategy">策略工坊</a>
+          <a class="nav-link" data-nav href="/indicators">指标设置</a>
+          <a class="nav-link" data-nav href="/rules">规则模块</a>
+          <a class="nav-link" data-nav href="/backtests">回测中心</a>
+          <a class="nav-link" data-nav href="/replay">交易复盘</a>
+        </nav>
+      </header>
+
+      <div id="status-banner" class="status-banner">请先生成并保存一个 Python 策略，再跳到回测中心运行回测。</div>
+
+      <section class="hero">
+        <div>
+          <p class="eyebrow">Python Strategy Generator</p>
+          <h2>把主观交易想法翻译成更接近真实量化平台的 Python 策略骨架。</h2>
+          <p>这里默认面向中国股票 / ETF 日线场景，策略主展示为 Python，系统内部同时保留结构化规则规格用于回测。</p>
+        </div>
+        <div class="hero-panel">
+          <div class="card muted">
+            <span class="mini-label">当前版本</span>
+            <strong id="current-version" class="metric-value">未保存</strong>
+          </div>
+          <div class="card muted">
+            <span class="mini-label">当前标题</span>
+            <strong id="current-title" class="metric-value">未命名</strong>
+          </div>
+        </div>
+      </section>
+
+      <section class="grid two" style="margin-top: 22px">
+        <section class="card">
+          <div class="panel-header">
+            <h3>策略输入</h3>
+          </div>
+          <div class="form-grid">
+            <label class="field">
+              <span>策略描述</span>
+              <textarea id="strategy-prompt">当 5 日均线上穿 20 日均线，且成交量大于过去 10 日均量的 1.2 倍时买入；止盈 8%，止损 3%。</textarea>
+            </label>
+            <div class="form-grid two">
+              <label class="field">
+                <span>标的代码</span>
+                <input id="strategy-market" value="600519.SH" />
+              </label>
+              <label class="field">
+                <span>资产类型</span>
+                <select id="strategy-asset-type">
+                  <option value="stock">股票</option>
+                  <option value="etf">ETF</option>
+                </select>
+              </label>
+            </div>
+            <div class="form-grid two">
+              <label class="field">
+                <span>周期</span>
+                <select id="strategy-timeframe">
+                  <option value="1d">日线</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>项目标题</span>
+                <input id="project-title" value="白酒龙头趋势策略" />
+              </label>
+            </div>
+            <label class="toggle">
+              <input id="teaching-mode-toggle" type="checkbox" />
+              <span>
+                <strong>教学模式</strong>
+                <small>开启后，Python 策略代码会为主要语句补充逐行注释，方便零基础用户逐行核对。</small>
+              </span>
+            </label>
+            <div class="actions">
+              <button id="generate-strategy-btn">生成 Python 策略</button>
+              <button id="save-project-btn" class="btn secondary">保存项目</button>
+              <a class="btn secondary" href="/indicators">去指标设置</a>
+              <a class="btn secondary" href="/rules">去规则模块</a>
+              <a class="btn ghost" href="/backtests">去回测中心</a>
+            </div>
+            <div id="strategy-summary" class="result-box light">等待生成策略。</div>
+            <div id="strategy-ambiguities" class="pill-row"></div>
+          </div>
+        </section>
+
+        <section class="card">
+          <div class="panel-header">
+            <h3>Python 策略代码</h3>
+          </div>
+          <pre id="strategy-python-output" class="code-block"># 等待生成 Python 策略代码</pre>
+        </section>
+      </section>
+
+      <section class="card" style="margin-top: 22px">
+        <div class="panel-header">
+          <h3>规则规格</h3>
+          <span class="muted-note">回测引擎实际执行的是这份结构化规格</span>
+        </div>
+        <pre id="strategy-spec-output" class="result-box light">等待生成规则规格。</pre>
+      </section>
+
+      <section class="grid two" style="margin-top: 22px">
+        <section class="card">
+          <div class="panel-header">
+            <h3>可调用自定义指标</h3>
+            <a class="btn secondary" href="/indicators">管理指标库</a>
+          </div>
+          <div id="custom-indicator-library" class="list empty-state">正在加载自定义指标库。</div>
+        </section>
+        <section class="card">
+          <div class="panel-header">
+            <h3>AI 当前可理解术语</h3>
+            <a class="btn secondary" href="/rules">管理术语库</a>
+          </div>
+          <div id="glossary-preview" class="pill-row"></div>
+        </section>
+      </section>
+    </div>
+
+    <script type="module" src="/assets/strategy.js"></script>
+  </body>
+</html>

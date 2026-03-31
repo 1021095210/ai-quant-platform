@@ -1,0 +1,10 @@
+.env
+.backup_tmp/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.log
+.DS_Store
+node_modules/
+backups/
