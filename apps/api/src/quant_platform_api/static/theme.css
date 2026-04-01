@@ -441,6 +441,14 @@ button:hover {
   margin-bottom: 8px;
 }
 
+.compact-item {
+  padding: 14px 16px;
+}
+
+.compact-item strong {
+  margin-bottom: 6px;
+}
+
 .table-wrap {
   overflow: auto;
   border: 1px solid rgba(191, 212, 255, 0.5);
@@ -658,7 +666,7 @@ th {
 .kpi-row {
   display: grid;
   gap: 14px;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
 .quick-grid {

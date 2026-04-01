@@ -22,6 +22,8 @@ def run_backtest(
                 "win_rate_pct": 0.0,
                 "profit_factor": 0.0,
                 "trade_count": 0,
+                "final_equity": round(float(execution_contract["initial_capital"]), 2),
+                "avg_trade_return_pct": 0.0,
             },
             "equity_curve": [],
             "trades": [],
@@ -43,24 +45,67 @@ def run_backtest(
     initial_capital = float(execution_contract["initial_capital"])
     fee_rate = float(execution_contract["fee_bps"]) / 10000.0
     slippage_rate = float(execution_contract["slippage_bps"]) / 10000.0
-    take_profit = _extract_exit_threshold(strategy_spec, "take_profit_pct", 0.08)
-    stop_loss = _extract_exit_threshold(strategy_spec, "stop_loss_pct", -0.03)
+    fill_price_rule = execution_contract.get("fill_price_rule", "next_bar_open")
+    warmup_bars = max(int(execution_contract.get("warmup_bars", 20)), 0)
+    position_sizing = execution_contract.get("position_sizing", {})
+    risk_controls = execution_contract.get("risk_controls", {})
+    take_profit = float(
+        risk_controls.get(
+            "take_profit_pct",
+            _extract_exit_threshold(strategy_spec, "take_profit_pct", 0.08),
+        )
+    )
+    stop_loss = float(
+        risk_controls.get(
+            "stop_loss_pct",
+            _extract_exit_threshold(strategy_spec, "stop_loss_pct", -0.03),
+        )
+    )
+    max_drawdown_limit = float(risk_controls.get("max_drawdown_pct", -0.12))
+    max_holding_bars = max(int(risk_controls.get("max_holding_bars", 40)), 1)
 
-    capital = initial_capital
+    cash = initial_capital
     equity_curve: list[dict[str, Any]] = []
     trades: list[dict[str, Any]] = []
     current_trade: dict[str, Any] | None = None
+    pending_entry: dict[str, Any] | None = None
     peak_equity = initial_capital
     max_drawdown_pct = 0.0
+    halted_by_drawdown = False
 
-    for _, row in data_frame.iterrows():
+    for index, row in data_frame.iterrows():
         trade_date = row["trade_date"]
-        price = float(row["close"])
+        close_price = float(row["close"])
+        open_price = float(row["open"])
+
+        if pending_entry is not None and current_trade is None and not halted_by_drawdown:
+            entry_price = _apply_slippage(open_price, slippage_rate, side="entry")
+            quantity = _resolve_quantity(
+                cash=cash,
+                equity=cash,
+                entry_price=entry_price,
+                position_sizing=position_sizing,
+            )
+            entry_notional = quantity * entry_price
+            entry_fee = entry_notional * fee_rate
+            if quantity > 0 and entry_notional + entry_fee <= cash:
+                cash -= entry_notional + entry_fee
+                current_trade = {
+                    "entry_time": trade_date.strftime("%Y-%m-%d"),
+                    "entry_signal_time": pending_entry["signal_time"],
+                    "entry_price": entry_price,
+                    "quantity": quantity,
+                    "entry_notional": round(entry_notional, 2),
+                    "symbol": strategy_spec.get("market"),
+                    "side": strategy_spec.get("position", {}).get("side", "long"),
+                    "entry_index": index,
+                }
+            pending_entry = None
+
         if current_trade is not None:
-            mark_to_market = capital * (price / current_trade["entry_price"])
-            current_equity = mark_to_market
+            current_equity = cash + current_trade["quantity"] * close_price
         else:
-            current_equity = capital
+            current_equity = cash
 
         peak_equity = max(peak_equity, current_equity)
         drawdown_pct = ((current_equity - peak_equity) / peak_equity) * 100.0
@@ -72,66 +117,166 @@ def run_backtest(
             }
         )
 
-        if current_trade is None and bool(row["entry_signal"]):
-            entry_price = price * (1.0 + slippage_rate)
-            current_trade = {
-                "entry_time": trade_date.strftime("%Y-%m-%d"),
-                "entry_price": entry_price,
-                "symbol": strategy_spec.get("market"),
-                "side": strategy_spec.get("position", {}).get("side", "long"),
-            }
-            continue
+        force_exit_reason: str | None = None
+        if drawdown_pct <= max_drawdown_limit:
+            halted_by_drawdown = True
+            if current_trade is not None:
+                force_exit_reason = "max_drawdown_guard"
 
-        if current_trade is None:
-            continue
-
-        gross_return = (price - current_trade["entry_price"]) / current_trade["entry_price"]
-        if gross_return >= take_profit or gross_return <= stop_loss:
-            net_return = gross_return - fee_rate * 2 - slippage_rate
-            pnl = capital * net_return
-            exit_price = price * (1.0 - slippage_rate)
-            capital = capital + pnl
-            trades.append(
-                {
-                    "symbol": current_trade["symbol"],
-                    "side": current_trade["side"],
-                    "entry_time": current_trade["entry_time"],
-                    "exit_time": trade_date.strftime("%Y-%m-%d"),
-                    "entry_price": round(current_trade["entry_price"], 4),
-                    "exit_price": round(exit_price, 4),
-                    "pnl": round(pnl, 2),
-                    "return_pct": round(net_return * 100.0, 2),
-                    "exit_reason": "take_profit" if gross_return >= take_profit else "stop_loss",
-                }
+        if current_trade is not None:
+            gross_return = (
+                (close_price - current_trade["entry_price"]) / current_trade["entry_price"]
             )
-            current_trade = None
+            holding_bars = index - current_trade["entry_index"] + 1
+            exit_reason = force_exit_reason
+            if exit_reason is None and gross_return >= take_profit:
+                exit_reason = "take_profit"
+            if exit_reason is None and gross_return <= stop_loss:
+                exit_reason = "stop_loss"
+            if exit_reason is None and holding_bars >= max_holding_bars:
+                exit_reason = "max_holding_bars"
+            if exit_reason is not None:
+                exit_price = _apply_slippage(close_price, slippage_rate, side="exit")
+                trade_result = _close_trade(
+                    trade=current_trade,
+                    exit_price=exit_price,
+                    exit_time=trade_date.strftime("%Y-%m-%d"),
+                    exit_reason=exit_reason,
+                    fee_rate=fee_rate,
+                    holding_bars=holding_bars,
+                )
+                cash += trade_result["cash_delta"]
+                trades.append(trade_result["trade"])
+                current_trade = None
+                continue
+
+        if (
+            current_trade is None
+            and pending_entry is None
+            and not halted_by_drawdown
+            and index >= warmup_bars
+            and bool(row["entry_signal"])
+        ):
+            if fill_price_rule == "same_bar_close":
+                entry_price = _apply_slippage(close_price, slippage_rate, side="entry")
+                quantity = _resolve_quantity(
+                    cash=cash,
+                    equity=current_equity,
+                    entry_price=entry_price,
+                    position_sizing=position_sizing,
+                )
+                entry_notional = quantity * entry_price
+                entry_fee = entry_notional * fee_rate
+                if quantity > 0 and entry_notional + entry_fee <= cash:
+                    cash -= entry_notional + entry_fee
+                    current_trade = {
+                        "entry_time": trade_date.strftime("%Y-%m-%d"),
+                        "entry_signal_time": trade_date.strftime("%Y-%m-%d"),
+                        "entry_price": entry_price,
+                        "quantity": quantity,
+                        "entry_notional": round(entry_notional, 2),
+                        "symbol": strategy_spec.get("market"),
+                        "side": strategy_spec.get("position", {}).get("side", "long"),
+                        "entry_index": index,
+                    }
+            elif index < len(data_frame.index) - 1:
+                pending_entry = {"signal_time": trade_date.strftime("%Y-%m-%d")}
 
     if current_trade is not None:
         final_row = data_frame.iloc[-1]
-        final_price = float(final_row["close"]) * (1.0 - slippage_rate)
-        gross_return = (final_price - current_trade["entry_price"]) / current_trade["entry_price"]
-        net_return = gross_return - fee_rate * 2 - slippage_rate
-        pnl = capital * net_return
-        capital = capital + pnl
-        trades.append(
-            {
-                "symbol": current_trade["symbol"],
-                "side": current_trade["side"],
-                "entry_time": current_trade["entry_time"],
-                "exit_time": final_row["trade_date"].strftime("%Y-%m-%d"),
-                "entry_price": round(current_trade["entry_price"], 4),
-                "exit_price": round(final_price, 4),
-                "pnl": round(pnl, 2),
-                "return_pct": round(net_return * 100.0, 2),
-                "exit_reason": "end_of_range",
-            }
+        trade_result = _close_trade(
+            trade=current_trade,
+            exit_price=_apply_slippage(float(final_row["close"]), slippage_rate, side="exit"),
+            exit_time=final_row["trade_date"].strftime("%Y-%m-%d"),
+            exit_reason="end_of_range",
+            fee_rate=fee_rate,
+            holding_bars=len(data_frame.index) - current_trade["entry_index"],
         )
+        cash += trade_result["cash_delta"]
+        trades.append(trade_result["trade"])
 
-    metrics = _build_metrics(initial_capital, capital, trades, max_drawdown_pct)
+    metrics = _build_metrics(
+        initial_capital,
+        cash,
+        trades,
+        max_drawdown_pct,
+        halted_by_drawdown=halted_by_drawdown,
+    )
     return {
         "metrics": metrics,
         "equity_curve": equity_curve,
         "trades": trades,
+    }
+
+
+def _apply_slippage(price: float, slippage_rate: float, *, side: str) -> float:
+    if side == "entry":
+        return price * (1.0 + slippage_rate)
+    return price * (1.0 - slippage_rate)
+
+
+def _resolve_quantity(
+    *,
+    cash: float,
+    equity: float,
+    entry_price: float,
+    position_sizing: dict[str, Any],
+) -> int:
+    mode = position_sizing.get("mode", "fixed_fraction")
+    max_position_pct = min(max(float(position_sizing.get("max_position_pct", 1.0)), 0.01), 1.0)
+    min_trade_unit = max(int(position_sizing.get("min_trade_unit", 100)), 1)
+    if entry_price <= 0:
+        return 0
+
+    if mode == "fixed_quantity":
+        requested = max(int(position_sizing.get("value", min_trade_unit)), min_trade_unit)
+        quantity = requested
+    else:
+        fraction = min(max(float(position_sizing.get("value", 1.0)), 0.01), 1.0)
+        target_notional = min(cash, equity * max_position_pct, cash * fraction)
+        quantity = int(target_notional // entry_price)
+
+    quantity = (quantity // min_trade_unit) * min_trade_unit
+    return max(quantity, 0)
+
+
+def _close_trade(
+    *,
+    trade: dict[str, Any],
+    exit_price: float,
+    exit_time: str,
+    exit_reason: str,
+    fee_rate: float,
+    holding_bars: int | None = None,
+) -> dict[str, Any]:
+    quantity = int(trade["quantity"])
+    entry_price = float(trade["entry_price"])
+    entry_notional = float(trade["entry_notional"])
+    exit_notional = quantity * exit_price
+    exit_fee = exit_notional * fee_rate
+    pnl = exit_notional - exit_fee - entry_notional
+    return_pct = (pnl / entry_notional * 100.0) if entry_notional else 0.0
+    resolved_holding_bars = (
+        max(int(holding_bars), 1) if holding_bars is not None else max(int(trade.get("holding_bars", 1)), 1)
+    )
+    return {
+        "cash_delta": exit_notional - exit_fee,
+        "trade": {
+            "symbol": trade["symbol"],
+            "side": trade["side"],
+            "entry_time": trade["entry_time"],
+            "entry_signal_time": trade.get("entry_signal_time"),
+            "exit_time": exit_time,
+            "entry_price": round(entry_price, 4),
+            "exit_price": round(exit_price, 4),
+            "quantity": quantity,
+            "entry_notional": round(entry_notional, 2),
+            "exit_notional": round(exit_notional, 2),
+            "pnl": round(pnl, 2),
+            "return_pct": round(return_pct, 2),
+            "exit_reason": exit_reason,
+            "holding_bars": resolved_holding_bars,
+        },
     }
 
 
@@ -181,6 +326,8 @@ def _build_metrics(
     final_capital: float,
     trades: list[dict[str, Any]],
     max_drawdown_pct: float,
+    *,
+    halted_by_drawdown: bool,
 ) -> dict[str, Any]:
     total_return_pct = ((final_capital - initial_capital) / initial_capital) * 100.0
     trade_count = len(trades)
@@ -190,10 +337,16 @@ def _build_metrics(
     total_loss = abs(sum(item["pnl"] for item in losses))
     profit_factor = (total_profit / total_loss) if total_loss else float(len(wins) > 0)
     win_rate_pct = (len(wins) / trade_count * 100.0) if trade_count else 0.0
+    avg_trade_return_pct = (
+        sum(item["return_pct"] for item in trades) / trade_count if trade_count else 0.0
+    )
     return {
         "total_return_pct": round(total_return_pct, 2),
         "max_drawdown_pct": round(max_drawdown_pct, 2),
         "win_rate_pct": round(win_rate_pct, 2),
         "profit_factor": round(profit_factor, 2) if trade_count else 0.0,
         "trade_count": trade_count,
+        "final_equity": round(final_capital, 2),
+        "avg_trade_return_pct": round(avg_trade_return_pct, 2),
+        "halted_by_drawdown": halted_by_drawdown,
     }

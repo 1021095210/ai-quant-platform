@@ -60,6 +60,8 @@ from quant_platform_api.services import (
     RuleService,
     StrategyService,
     TradeUploadService,
+    WorkspaceService,
+    _normalize_execution_contract,
     build_backtest_result,
     build_optimization_result,
     build_replay_result,
@@ -76,6 +78,7 @@ class AppServices:
     indicator_service: IndicatorService
     rule_service: RuleService
     trade_upload_service: TradeUploadService
+    workspace_service: WorkspaceService
     market_data_service: MarketDataService
     backtest_service: AsyncTaskService
     optimization_service: AsyncTaskService
@@ -111,20 +114,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         primary_provider=primary_market_provider,
         fallback_provider=fallback_market_provider,
     )
+    strategy_service = StrategyService(
+        strategy_repository,
+        indicator_repository,
+        glossary_repository,
+    )
     services = AppServices(
         settings=app_settings,
         auth_service=AuthService(
             user_repository=user_repository,
             session_repository=user_session_repository,
         ),
-        strategy_service=StrategyService(
-            strategy_repository,
-            indicator_repository,
-            glossary_repository,
-        ),
+        strategy_service=strategy_service,
         indicator_service=IndicatorService(indicator_repository),
         rule_service=RuleService(glossary_repository, default_rule_repository),
         trade_upload_service=TradeUploadService(trade_upload_repository),
+        workspace_service=WorkspaceService(
+            strategy_service=strategy_service,
+            task_repository=task_repository,
+        ),
         market_data_service=market_data_service,
         backtest_service=AsyncTaskService(
             repository=task_repository,
@@ -256,6 +264,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 detail=ErrorPayload(code="UNAUTHORIZED", message="login required").model_dump(),
             )
         return _success_response(request, data=user.model_dump(mode="json"))
+
+    @app.get(f"{app_settings.api_prefix}/workspace/summary")
+    def get_workspace_summary(request: Request) -> JSONResponse:
+        current_user = _require_current_user(request, services.auth_service)
+        return _success_response(
+            request,
+            data=services.workspace_service.build_summary(
+                user_id=current_user.user_id,
+                workspace_id=current_user.workspace_id,
+            ),
+        )
 
     @app.post(f"{app_settings.api_prefix}/auth/register")
     def register_user(
@@ -517,8 +536,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     message="strategy project not found",
                 ).model_dump(),
             )
-        _ensure_dataset_snapshot(dataset_snapshot_repository, payload)
         payload_dict = payload.model_dump(by_alias=True, mode="json")
+        payload_dict["execution_contract"] = _normalize_execution_contract(
+            payload_dict["execution_contract"],
+            strategy.strategy_dsl,
+        )
+        payload_dict["data_snapshot"] = _enrich_data_snapshot_payload(
+            payload_dict["data_snapshot"],
+            payload_dict["dataset"],
+            payload_dict["execution_contract"],
+        )
+        _ensure_dataset_snapshot(
+            dataset_snapshot_repository,
+            BacktestCreateRequest.model_validate(payload_dict),
+        )
         payload_dict["user_id"] = current_user.user_id
         payload_dict["workspace_id"] = current_user.workspace_id
         record = services.backtest_service.submit(
@@ -573,6 +604,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         "market": record.payload.get("dataset", {}).get("market"),
                         "timeframe": record.payload.get("dataset", {}).get("timeframe"),
                         "metrics": record.result.get("metrics", {}),
+                        "backtest_config": record.result.get("backtest_config", {}),
+                        "data_snapshot_summary": record.result.get(
+                            "data_snapshot_summary",
+                            {},
+                        ),
                         "data_source": record.result.get("data_source", {}),
                     }
                     for record in records
@@ -634,8 +670,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     message="strategy project not found",
                 ).model_dump(),
             )
-        _ensure_dataset_snapshot(dataset_snapshot_repository, payload)
         payload_dict = payload.model_dump(by_alias=True, mode="json")
+        payload_dict["execution_contract"] = _normalize_execution_contract(
+            payload_dict["execution_contract"],
+            strategy.strategy_dsl,
+        )
+        payload_dict["data_snapshot"] = _enrich_data_snapshot_payload(
+            payload_dict["data_snapshot"],
+            payload_dict["dataset"],
+            payload_dict["execution_contract"],
+        )
+        _ensure_dataset_snapshot(
+            dataset_snapshot_repository,
+            OptimizationCreateRequest.model_validate(payload_dict),
+        )
         payload_dict["user_id"] = current_user.user_id
         payload_dict["workspace_id"] = current_user.workspace_id
         record = services.optimization_service.submit(
@@ -982,6 +1030,20 @@ def _build_dataset_snapshot_record(payload: Any) -> DatasetSnapshotRecord:
         date_from=dataset.from_,
         date_to=dataset.to,
     )
+
+
+def _enrich_data_snapshot_payload(
+    data_snapshot: dict[str, Any],
+    dataset: dict[str, Any],
+    execution_contract: dict[str, Any],
+) -> dict[str, Any]:
+    enriched = dict(data_snapshot)
+    enriched.setdefault("provider", "shared_market_store")
+    enriched.setdefault("coverage_status", "ready")
+    enriched.setdefault("calendar", execution_contract.get("calendar"))
+    enriched.setdefault("timezone", execution_contract.get("timezone"))
+    enriched.setdefault("warmup_bars", execution_contract.get("warmup_bars"))
+    return enriched
 
 
 def _resolve_request_id(request: Request) -> str:

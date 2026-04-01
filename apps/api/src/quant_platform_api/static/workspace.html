@@ -13,7 +13,7 @@
           <div class="brand-mark">Q</div>
           <div>
             <h1>用户工作台</h1>
-            <p>账户入口、研究捷径、最近项目与最近回测</p>
+            <p>账户、实验、回测、复盘与数据状态的统一研究中枢</p>
           </div>
         </div>
         <nav class="nav">
@@ -35,7 +35,7 @@
           <div>
             <p class="eyebrow">Desk</p>
             <h2 id="workspace-title">欢迎回到你的研究工作台</h2>
-            <p id="workspace-subtitle">这里汇总你的账户身份、最近项目、最近回测和下一步操作入口。</p>
+            <p id="workspace-subtitle">这里集中查看最近项目、最近实验、复盘结论、失败任务和数据快照状态，不再只是模块入口页。</p>
           </div>
           <div class="actions">
             <a class="btn primary" href="/strategy">继续策略研究</a>
@@ -61,12 +61,16 @@
           <strong id="project-count" class="metric-value">0</strong>
         </div>
         <div class="card">
-          <span class="mini-label">最近回测记录</span>
+          <span class="mini-label">最近实验 / 回测</span>
           <strong id="backtest-count" class="metric-value">0</strong>
         </div>
         <div class="card">
-          <span class="mini-label">账户建立时间</span>
-          <strong id="user-created-at" class="metric-value">加载中</strong>
+          <span class="mini-label">最近复盘记录</span>
+          <strong id="replay-count" class="metric-value">0</strong>
+        </div>
+        <div class="card">
+          <span class="mini-label">失败 / 取消任务</span>
+          <strong id="failed-task-count" class="metric-value">0</strong>
         </div>
       </section>
 
@@ -109,7 +113,28 @@
       <section class="grid two" style="margin-top: 22px">
         <section class="card">
           <div class="panel-header">
-            <h3>账户信息</h3>
+            <h3>最近复盘</h3>
+          </div>
+          <div id="recent-replays" class="list empty-state">暂无复盘记录。</div>
+        </section>
+        <section class="card">
+          <div class="panel-header">
+            <h3>最近失败与待办</h3>
+          </div>
+          <div id="recent-failures" class="list empty-state">暂无失败任务。</div>
+        </section>
+      </section>
+
+      <section class="grid two" style="margin-top: 22px">
+        <section class="card">
+          <div class="panel-header">
+            <h3>数据快照状态</h3>
+          </div>
+          <div id="snapshot-states" class="list empty-state">暂无数据快照摘要。</div>
+        </section>
+        <section class="card">
+          <div class="panel-header">
+            <h3>账户信息与建议动作</h3>
           </div>
           <div class="list">
             <div class="list-item">
@@ -122,24 +147,13 @@
                 <span id="user-role-badge" class="badge">user</span>
               </div>
             </div>
-          </div>
-        </section>
-        <section class="card">
-          <div class="panel-header">
-            <h3>推荐下一步</h3>
-          </div>
-          <div class="list">
             <div class="list-item">
-              <strong>先在策略工坊生成策略</strong>
-              <div class="muted-note">如果当前还没有策略项目，先从自然语言生成一份新的 Python 策略骨架。</div>
+              <strong>账户建立时间</strong>
+              <div id="user-created-at" class="muted-note">加载中</div>
             </div>
             <div class="list-item">
-              <strong>再进入回测中心验证</strong>
-              <div class="muted-note">用统一 `data_snapshot_ref` 运行回测，把结果沉淀到历史记录里。</div>
-            </div>
-            <div class="list-item">
-              <strong>最后用交易复盘回灌经验</strong>
-              <div class="muted-note">导入历史交割单，识别成功与失败模式，再回到策略页迭代。</div>
+              <strong>建议下一步</strong>
+              <div id="workspace-next-step" class="muted-note">正在分析你的最近研究轨迹。</div>
             </div>
           </div>
         </section>

@@ -26,6 +26,7 @@ from quant_platform_api.models import (
     StrategyVersionRecord,
     StrategyGenerateRequest,
     TaskRecord,
+    TaskStatus,
     TradeRecordItem,
     TradeUploadRecord,
     UserProfile,
@@ -969,6 +970,131 @@ class TradeUploadService:
         return [item.strip() for item in header]
 
 
+class WorkspaceService:
+    def __init__(
+        self,
+        *,
+        strategy_service: StrategyService,
+        task_repository: TaskRepository,
+    ) -> None:
+        self._strategy_service = strategy_service
+        self._task_repository = task_repository
+
+    def build_summary(self, *, user_id: str, workspace_id: str) -> dict[str, Any]:
+        projects = self._strategy_service.list_projects(
+            user_id=user_id,
+            workspace_id=workspace_id,
+        )
+        backtests = self._task_repository.list(
+            "backtest",
+            user_id=user_id,
+            workspace_id=workspace_id,
+        )
+        replays = self._task_repository.list(
+            "replay",
+            user_id=user_id,
+            workspace_id=workspace_id,
+        )
+        all_tasks = self._task_repository.list(
+            user_id=user_id,
+            workspace_id=workspace_id,
+        )
+        failed_tasks = [
+            item
+            for item in all_tasks
+            if item.status in {TaskStatus.FAILED, TaskStatus.CANCELED}
+        ][:4]
+
+        return {
+            "counts": {
+                "projects": len(projects),
+                "backtests": len(backtests),
+                "replays": len(replays),
+                "failed_tasks": len(
+                    [
+                        item
+                        for item in all_tasks
+                        if item.status in {TaskStatus.FAILED, TaskStatus.CANCELED}
+                    ]
+                ),
+            },
+            "recent_projects": [
+                {
+                    "project_id": item.project_id,
+                    "version_id": item.version_id,
+                    "title": item.title,
+                    "market": item.strategy_dsl.get("market"),
+                    "timeframes": item.strategy_dsl.get(
+                        "timeframes",
+                        [item.strategy_dsl.get("timeframe", "1d")],
+                    ),
+                    "analysis_mode": item.strategy_dsl.get(
+                        "analysis_mode",
+                        "single_timeframe",
+                    ),
+                    "created_at": item.created_at.isoformat(),
+                }
+                for item in projects[:4]
+            ],
+            "recent_backtests": [self._summarize_task(item) for item in backtests[:4]],
+            "recent_replays": [self._summarize_task(item) for item in replays[:4]],
+            "recent_failures": [self._summarize_task(item) for item in failed_tasks],
+            "snapshot_states": self._collect_snapshot_states(backtests),
+        }
+
+    def _summarize_task(self, record: TaskRecord) -> dict[str, Any]:
+        result = record.result
+        data_snapshot_summary = result.get("data_snapshot_summary", {})
+        return {
+            "task_id": record.id,
+            "kind": record.kind,
+            "status": record.status.value,
+            "created_at": record.created_at.isoformat(),
+            "config_revision": record.config_revision,
+            "title": result.get("strategy_title")
+            or result.get("summary")
+            or record.payload.get("strategy_version_id")
+            or record.payload.get("upload_id")
+            or record.kind,
+            "metrics": result.get("metrics", {}),
+            "dataset_snapshot_ref": result.get("dataset_snapshot_ref")
+            or record.payload.get("data_snapshot", {}).get("dataset_snapshot_ref"),
+            "data_snapshot_summary": data_snapshot_summary,
+            "backtest_config": result.get("backtest_config", {}),
+        }
+
+    def _collect_snapshot_states(self, backtests: list[TaskRecord]) -> list[dict[str, Any]]:
+        seen: set[str] = set()
+        items: list[dict[str, Any]] = []
+        for record in backtests:
+            summary = record.result.get("data_snapshot_summary", {})
+            snapshot_ref = summary.get("dataset_snapshot_ref") or record.payload.get(
+                "data_snapshot",
+                {},
+            ).get("dataset_snapshot_ref")
+            if not snapshot_ref or snapshot_ref in seen:
+                continue
+            seen.add(snapshot_ref)
+            items.append(
+                {
+                    "dataset_snapshot_ref": snapshot_ref,
+                    "provider": summary.get("provider", "未知"),
+                    "coverage_status": summary.get("coverage_status", "unknown"),
+                    "coverage_pct": summary.get("coverage_pct"),
+                    "missing_rate_pct": summary.get("missing_rate_pct"),
+                    "calendar": summary.get("calendar"),
+                    "timezone": summary.get("timezone"),
+                    "warmup_bars": summary.get("warmup_bars"),
+                    "last_synced_at": summary.get("last_synced_at"),
+                    "market": summary.get("market"),
+                    "timeframe": summary.get("timeframe"),
+                }
+            )
+            if len(items) >= 4:
+                break
+        return items
+
+
 class AsyncTaskService:
     def __init__(
         self,
@@ -1116,16 +1242,29 @@ def build_backtest_result(
             end_date=datetime.fromisoformat(dataset["to"].replace("Z", "+00:00")).date(),
             adjustment_mode=payload["execution_contract"].get("adjustment_mode", "qfq"),
         )
+        normalized_contract = _normalize_execution_contract(
+            payload["execution_contract"],
+            project.strategy_dsl,
+        )
         backtest = run_backtest(
             strategy_spec={**project.strategy_dsl, "market": dataset["market"]},
             bars=bars,
-            execution_contract=payload["execution_contract"],
+            execution_contract=normalized_contract,
         )
         dataset_snapshot_ref = payload["data_snapshot"]["dataset_snapshot_ref"]
         return {
             "backtest_run_id": task_id,
             "dataset_snapshot_ref": dataset_snapshot_ref,
             "engine_version": settings.backtest_engine_version,
+            "backtest_config": normalized_contract,
+            "data_snapshot_summary": _build_data_snapshot_summary(
+                dataset_snapshot_ref=dataset_snapshot_ref,
+                dataset=dataset,
+                execution_contract=normalized_contract,
+                data_snapshot=payload.get("data_snapshot", {}),
+                data_source=data_source,
+                bars=bars,
+            ),
             "data_source": data_source,
             "metrics": backtest["metrics"],
             "equity_curve": backtest["equity_curve"],
@@ -1135,6 +1274,139 @@ def build_backtest_result(
         }
 
     return _builder
+
+
+def _normalize_execution_contract(
+    execution_contract: dict[str, Any],
+    strategy_dsl: dict[str, Any],
+) -> dict[str, Any]:
+    contract = dict(execution_contract)
+    strategy_position = strategy_dsl.get("position", {})
+    contract["position_sizing"] = {
+        "mode": contract.get("position_sizing", {}).get("mode", "fixed_fraction"),
+        "value": float(contract.get("position_sizing", {}).get("value", 1.0)),
+        "max_positions": int(
+            contract.get("position_sizing", {}).get(
+                "max_positions",
+                strategy_position.get("max_positions", 1),
+            )
+        ),
+        "max_position_pct": float(
+            contract.get("position_sizing", {}).get("max_position_pct", 1.0)
+        ),
+        "min_trade_unit": int(
+            contract.get("position_sizing", {}).get(
+                "min_trade_unit",
+                100 if strategy_dsl.get("asset_type", "stock") in {"stock", "etf"} else 1,
+            )
+        ),
+    }
+    contract["risk_controls"] = {
+        "take_profit_pct": float(
+            contract.get("risk_controls", {}).get(
+                "take_profit_pct",
+                _extract_strategy_exit_threshold(strategy_dsl, "take_profit_pct", 0.08),
+            )
+        ),
+        "stop_loss_pct": float(
+            contract.get("risk_controls", {}).get(
+                "stop_loss_pct",
+                _extract_strategy_exit_threshold(strategy_dsl, "stop_loss_pct", -0.03),
+            )
+        ),
+        "max_drawdown_pct": float(
+            contract.get("risk_controls", {}).get("max_drawdown_pct", -0.12)
+        ),
+        "max_holding_bars": int(
+            contract.get("risk_controls", {}).get("max_holding_bars", 40)
+        ),
+    }
+    contract["warmup_bars"] = int(contract.get("warmup_bars", 20))
+    return contract
+
+
+def _build_data_snapshot_summary(
+    *,
+    dataset_snapshot_ref: str,
+    dataset: dict[str, Any],
+    execution_contract: dict[str, Any],
+    data_snapshot: dict[str, Any],
+    data_source: dict[str, Any],
+    bars: list[Any],
+) -> dict[str, Any]:
+    coverage_pct = data_snapshot.get("coverage_pct")
+    missing_rate_pct = data_snapshot.get("missing_rate_pct")
+    if coverage_pct is None:
+        coverage_pct = _estimate_coverage_pct(
+            start_text=dataset["from"],
+            end_text=dataset["to"],
+            timeframe=dataset["timeframe"],
+            observed_bars=data_source.get("bar_count", len(bars)),
+        )
+    if missing_rate_pct is None and coverage_pct is not None:
+        missing_rate_pct = round(max(0.0, 100.0 - coverage_pct), 2)
+    latest_bar = bars[-1] if bars else None
+    last_synced_at = (
+        data_snapshot.get("last_synced_at")
+        or data_source.get("last_synced_at")
+        or (latest_bar.fetched_at if latest_bar else None)
+    )
+    return {
+        "dataset_snapshot_ref": dataset_snapshot_ref,
+        "market": dataset["market"],
+        "timeframe": dataset["timeframe"],
+        "asset_type": dataset.get("asset_type", "stock"),
+        "provider": data_snapshot.get("provider") or data_source.get("provider", "未知"),
+        "coverage_status": data_snapshot.get("coverage_status", "ready"),
+        "coverage_pct": coverage_pct,
+        "missing_rate_pct": missing_rate_pct,
+        "calendar": data_snapshot.get("calendar")
+        or execution_contract.get("calendar", "unknown"),
+        "timezone": data_snapshot.get("timezone")
+        or execution_contract.get("timezone", "UTC"),
+        "warmup_bars": int(
+            data_snapshot.get("warmup_bars") or execution_contract.get("warmup_bars", 20)
+        ),
+        "last_synced_at": last_synced_at,
+        "served_from_cache": data_source.get("served_from_cache", False),
+        "bar_count": data_source.get("bar_count", len(bars)),
+        "adjustment_mode": execution_contract.get("adjustment_mode", "qfq"),
+    }
+
+
+def _estimate_coverage_pct(
+    *,
+    start_text: str,
+    end_text: str,
+    timeframe: str,
+    observed_bars: int,
+) -> float | None:
+    if timeframe != "1d":
+        return None
+    start_date = datetime.fromisoformat(start_text.replace("Z", "+00:00")).date()
+    end_date = datetime.fromisoformat(end_text.replace("Z", "+00:00")).date()
+    if end_date < start_date:
+        return None
+    expected = 0
+    cursor = start_date
+    while cursor <= end_date:
+        if cursor.weekday() < 5:
+            expected += 1
+        cursor = cursor.fromordinal(cursor.toordinal() + 1)
+    if expected <= 0:
+        return None
+    return round(min(observed_bars / expected * 100.0, 100.0), 2)
+
+
+def _extract_strategy_exit_threshold(
+    strategy_dsl: dict[str, Any],
+    indicator_name: str,
+    default_value: float,
+) -> float:
+    for rule in strategy_dsl.get("exit", {}).get("any", []):
+        if rule.get("indicator") == indicator_name:
+            return float(rule.get("value", default_value))
+    return default_value
 
 
 def build_optimization_result() -> Callable[[str, dict[str, Any]], dict[str, Any]]:

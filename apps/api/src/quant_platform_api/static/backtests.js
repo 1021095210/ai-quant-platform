@@ -18,11 +18,27 @@ const nodes = {
   assetType: document.querySelector("#backtest-asset-type"),
   from: document.querySelector("#backtest-from"),
   to: document.querySelector("#backtest-to"),
+  capital: document.querySelector("#backtest-capital"),
+  feeBps: document.querySelector("#backtest-fee-bps"),
+  slippageBps: document.querySelector("#backtest-slippage-bps"),
+  fillPriceRule: document.querySelector("#backtest-fill-price-rule"),
+  adjustmentMode: document.querySelector("#backtest-adjustment-mode"),
+  warmupBars: document.querySelector("#backtest-warmup-bars"),
+  positionMode: document.querySelector("#backtest-position-mode"),
+  positionValue: document.querySelector("#backtest-position-value"),
+  maxPositionPct: document.querySelector("#backtest-max-position-pct"),
+  minTradeUnit: document.querySelector("#backtest-min-trade-unit"),
+  takeProfit: document.querySelector("#backtest-take-profit"),
+  stopLoss: document.querySelector("#backtest-stop-loss"),
+  maxDrawdown: document.querySelector("#backtest-max-drawdown"),
+  maxHoldingBars: document.querySelector("#backtest-max-holding-bars"),
   selectedVersion: document.querySelector("#selected-version"),
   latestProvider: document.querySelector("#latest-provider"),
   history: document.querySelector("#backtest-history"),
   metrics: document.querySelector("#backtest-metrics"),
   sourcePills: document.querySelector("#backtest-source-pills"),
+  configList: document.querySelector("#backtest-config-list"),
+  snapshotList: document.querySelector("#backtest-snapshot-list"),
   sparkline: document.querySelector("#equity-sparkline"),
   strategyPython: document.querySelector("#backtest-strategy-python"),
   tradeTableBody: document.querySelector("#trade-table-body"),
@@ -61,6 +77,8 @@ function applySelectedProjectDefaults() {
       `已加载混合周期策略，当前回测兼容层仍按 ${executionTimeframe} 执行，其他周期条件保留在策略规格中。`,
     );
   }
+  const assetType = option.dataset.asset || "stock";
+  nodes.minTradeUnit.value = assetType === "stock" || assetType === "etf" ? "100" : "1";
 }
 
 async function runBacktest() {
@@ -81,14 +99,28 @@ async function runBacktest() {
         to: `${nodes.to.value}T00:00:00Z`,
       },
       execution_contract: {
-        initial_capital: 100000,
-        fee_bps: 3,
-        slippage_bps: 2,
-        fill_price_rule: "next_bar_open",
+        initial_capital: Number(nodes.capital.value || 100000),
+        fee_bps: Number(nodes.feeBps.value || 3),
+        slippage_bps: Number(nodes.slippageBps.value || 2),
+        fill_price_rule: nodes.fillPriceRule.value,
         intrabar_match_policy: "no_intrabar_fill",
         calendar: "cn_a_share",
         timezone: "Asia/Shanghai",
-        adjustment_mode: "qfq",
+        adjustment_mode: nodes.adjustmentMode.value,
+        warmup_bars: Number(nodes.warmupBars.value || 20),
+        position_sizing: {
+          mode: nodes.positionMode.value,
+          value: Number(nodes.positionValue.value || 1),
+          max_positions: 1,
+          max_position_pct: Number(nodes.maxPositionPct.value || 1),
+          min_trade_unit: Number(nodes.minTradeUnit.value || 100),
+        },
+        risk_controls: {
+          take_profit_pct: Number(nodes.takeProfit.value || 0.08),
+          stop_loss_pct: Number(nodes.stopLoss.value || -0.03),
+          max_drawdown_pct: Number(nodes.maxDrawdown.value || -0.12),
+          max_holding_bars: Number(nodes.maxHoldingBars.value || 40),
+        },
       },
       data_snapshot: {
         dataset_snapshot_ref: `${nodes.market.value}_${nodes.projectSelect.selectedOptions[0]?.dataset.backtestTimeframe || "1d"}_${nodes.from.value}_${nodes.to.value}`,
@@ -115,7 +147,7 @@ async function refreshHistory() {
           <strong>${item.strategy_title || item.market}</strong>
           <div class="muted-note">${item.market} · ${formatDateTime(item.created_at)}</div>
           <div class="muted-note">收益 ${item.metrics.total_return_pct ?? 0}% · 交易 ${item.metrics.trade_count ?? 0} 次</div>
-          <div class="muted-note">来源 ${item.data_source.provider || "未知"}</div>
+          <div class="muted-note">快照 ${item.data_snapshot_summary?.dataset_snapshot_ref || "未标记"} · 来源 ${item.data_source.provider || "未知"}</div>
         </button>
       `,
     )
@@ -135,10 +167,13 @@ function renderBacktestDetail(data) {
   renderMetricCards(nodes.metrics, data.metrics || {});
   renderSparkline(nodes.sparkline, data.equity_curve || []);
   nodes.latestProvider.textContent = data.data_source?.provider || "未知";
+  renderConfigList(data.backtest_config || {});
+  renderSnapshotList(data.data_snapshot_summary || {});
   nodes.sourcePills.innerHTML = [
     `数据源：${data.data_source?.provider || "未知"}`,
     `缓存命中：${data.data_source?.served_from_cache ? "是" : "否"}`,
     `K线数量：${data.data_source?.bar_count || 0}`,
+    `快照：${data.dataset_snapshot_ref || "未标记"}`,
   ]
     .map((item) => `<span class="pill">${item}</span>`)
     .join("");
@@ -151,14 +186,60 @@ function renderBacktestDetail(data) {
             <tr>
               <td>${item.entry_time}</td>
               <td>${item.exit_time}</td>
-              <td>${item.side}</td>
+              <td>${item.side} / ${item.quantity ?? "-"}</td>
               <td class="${item.pnl >= 0 ? "positive" : "negative"}">${item.pnl}</td>
-              <td>${item.exit_reason}</td>
+              <td>${item.exit_reason} / ${item.holding_bars ?? "-"} bars</td>
             </tr>
           `,
         )
         .join("")
     : '<tr><td colspan="5" class="empty-state">当前没有成交记录。</td></tr>';
+}
+
+function renderConfigList(config) {
+  const execution = config || {};
+  const position = execution.position_sizing || {};
+  const risk = execution.risk_controls || {};
+  const items = [
+    ["成交方式", execution.fill_price_rule || "未知"],
+    ["复权模式", execution.adjustment_mode || "未知"],
+    ["费用 / 滑点", `${execution.fee_bps ?? 0}bps / ${execution.slippage_bps ?? 0}bps`],
+    ["仓位模式", `${position.mode || "未知"} / ${position.value ?? "-"}`],
+    ["单笔上限", `${position.max_position_pct ?? "-"} / 最小单位 ${position.min_trade_unit ?? "-"}`],
+    ["风控", `止盈 ${risk.take_profit_pct ?? "-"} / 止损 ${risk.stop_loss_pct ?? "-"} / 回撤 ${risk.max_drawdown_pct ?? "-"}`],
+    ["预热 / 持有上限", `${execution.warmup_bars ?? "-"} bars / ${risk.max_holding_bars ?? "-"} bars`],
+  ];
+  nodes.configList.innerHTML = items
+    .map(
+      ([label, value]) => `
+        <div class="list-item compact-item">
+          <strong>${label}</strong>
+          <div class="muted-note">${value}</div>
+        </div>
+      `,
+    )
+    .join("");
+}
+
+function renderSnapshotList(summary) {
+  const items = [
+    ["快照引用", summary.dataset_snapshot_ref || "未标记"],
+    ["数据来源", summary.provider || "未知"],
+    ["覆盖率 / 缺失率", `${summary.coverage_pct ?? "-"}% / ${summary.missing_rate_pct ?? "-"}%`],
+    ["时区 / 日历", `${summary.timezone || "未知"} / ${summary.calendar || "未知"}`],
+    ["Bar 数 / 预热", `${summary.bar_count ?? 0} / ${summary.warmup_bars ?? "-"}`],
+    ["最近同步", summary.last_synced_at || "未知"],
+  ];
+  nodes.snapshotList.innerHTML = items
+    .map(
+      ([label, value]) => `
+        <div class="list-item compact-item">
+          <strong>${label}</strong>
+          <div class="muted-note">${value}</div>
+        </div>
+      `,
+    )
+    .join("");
 }
 
 nodes.projectSelect.addEventListener("change", applySelectedProjectDefaults);

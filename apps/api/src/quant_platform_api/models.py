@@ -54,6 +54,21 @@ class DatasetConfig(BaseModel):
     to: datetime
 
 
+class PositionSizingConfig(BaseModel):
+    mode: str = "fixed_fraction"
+    value: float = 1.0
+    max_positions: int = 1
+    max_position_pct: float = 1.0
+    min_trade_unit: int = 100
+
+
+class RiskControlConfig(BaseModel):
+    take_profit_pct: float = 0.08
+    stop_loss_pct: float = -0.03
+    max_drawdown_pct: float = -0.12
+    max_holding_bars: int = 40
+
+
 class BacktestExecutionContract(BaseModel):
     initial_capital: float
     fee_bps: int
@@ -63,10 +78,21 @@ class BacktestExecutionContract(BaseModel):
     calendar: str
     timezone: str
     adjustment_mode: str
+    warmup_bars: int = 20
+    position_sizing: PositionSizingConfig = Field(default_factory=PositionSizingConfig)
+    risk_controls: RiskControlConfig = Field(default_factory=RiskControlConfig)
 
 
 class DataSnapshotConfig(BaseModel):
     dataset_snapshot_ref: str
+    provider: str | None = None
+    coverage_status: str = "ready"
+    coverage_pct: float | None = None
+    missing_rate_pct: float | None = None
+    calendar: str | None = None
+    timezone: str | None = None
+    warmup_bars: int | None = None
+    last_synced_at: datetime | None = None
 
 
 class DatasetSnapshotRecord(BaseModel):
@@ -201,6 +227,8 @@ class BacktestResult(BaseModel):
     config_revision: str
     dataset_snapshot_ref: str
     engine_version: str
+    backtest_config: dict[str, Any] = Field(default_factory=dict)
+    data_snapshot_summary: dict[str, Any] = Field(default_factory=dict)
     data_source: dict[str, Any] = Field(default_factory=dict)
     metrics: dict[str, Any] = Field(default_factory=dict)
     equity_curve: list[dict[str, Any]] = Field(default_factory=list)

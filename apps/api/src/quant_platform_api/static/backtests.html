@@ -33,7 +33,7 @@
         <div>
           <p class="eyebrow">Backtest Center</p>
           <h2>把每次回测都当作一条可追踪记录，而不是只看当前这一轮。</h2>
-          <p>回测当前仍以中国股票 / ETF 日线兼容层为主；策略工坊里生成的混合周期条件会被完整保存，但现阶段真实执行仍按回测周期运行，并在结果里保留来源说明。</p>
+          <p>当前版本会把成交方式、复权、费用、仓位和风控一起固化进回测配置，并把数据快照摘要写进结果。混合周期策略仍以兼容层 `backtest_timeframe` 执行，但能力边界会明确保留在结果中。</p>
         </div>
         <div class="hero-panel">
           <div class="card muted">
@@ -80,11 +80,91 @@
                 <input id="backtest-to" type="date" value="2024-12-31" />
               </label>
             </div>
+            <div class="form-grid two">
+              <label class="field">
+                <span>初始资金</span>
+                <input id="backtest-capital" type="number" min="1000" step="1000" value="100000" />
+              </label>
+              <label class="field">
+                <span>复权模式</span>
+                <select id="backtest-adjustment-mode">
+                  <option value="qfq">前复权</option>
+                  <option value="hfq">后复权</option>
+                  <option value="raw">不复权</option>
+                </select>
+              </label>
+            </div>
+            <div class="form-grid two">
+              <label class="field">
+                <span>手续费（bps）</span>
+                <input id="backtest-fee-bps" type="number" min="0" step="1" value="3" />
+              </label>
+              <label class="field">
+                <span>滑点（bps）</span>
+                <input id="backtest-slippage-bps" type="number" min="0" step="1" value="2" />
+              </label>
+            </div>
+            <div class="form-grid two">
+              <label class="field">
+                <span>成交方式</span>
+                <select id="backtest-fill-price-rule">
+                  <option value="next_bar_open">下一根K线开盘成交</option>
+                  <option value="same_bar_close">当前K线收盘成交</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>预热 Bar 数</span>
+                <input id="backtest-warmup-bars" type="number" min="0" step="1" value="20" />
+              </label>
+            </div>
+            <div class="form-grid two">
+              <label class="field">
+                <span>仓位模式</span>
+                <select id="backtest-position-mode">
+                  <option value="fixed_fraction">资金比例</option>
+                  <option value="fixed_quantity">固定数量</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>仓位值</span>
+                <input id="backtest-position-value" type="number" min="0.01" step="0.01" value="1" />
+              </label>
+            </div>
+            <div class="form-grid two">
+              <label class="field">
+                <span>单笔最大资金占比</span>
+                <input id="backtest-max-position-pct" type="number" min="0.05" max="1" step="0.05" value="1" />
+              </label>
+              <label class="field">
+                <span>最小交易单位</span>
+                <input id="backtest-min-trade-unit" type="number" min="1" step="1" value="100" />
+              </label>
+            </div>
+            <div class="form-grid two">
+              <label class="field">
+                <span>止盈比例</span>
+                <input id="backtest-take-profit" type="number" min="0.01" step="0.01" value="0.08" />
+              </label>
+              <label class="field">
+                <span>止损比例</span>
+                <input id="backtest-stop-loss" type="number" max="-0.01" step="0.01" value="-0.03" />
+              </label>
+            </div>
+            <div class="form-grid two">
+              <label class="field">
+                <span>最大回撤保护</span>
+                <input id="backtest-max-drawdown" type="number" max="-0.01" step="0.01" value="-0.12" />
+              </label>
+              <label class="field">
+                <span>最大持有 Bar 数</span>
+                <input id="backtest-max-holding-bars" type="number" min="1" step="1" value="40" />
+              </label>
+            </div>
             <div class="actions">
               <button id="run-backtest-btn">运行回测</button>
               <button id="refresh-backtests-btn" class="btn secondary">刷新历史</button>
             </div>
-            <div class="muted-note">如果选择的是混合周期策略，当前回测会按策略中标记的 `backtest_timeframe` 执行，其他周期条件保留在策略规格层。</div>
+            <div class="muted-note">如果选择的是混合周期策略，当前回测仍按策略中标记的 `backtest_timeframe` 执行；但成交假设、仓位和风控会完整固化进当前回测配置。</div>
           </div>
         </section>
 
@@ -102,6 +182,20 @@
         </div>
         <div id="backtest-metrics" class="metric-grid"></div>
         <div id="backtest-source-pills" class="pill-row" style="margin-top: 18px"></div>
+        <div class="grid two" style="margin-top: 18px">
+          <section class="card muted">
+            <div class="panel-header">
+              <h4>回测配置摘要</h4>
+            </div>
+            <div id="backtest-config-list" class="list empty-state">等待回测。</div>
+          </section>
+          <section class="card muted">
+            <div class="panel-header">
+              <h4>数据快照摘要</h4>
+            </div>
+            <div id="backtest-snapshot-list" class="list empty-state">等待回测。</div>
+          </section>
+        </div>
         <div id="equity-sparkline" class="sparkline" style="margin-top: 18px"></div>
         <div class="grid two" style="margin-top: 18px">
           <section class="card muted">

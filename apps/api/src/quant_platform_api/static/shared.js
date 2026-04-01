@@ -110,6 +110,8 @@ export function renderMetricCards(container, metrics) {
     ["胜率", `${metrics.win_rate_pct ?? 0}%`],
     ["Profit Factor", `${metrics.profit_factor ?? 0}`],
     ["交易次数", `${metrics.trade_count ?? 0}`],
+    ["期末净值", `${metrics.final_equity ?? 0}`],
+    ["平均单笔", `${metrics.avg_trade_return_pct ?? 0}%`],
   ];
   container.innerHTML = items
     .map(

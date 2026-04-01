@@ -173,6 +173,18 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertIn("加密货币", response.text)
         self.assertIn("伦敦金", response.text)
 
+    def test_backtests_page_shows_config_and_snapshot_sections(self) -> None:
+        client = self._build_client()
+        self._login(client)
+
+        response = client.get("/backtests")
+
+        self.assertEqual(200, response.status_code)
+        self.assertIn("回测配置摘要", response.text)
+        self.assertIn("数据快照摘要", response.text)
+        self.assertIn("仓位模式", response.text)
+        self.assertIn("最大回撤保护", response.text)
+
     def test_admin_can_login_and_access_workspace(self) -> None:
         client = self._build_client()
 
@@ -600,6 +612,11 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertEqual("snapshot_v1", data["dataset_snapshot_ref"])
         self.assertEqual("engine_v1", data["engine_version"])
         self.assertTrue(data["config_revision"].startswith("cfg_"))
+        self.assertEqual("next_bar_open", data["backtest_config"]["fill_price_rule"])
+        self.assertEqual("fixed_fraction", data["backtest_config"]["position_sizing"]["mode"])
+        self.assertEqual("cn_a_share", data["data_snapshot_summary"]["calendar"])
+        self.assertEqual("Asia/Shanghai", data["data_snapshot_summary"]["timezone"])
+        self.assertEqual("snapshot_v1", data["data_snapshot_summary"]["dataset_snapshot_ref"])
         self.assertIn("data_source", data)
         self.assertIn("strategy_python", data)
 
@@ -668,6 +685,150 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertEqual("ETF 回测策略", items[0]["strategy_title"])
         self.assertIn("created_at", items[0])
         self.assertTrue(items[0]["workspace_id"].startswith("ws_"))
+        self.assertIn("backtest_config", items[0])
+        self.assertIn("data_snapshot_summary", items[0])
+
+    def test_backtest_custom_position_and_risk_config_are_persisted(self) -> None:
+        client = self._build_client()
+        self._login(client)
+        version_id = client.post(
+            "/api/v1/strategies/projects",
+            json={
+                "title": "固定数量回测策略",
+                "natural_language_prompt": "量比持续大于阈值时买入",
+                "strategy_dsl": {
+                    "market": "600519.SH",
+                    "timeframe": "1d",
+                    "asset_type": "stock",
+                    "entry": {
+                        "all": [
+                            {
+                                "indicator": "volume_ratio",
+                                "params": {"period": 1},
+                                "operator": ">",
+                                "value": 0.5,
+                            }
+                        ]
+                    },
+                    "exit": {"any": []},
+                    "position": {"side": "long", "max_positions": 1},
+                },
+                "strategy_python": "def build_strategy():\n    return {}",
+            },
+        ).json()["data"]["version_id"]
+
+        response = client.post(
+            "/api/v1/backtests/runs",
+            json={
+                "strategy_version_id": version_id,
+                "dataset": {
+                    "market": "600519.SH",
+                    "timeframe": "1d",
+                    "asset_type": "stock",
+                    "from": "2024-01-01T00:00:00Z",
+                    "to": "2024-06-30T23:59:59Z",
+                },
+                "execution_contract": {
+                    "initial_capital": 200000,
+                    "fee_bps": 5,
+                    "slippage_bps": 1,
+                    "fill_price_rule": "same_bar_close",
+                    "intrabar_match_policy": "no_intrabar_fill",
+                    "calendar": "cn_a_share",
+                    "timezone": "Asia/Shanghai",
+                    "adjustment_mode": "raw",
+                    "warmup_bars": 5,
+                    "position_sizing": {
+                        "mode": "fixed_quantity",
+                        "value": 100,
+                        "max_positions": 1,
+                        "max_position_pct": 0.5,
+                        "min_trade_unit": 100,
+                    },
+                    "risk_controls": {
+                        "take_profit_pct": 0.2,
+                        "stop_loss_pct": -0.2,
+                        "max_drawdown_pct": -0.3,
+                        "max_holding_bars": 5,
+                    },
+                },
+                "data_snapshot": {"dataset_snapshot_ref": "custom_config_snapshot"},
+            },
+        )
+        task_id = response.json()["data"]["backtest_run_id"]
+
+        fetched = client.get(f"/api/v1/backtests/runs/{task_id}")
+
+        self.assertEqual(200, fetched.status_code)
+        data = fetched.json()["data"]
+        self.assertEqual("fixed_quantity", data["backtest_config"]["position_sizing"]["mode"])
+        self.assertEqual(100, data["backtest_config"]["position_sizing"]["value"])
+        self.assertEqual(5, data["backtest_config"]["risk_controls"]["max_holding_bars"])
+        self.assertEqual("raw", data["backtest_config"]["adjustment_mode"])
+        self.assertEqual(5, data["data_snapshot_summary"]["warmup_bars"])
+        self.assertTrue(data["trades"])
+        self.assertEqual(100, data["trades"][0]["quantity"])
+
+    def test_workspace_summary_returns_research_hub_data(self) -> None:
+        client = self._build_client()
+        self._login(client)
+        version_id = client.post(
+            "/api/v1/strategies/projects",
+            json={
+                "title": "工作台汇总策略",
+                "natural_language_prompt": "均线上穿时买入",
+                "strategy_dsl": {"market": "600519.SH", "timeframe": "1d", "asset_type": "stock"},
+                "strategy_python": "def build_strategy():\n    return {}",
+            },
+        ).json()["data"]["version_id"]
+        client.post(
+            "/api/v1/backtests/runs",
+            json={
+                "strategy_version_id": version_id,
+                "dataset": {
+                    "market": "600519.SH",
+                    "timeframe": "1d",
+                    "asset_type": "stock",
+                    "from": "2024-01-01T00:00:00Z",
+                    "to": "2024-12-31T23:59:59Z",
+                },
+                "execution_contract": {
+                    "initial_capital": 100000,
+                    "fee_bps": 3,
+                    "slippage_bps": 2,
+                    "fill_price_rule": "next_bar_open",
+                    "intrabar_match_policy": "no_intrabar_fill",
+                    "calendar": "cn_a_share",
+                    "timezone": "Asia/Shanghai",
+                    "adjustment_mode": "qfq",
+                },
+                "data_snapshot": {"dataset_snapshot_ref": "workspace_snapshot"},
+            },
+        )
+        upload_id = client.post(
+            "/api/v1/trades/uploads",
+            files={"file": ("trades.csv", b"symbol,side,entry_time,exit_time,pnl\nBTCUSDT,long,2024-05-01T10:00:00Z,2024-05-01T11:00:00Z,1\n", "text/csv")},
+        ).json()["data"]["upload_id"]
+        client.post(
+            f"/api/v1/trades/uploads/{upload_id}/parse",
+            json={"column_mapping": {"symbol": "symbol", "side": "side", "entry_time": "entry_time", "exit_time": "exit_time", "pnl": "pnl"}},
+        )
+        client.post(
+            "/api/v1/replays/analyses",
+            json={"upload_id": upload_id, "focus_dimensions": ["side_performance"]},
+        )
+
+        summary = client.get("/api/v1/workspace/summary")
+
+        self.assertEqual(200, summary.status_code)
+        data = summary.json()["data"]
+        self.assertGreaterEqual(data["counts"]["projects"], 1)
+        self.assertGreaterEqual(data["counts"]["backtests"], 1)
+        self.assertGreaterEqual(data["counts"]["replays"], 1)
+        self.assertTrue(data["recent_projects"])
+        self.assertTrue(data["recent_backtests"])
+        self.assertTrue(data["snapshot_states"])
+        self.assertEqual("workspace_snapshot", data["snapshot_states"][0]["dataset_snapshot_ref"])
 
     def test_optimization_job_completes_and_returns_best_metrics(self) -> None:
         client = self._build_client()
