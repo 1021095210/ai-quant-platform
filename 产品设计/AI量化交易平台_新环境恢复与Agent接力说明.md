@@ -152,7 +152,7 @@
 
 - 以 GitHub 仓库 `main` 分支当前 HEAD 为准
 - 如果本文中的提交信息和 GitHub 页面显示不一致，以 GitHub 页面为准
-- 当前已知远端基线：`49a693d1b290eb34e9bbefbdcf7c8cbcabb78b51`
+- 当前已知远端基线：以 GitHub 仓库 `main` 当前 HEAD 为准，本轮已包含“策略工坊多市场与混合周期”改造
 
 如果新环境还没有仓库，请先执行：
 
