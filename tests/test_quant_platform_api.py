@@ -100,6 +100,11 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertEqual("req_healthz_test", payload["request_id"])
         self.assertEqual("req_healthz_test", response.headers["X-Request-Id"])
         self.assertEqual("ok", payload["data"]["status"])
+        self.assertEqual("development", payload["data"]["app_env"])
+        self.assertEqual("sqlite", payload["data"]["database_backend"])
+        self.assertFalse(payload["data"]["redis_configured"])
+        self.assertFalse(payload["data"]["minio_configured"])
+        self.assertFalse(payload["data"]["llm_configured"])
 
     def test_index_page_serves_web_app_shell(self) -> None:
         client = self._build_client()

@@ -1,0 +1,38 @@
+name: ai-quant-platform-external
+
+services:
+  api:
+    build:
+      context: ..
+      dockerfile: apps/api/Dockerfile
+    image: ai-quant-platform-api:external
+    restart: unless-stopped
+    environment:
+      APP_ENV: ${APP_ENV:-production}
+      APP_NAME: ${APP_NAME:-AI Quant Platform API}
+      APP_PUBLIC_URL: ${APP_PUBLIC_URL:?APP_PUBLIC_URL is required}
+      API_PREFIX: ${API_PREFIX:-/api/v1}
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+      MARKET_DATA_DATABASE_PATH: ${MARKET_DATA_DATABASE_PATH:-/app/data/market_data.db}
+      MARKET_DATA_PROVIDER: ${MARKET_DATA_PROVIDER:-auto}
+      TUSHARE_TOKEN: ${TUSHARE_TOKEN:-}
+      REDIS_URL: ${REDIS_URL:-}
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT:-}
+      MINIO_CONSOLE: ${MINIO_CONSOLE:-}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-}
+      MINIO_BUCKET: ${MINIO_BUCKET:-quant-platform}
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_MODEL_STRATEGY: ${LLM_MODEL_STRATEGY:-}
+      LLM_MODEL_SUMMARY: ${LLM_MODEL_SUMMARY:-}
+      ALLOWED_LLM_EXPORT_FIELDS: ${ALLOWED_LLM_EXPORT_FIELDS:-symbol,side,entry_time,exit_time,pnl,feature_snapshot}
+      BACKTEST_ENGINE_VERSION: ${BACKTEST_ENGINE_VERSION:-engine_v1}
+      STRATEGY_PROMPT_VERSION: ${STRATEGY_PROMPT_VERSION:-v1}
+      REPLAY_PROMPT_VERSION: ${REPLAY_PROMPT_VERSION:-v1}
+      JOB_EXECUTION_MODE: ${JOB_EXECUTION_MODE:-background}
+      JOB_SIMULATION_LATENCY_MS: ${JOB_SIMULATION_LATENCY_MS:-100}
+    ports:
+      - "${APP_PORT:-8000}:8000"
+    volumes:
+      - ../storage:/app/data

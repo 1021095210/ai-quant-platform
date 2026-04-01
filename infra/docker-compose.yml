@@ -1,38 +1,99 @@
+name: ai-quant-platform
+
 services:
   api:
     build:
       context: ..
       dockerfile: apps/api/Dockerfile
+    image: ai-quant-platform-api:local
+    restart: unless-stopped
     environment:
-      APP_NAME: AI Quant Platform API
-      API_PREFIX: /api/v1
-      DATABASE_URL: postgresql+psycopg://quant_user:quant_pass@postgres:5432/quant_ai
-      JOB_EXECUTION_MODE: background
-      JOB_SIMULATION_LATENCY_MS: 100
-      BACKTEST_ENGINE_VERSION: engine_v1
-      STRATEGY_PROMPT_VERSION: v1
-      REPLAY_PROMPT_VERSION: v1
+      APP_ENV: ${APP_ENV:-container}
+      APP_NAME: ${APP_NAME:-AI Quant Platform API}
+      APP_PUBLIC_URL: ${APP_PUBLIC_URL:-http://127.0.0.1:${APP_PORT:-8000}}
+      API_PREFIX: ${API_PREFIX:-/api/v1}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://quant_user:quant_pass@postgres:5432/quant_ai}
+      MARKET_DATA_DATABASE_PATH: ${MARKET_DATA_DATABASE_PATH:-/app/data/market_data.db}
+      MARKET_DATA_PROVIDER: ${MARKET_DATA_PROVIDER:-auto}
+      TUSHARE_TOKEN: ${TUSHARE_TOKEN:-}
+      REDIS_URL: ${REDIS_URL:-redis://:${REDIS_PASSWORD:-quant_redis_pass}@redis:6379/0}
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT:-http://minio:9000}
+      MINIO_CONSOLE: ${MINIO_CONSOLE:-http://127.0.0.1:${MINIO_CONSOLE_PORT:-9001}}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+      MINIO_BUCKET: ${MINIO_BUCKET:-quant-platform}
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_MODEL_STRATEGY: ${LLM_MODEL_STRATEGY:-}
+      LLM_MODEL_SUMMARY: ${LLM_MODEL_SUMMARY:-}
+      ALLOWED_LLM_EXPORT_FIELDS: ${ALLOWED_LLM_EXPORT_FIELDS:-symbol,side,entry_time,exit_time,pnl,feature_snapshot}
+      BACKTEST_ENGINE_VERSION: ${BACKTEST_ENGINE_VERSION:-engine_v1}
+      STRATEGY_PROMPT_VERSION: ${STRATEGY_PROMPT_VERSION:-v1}
+      REPLAY_PROMPT_VERSION: ${REPLAY_PROMPT_VERSION:-v1}
+      JOB_EXECUTION_MODE: ${JOB_EXECUTION_MODE:-background}
+      JOB_SIMULATION_LATENCY_MS: ${JOB_SIMULATION_LATENCY_MS:-100}
     ports:
-      - "8000:8000"
+      - "${APP_PORT:-8000}:8000"
+    volumes:
+      - ../storage:/app/data
     depends_on:
-      - redis
-      - postgres
-
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "6379:6379"
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_started
 
   postgres:
     image: postgres:16-alpine
+    restart: unless-stopped
     environment:
-      POSTGRES_DB: quant_ai
-      POSTGRES_USER: quant_user
-      POSTGRES_PASSWORD: quant_pass
+      POSTGRES_DB: ${POSTGRES_DB:-quant_ai}
+      POSTGRES_USER: ${POSTGRES_USER:-quant_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-quant_pass}
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-quant_user} -d ${POSTGRES_DB:-quant_ai}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --requirepass
+      - ${REDIS_PASSWORD:-quant_redis_pass}
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-quant_redis_pass}", "PING"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  minio:
+    image: minio/minio:RELEASE.2026-02-20T21-36-29Z
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin}
+    ports:
+      - "${MINIO_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - minio-data:/data
 
 volumes:
+  minio-data:
   postgres-data:
+  redis-data:

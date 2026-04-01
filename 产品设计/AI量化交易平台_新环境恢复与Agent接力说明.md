@@ -1,6 +1,6 @@
 # AI量化交易平台新环境恢复与Agent接力说明
 
-> 最近更新时间：2026-04-01 10:45 UTC  
+> 最近更新时间：2026-04-01 11:25 UTC  
 > 用途：这是一份给“新环境中的新 Agent”使用的单文件交接说明。  
 > 使用方式：在新的开发环境里，**只上传这一个文件给新 Agent**，然后让它按本文件顺序先恢复项目，再继续我们的开发。  
 > 维护规则：以后每次推进开发、更新 GitHub、切换 Agent 之前，都必须同步更新本文件。
@@ -129,6 +129,35 @@
 - 已完成工作台研究中枢化第一阶段：
   - 工作台会读取独立的 `workspace/summary` 接口
   - 当前展示最近项目、最近回测、最近复盘、失败任务、数据快照状态、建议下一步
+- 已完成部署与环境差异基线第一阶段：
+  - 已补齐仓库根 README，明确回答前端 / 后端 / 数据 / AI / 部署五个核心问题
+  - 已新增系统架构与部署方案文档
+  - 已重写环境搭建文档，统一到当前真实技术栈
+  - 已补齐 `.dockerignore`
+  - 已升级 `apps/api/Dockerfile`
+  - 已补齐 `infra/docker-compose.yml`
+  - 已新增 `infra/docker-compose.external.yml`
+  - 已新增 `infra/deploy.env.example`
+  - 已新增 `tools/verify_infra_stack.py`
+- `healthz` 当前会返回部署相关状态：
+  - `app_env`
+  - `database_backend`
+  - `redis_configured`
+  - `minio_configured`
+  - `llm_configured`
+- 已完成外部依赖联调验证：
+  - PostgreSQL 可连通
+  - Redis 可连通
+  - MinIO 可连通
+- 已完成“当前代码 + 外部 PostgreSQL / Redis / MinIO”运行验证：
+  - 应用可正常启动
+  - `/healthz` 正常
+  - 首页正常
+  - 未登录访问工作台会跳转登录
+- 当前环境没有可用 Docker daemon：
+  - Dockerfile 和 Compose 文件已经交付
+  - 但本轮没有在这台机器上真正执行 `docker build` / `docker compose up`
+  - 新环境接手时，如有 Docker daemon，应优先补做这一轮容器验证
 - 已完成模块拆分、OCR 复盘链路设计、平台公共契约冻结稿、数据库双层边界冻结稿
 - 项目已经同步到 GitHub 私有仓库，可继续迭代
 
@@ -165,6 +194,17 @@
 13. 针对“交易员视角”和“应用平台设计视角”的双视角评审已经完成，评审结论单独成稿，不覆盖当前可运行版本
 14. 回测中心当前已经提供可编辑的回测配置面板，不再把成交假设、仓位和风控写死在前端
 15. 工作台当前已经从入口页升级为研究中枢，优先看 `workspace/summary` 而不是旧的静态入口结构
+16. 当前仓库已经提供可交接的部署资产：
+   - `README.md`
+   - `apps/api/README.md`
+   - `infra/docker-compose.yml`
+   - `infra/docker-compose.external.yml`
+   - `infra/deploy.env.example`
+   - `tools/verify_infra_stack.py`
+17. 当前系统真实前端技术不是 React / Vue，而是 FastAPI 托管的多页面 HTML + Vanilla JavaScript
+18. 当前系统真实后端技术为 Python + FastAPI + SQLAlchemy
+19. 当前业务存储默认支持 SQLite，并已验证可切换 PostgreSQL
+20. 当前临时外部验证链路可用，但仍属于隧道方案，不应视为长期正式部署
 
 ### 当前默认开发方向
 
@@ -188,7 +228,7 @@
 
 - 以 GitHub 仓库 `main` 分支当前 HEAD 为准
 - 如果本文中的提交信息和 GitHub 页面显示不一致，以 GitHub 页面为准
-- 当前远端基线（2026-04-01）：以 GitHub 仓库 `main` 分支当前 HEAD 为准；本轮已完成回测配置对象化、数据快照透明化、最小风控与工作台研究中枢化
+- 当前远端基线（2026-04-01）：以 GitHub 仓库 `main` 分支当前 HEAD 为准；当前代码已补齐回测配置对象化、数据快照透明化、最小风控、工作台研究中枢化，以及第一阶段部署与环境差异基线
 
 如果新环境还没有仓库，请先执行：
 
@@ -239,6 +279,7 @@ cp .env.example .env
 - 行情数据源 Token
 - LLM 相关配置
 - 存储路径
+- Redis / MinIO 配置
 
 ### 4. 先跑测试
 
@@ -267,6 +308,16 @@ uvicorn quant_platform_api.main:create_app --factory --app-dir apps/api/src --ho
 优先检查：
 
 - `http://127.0.0.1:8000/healthz`
+
+如果环境中已经提供 PostgreSQL / Redis / MinIO，建议补跑：
+
+```bash
+.venv/bin/python tools/verify_infra_stack.py \
+  --database-url "$DATABASE_URL" \
+  --redis-url "$REDIS_URL" \
+  --minio-endpoint "$MINIO_ENDPOINT" \
+  --app-url "$APP_PUBLIC_URL"
+```
 
 如果是远程环境，再进行端口转发或 Preview。
 
@@ -303,8 +354,11 @@ uvicorn quant_platform_api.main:create_app --factory --app-dir apps/api/src --ho
 
 ### 1. 项目主设计稿
 
+- `README.md`
 - `产品设计/AI量化交易平台_周一提交版.md`
 - `产品设计/AI量化交易平台_设计文档.md`
+- `产品设计/AI量化交易平台_系统架构与部署方案_2026-04-01.md`
+- `产品设计/AI量化交易平台_环境搭建.md`
 
 ### 2. 模块推进稿
 
@@ -367,7 +421,7 @@ uvicorn quant_platform_api.main:create_app --factory --app-dir apps/api/src --ho
 ### 第四优先级
 
 - 继续收敛工作台、回测中心、复盘页的空状态、错误态和平台文案
-- 准备更稳定的外部可访问部署方案
+- 把当前临时隧道验证升级为更稳定的外部可访问部署方案
 
 ---
 

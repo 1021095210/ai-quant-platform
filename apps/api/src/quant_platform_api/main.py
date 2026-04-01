@@ -339,7 +339,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             data={
                 "status": "ok",
                 "app_name": app_settings.app_name,
+                "app_env": app_settings.app_env,
                 "job_execution_mode": app_settings.job_execution_mode,
+                "database_backend": "postgresql"
+                if "postgres" in app_settings.database_url
+                else "sqlite",
+                "redis_configured": bool(app_settings.redis_url),
+                "minio_configured": bool(app_settings.minio_endpoint),
+                "llm_configured": bool(
+                    app_settings.llm_base_url and app_settings.llm_api_key
+                ),
             },
         )
 

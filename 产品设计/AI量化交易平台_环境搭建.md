@@ -2,254 +2,204 @@
 
 ## 目标
 
-这份环境搭建说明用于支撑第一周开发和演示，目标是：
+这份文档服务于当前真实可运行版本，而不是早期草案。目标是：
 
-- 开发环境能快速启动
-- 演示环境稳定可访问
-- 不引入超出一周项目的运维复杂度
+- 新环境能快速恢复
+- 本地开发、演示部署、外部托管依赖三种场景能切换
+- 新 Agent 接手时能快速判断当前真实技术栈和部署方式
 
 ## 技术栈选择
 
 ### 前端
 
-- React
-- Next.js
-- TypeScript
-- pnpm
+- 多页面 HTML
+- Vanilla JavaScript
+- CSS
+- 由 FastAPI 统一托管
 
 ### 后端
 
 - Python 3.11
 - FastAPI
 - Uvicorn
+- SQLAlchemy
 
 ### 数据与分析
 
-- PostgreSQL 15
-- Redis 7
-- pandas / polars
-- pandas-ta
+- SQLite
+- PostgreSQL
+- Redis
+- MinIO
+- pandas
 
 ### AI 组件
 
-- OpenAI 兼容 LLM API
-- 结构化输出模式
+- OpenAI 兼容 LLM API 配置预留
+- 当前主链路仍以规则模板和结构化逻辑为主
 
 ### 部署方式
 
+- Docker
 - Docker Compose
+- 本地直跑 FastAPI
 
 ## 服务组成
 
-开发和演示环境包含 5 个核心服务：
+当前真实运行链路以一个 API 容器为中心：
 
-1. `web`
-   - 提供策略实验室和复盘页面
-2. `api`
-   - 提供策略生成、回测、复盘相关接口
-3. `postgres`
-   - 存储元数据和结果
-4. `redis`
-   - 作为最小异步任务队列和状态缓存
-5. `worker`
-   - 执行回测、参数优化和复盘分析
+1. `api`
+   - 提供页面和业务接口
+2. `postgres`
+   - 共享环境的业务数据库
+3. `redis`
+   - 异步队列和状态缓存预留
+4. `minio`
+   - 对象存储预留
 
-本周默认不单独拆：
-
-- 对象存储服务
-- Nginx
-- 多 worker 集群
-
-如果后续时间充足，再补这些基础设施。
+当前没有独立 `web` 服务，也没有独立 `worker` 服务；这些是后续演进方向，不是本版真实架构。
 
 ## 推荐目录结构
 
 ```text
 repo/
 ├── apps/
-│   ├── web/
 │   └── api/
 ├── infra/
-│   └── docker-compose.yml
+│   ├── docker-compose.yml
+│   ├── docker-compose.external.yml
+│   └── deploy.env.example
+├── tools/
+│   └── verify_infra_stack.py
 ├── storage/
-│   ├── uploads/
-│   └── market-data/
-├── docs/
-└── .env.example
+└── 产品设计/
 ```
 
 ## 环境变量
 
 ```env
-# app
 APP_ENV=development
+APP_NAME=AI Quant Platform API
+APP_PUBLIC_URL=http://127.0.0.1:8000
+API_PREFIX=/api/v1
 
-# postgres
-POSTGRES_HOST=postgres
-POSTGRES_PORT=5432
-POSTGRES_DB=quant_ai
-POSTGRES_USER=quant_user
-POSTGRES_PASSWORD=quant_pass
+DATABASE_URL=sqlite+pysqlite:///./quant_platform.db
+MARKET_DATA_DATABASE_PATH=./market_data.db
+MARKET_DATA_PROVIDER=auto
+TUSHARE_TOKEN=
 
-# llm
-LLM_BASE_URL=https://api.openai.com/v1
-LLM_API_KEY=your_key
-LLM_MODEL_STRATEGY=gpt-4.1
-LLM_MODEL_SUMMARY=gpt-4.1-mini
+REDIS_URL=
+
+MINIO_ENDPOINT=
+MINIO_CONSOLE=
+MINIO_ACCESS_KEY=
+MINIO_SECRET_KEY=
+MINIO_BUCKET=quant-platform
+
+LLM_BASE_URL=
+LLM_API_KEY=
+LLM_MODEL_STRATEGY=
+LLM_MODEL_SUMMARY=
+ALLOWED_LLM_EXPORT_FIELDS=symbol,side,entry_time,exit_time,pnl,feature_snapshot
+
+BACKTEST_ENGINE_VERSION=engine_v1
 STRATEGY_PROMPT_VERSION=v1
 REPLAY_PROMPT_VERSION=v1
-
-# storage
-STORAGE_ROOT=/app/storage
-UPLOAD_DIR=/app/storage/uploads
-MARKET_DATA_DIR=/app/storage/market-data
-
-# async jobs
-REDIS_URL=redis://redis:6379/0
-BACKTEST_ENGINE_VERSION=engine_v1
-JOB_POLL_INTERVAL_MS=1000
-
-# governance
-DATA_RETENTION_DAYS=30
-ALLOWED_LLM_EXPORT_FIELDS=symbol,side,entry_time,exit_time,pnl,feature_snapshot
+JOB_EXECUTION_MODE=background
+JOB_SIMULATION_LATENCY_MS=100
 ```
 
 ## 本地开发步骤
 
-### 1. 准备基础依赖
+### 1. 准备 Python 环境
 
-- 安装 Docker 和 Docker Compose
-- 安装 Node.js 20
-- 安装 Python 3.11
-- 安装 pnpm
+- 创建 `.venv`
+- 安装 `apps/api`
+- 复制 `.env.example` 为 `.env`
 
-### 2. 创建项目结构
+### 2. 启动应用
 
-- 初始化 `apps/web`
-- 初始化 `apps/api`
-- 创建 `storage/uploads`
-- 创建 `storage/market-data`
+```bash
+uvicorn quant_platform_api.main:create_app --factory --app-dir apps/api/src --host 0.0.0.0 --port 8000 --reload
+```
 
-### 3. 启动 PostgreSQL
+### 3. 访问页面
 
-使用 Docker Compose 启动数据库，确保本地和演示环境一致。
+- 首页：`/`
+- 登录：`/login`
+- 工作台：`/workspace`
 
-### 4. 启动后端
+### 4. 跑测试
 
-- 创建虚拟环境
-- 安装依赖
-- 配置 `.env`
-- 启动 FastAPI 服务
-
-### 4.5 启动 worker
-
-- 连接 Redis
-- 以后台 worker 模式启动
-- 验证能消费回测 / 复盘任务
-
-### 5. 启动前端
-
-- 安装依赖
-- 配置前端环境变量
-- 启动 Next.js 开发服务器
-
-### 6. 导入样例数据
-
-- 放入一份历史行情样例
-- 放入一份交割单样例
-- 验证页面可用
+```bash
+.venv/bin/python -m unittest discover -s tests -p 'test_*.py'
+```
 
 ## Docker Compose 设计
 
-建议包含以下服务：
+### 本地一体化
 
-### web
+使用 `infra/docker-compose.yml` 启动：
 
-- 构建前端
-- 暴露端口 `3000`
+- API
+- PostgreSQL
+- Redis
+- MinIO
 
-### api
+### 外部托管依赖
 
-- 构建 FastAPI 服务
-- 暴露端口 `8000`
-- 挂载 `storage/`
-
-### redis
-
-- 使用 Redis 官方镜像
-- 作为最小任务队列
-
-### worker
-
-- 复用 API 代码仓，但以 worker 模式启动
-- 处理回测、优化、复盘三个长任务
-
-### postgres
-
-- 使用 PostgreSQL 官方镜像
-- 暴露端口 `5432`
-- 持久化数据库目录
+使用 `infra/docker-compose.external.yml` 只启动 API，并把环境变量指向外部 PostgreSQL / Redis / MinIO。
 
 ## 为什么选这个方案
 
-- 比本地手工装数据库稳定
-- 比拆云服务更简单
-- 比只做同步接口更接近真实平台
-- 能保证开发和演示环境尽可能一致
+- 比旧版“前后端分离 + 独立 worker”的草案更符合当前代码现实
+- 比完全手工搭环境更容易接力
+- 比只保留 SQLite 更接近真实部署
+- 能处理开发、演示、托管依赖三种环境差异
 
 ## 样例数据准备
 
-环境搭建完成后，至少准备两类样例：
+当前版本不要求额外导入大型预置样例才能启动，但建议准备：
 
 ### 行情样例
 
-- 单市场
-- 单周期
-- 时间范围固定
-- 用于回测演示
+- 至少一个股票或 ETF 标的
+- 一个完整回测时间段
 
 ### 交割单样例
 
-- 至少包含 30 到 100 条交易记录
-- 字段包含：
-  - 标的
-  - 开仓时间
-  - 平仓时间
-  - 方向
-  - 数量
-  - 盈亏
+- 至少一份可解析的交易记录文件
+- 用于验证上传和复盘链路
 
 ## 本周环境范围边界
 
-本周只要求做到：
+本阶段要求做到：
 
-- 开发环境可运行
-- 演示环境可访问
-- 数据和文件可用
-- 长任务可以异步排队和轮询状态
+- 本地开发可运行
+- Docker 镜像可构建
+- 可选择本地依赖或外部依赖部署
+- 业务链路可测试和验证
 
-本周不要求做到：
+本阶段暂不要求：
 
 - 生产级高可用
 - 自动扩缩容
-- 真实行情服务接入
-- 实盘安全隔离
+- 多 worker 集群
+- 实盘交易安全隔离
 
 ## 数据治理与安全边界
 
-- 样例交割单必须先脱敏，再进入演示环境
-- 原始上传文件、原始行数据、标准化 fills、聚合 trade records 分层保存
-- 对外部 LLM 只发送结构化特征和白名单字段，不发送原始文件
-- 上传文件要有保留期限和清理状态
-- 所有密钥只通过环境变量提供，不写入代码和镜像
+- 不把密钥写入仓库
+- 对外部 LLM 只暴露白名单字段
+- 原始交易文件、解析记录和复盘结论需要分层保存
+- 市场缓存数据库与业务数据库分离
+- 运行态数据库文件不进入 Git 仓库
 
 ## 环境搭建验收标准
 
-- 前端可访问
+- 页面可访问
 - 后端接口可访问
-- 数据库连接正常
-- Redis 和 worker 可用
-- 样例行情可读
-- 样例交割单可上传
-- LLM API 配置可用
-- 能跑通最短演示链路
+- 自动化测试通过
+- `/healthz` 返回正常
+- PostgreSQL / Redis / MinIO 可按环境变量切换
+- `tools/verify_infra_stack.py` 能验证依赖状态
+- 能跑通登录 -> 策略 -> 回测 -> 查看结果的最短链路
