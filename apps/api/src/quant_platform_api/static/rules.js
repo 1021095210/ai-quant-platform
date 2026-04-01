@@ -78,7 +78,6 @@ function renderRuleItem(sectionId, item, index) {
                     </div>
                   </div>
                 `,
-  `;
 }
 
 function renderGlossary(items) {
