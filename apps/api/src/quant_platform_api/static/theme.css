@@ -596,6 +596,11 @@ th {
   gap: 22px;
 }
 
+.auth-card-single {
+  width: min(720px, 100%);
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .auth-panel,
 .auth-aside {
   padding: 28px;

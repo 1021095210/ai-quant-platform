@@ -8,3 +8,4 @@
 - `.claude/agents/briefings/2026-04-01_codex_用户归属与私有接口收口.md`
 - `.claude/agents/briefings/2026-04-01_codex_移除公开测试账号展示.md`
 - `.claude/agents/briefings/2026-04-01_codex_策略工坊多市场与混合周期.md`
+- `.claude/agents/briefings/2026-04-01_codex_品牌收敛与规则模块多市场化.md`

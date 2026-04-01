@@ -108,7 +108,8 @@ class QuantPlatformApiTests(unittest.TestCase):
 
         self.assertEqual(200, response.status_code)
         self.assertIn("text/html", response.headers["content-type"])
-        self.assertIn("中国股票 / ETF 量化研究平台", response.text)
+        self.assertIn("量化研究平台", response.text)
+        self.assertNotIn("中国股票 / ETF 量化研究平台", response.text)
         self.assertIn("首页", response.text)
 
     def test_public_auth_pages_are_accessible(self) -> None:
@@ -121,6 +122,7 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertEqual(200, register_response.status_code)
         self.assertIn("登录后进入你的量化研究工作台", login_response.text)
         self.assertIn("创建账户后直接进入你的用户工作台", register_response.text)
+        self.assertNotIn("访问说明", login_response.text)
         self.assertNotIn("默认测试账户", login_response.text)
         self.assertNotIn("用户名 `1111`", login_response.text)
         self.assertNotIn("用户名 `admin`", login_response.text)
@@ -341,7 +343,12 @@ class QuantPlatformApiTests(unittest.TestCase):
 
         defaults = client.get("/api/v1/rules/defaults")
         self.assertEqual(200, defaults.status_code)
-        self.assertTrue(defaults.json()["data"]["items"])
+        default_items = defaults.json()["data"]["items"]
+        self.assertTrue(default_items)
+        self.assertTrue(any(item["section"] == "A股默认研究规则" for item in default_items))
+        self.assertTrue(any(item["section"] == "美股默认研究规则" for item in default_items))
+        self.assertTrue(any(item["section"] == "加密货币默认研究规则" for item in default_items))
+        self.assertTrue(any(item["section"] == "伦敦金默认研究规则" for item in default_items))
 
         created = client.post(
             "/api/v1/rules/glossary",
@@ -357,6 +364,16 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertEqual(200, glossary.status_code)
         items = glossary.json()["data"]["items"]
         self.assertTrue(any(item["term"] == "地天板" for item in items))
+
+    def test_rules_page_reflects_multi_market_copy(self) -> None:
+        client = self._build_client()
+        self._login(client)
+
+        response = client.get("/rules")
+
+        self.assertEqual(200, response.status_code)
+        self.assertIn("多市场默认研究规则与 AI 术语理解库", response.text)
+        self.assertIn("覆盖 A股、美股、加密货币和伦敦金等市场语境", response.text)
 
     def test_create_strategy_project_returns_project_and_version_ids(self) -> None:
         client = self._build_client()
