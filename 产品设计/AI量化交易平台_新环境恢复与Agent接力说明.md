@@ -1,6 +1,6 @@
 # AI量化交易平台新环境恢复与Agent接力说明
 
-> 最近更新时间：2026-04-01 07:55 UTC  
+> 最近更新时间：2026-04-01 07:54 UTC  
 > 用途：这是一份给“新环境中的新 Agent”使用的单文件交接说明。  
 > 使用方式：在新的开发环境里，**只上传这一个文件给新 Agent**，然后让它按本文件顺序先恢复项目，再继续我们的开发。  
 > 维护规则：以后每次推进开发、更新 GitHub、切换 Agent 之前，都必须同步更新本文件。
@@ -152,7 +152,7 @@
 
 - 以 GitHub 仓库 `main` 分支当前 HEAD 为准
 - 如果本文中的提交信息和 GitHub 页面显示不一致，以 GitHub 页面为准
-- 当前已知远端基线：`4af436c26e280f59be31fc925dc5e5688900dc93`
+- 当前已知远端基线：`49a693d1b290eb34e9bbefbdcf7c8cbcabb78b51`
 
 如果新环境还没有仓库，请先执行：
 
@@ -294,6 +294,7 @@ uvicorn quant_platform_api.main:create_app --factory --app-dir apps/api/src --ho
 
 优先查看仓库中的：
 
+- `.claude/agents/briefings/2026-04-01_codex_策略工坊多市场与混合周期.md`
 - `.claude/agents/briefings/2026-04-01_codex_平台契约认证与工作台改造.md`
 
 ---
