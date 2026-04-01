@@ -22,6 +22,7 @@ from quant_platform_api.market_data import (
 from quant_platform_api.config import Settings
 from quant_platform_api.db import build_session_factory, create_schema
 from quant_platform_api.models import (
+    AdminUserRoleUpdateRequest,
     BacktestCreateRequest,
     CustomIndicatorCreateRequest,
     CustomIndicatorGenerateRequest,
@@ -56,6 +57,7 @@ from quant_platform_api.repository import (
 from quant_platform_api.services import (
     AsyncTaskService,
     AuthService,
+    AdminService,
     IndicatorService,
     RuleService,
     StrategyService,
@@ -74,6 +76,7 @@ SESSION_COOKIE_NAME = "quant_session"
 class AppServices:
     settings: Settings
     auth_service: AuthService
+    admin_service: AdminService
     strategy_service: StrategyService
     indicator_service: IndicatorService
     rule_service: RuleService
@@ -124,6 +127,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         auth_service=AuthService(
             user_repository=user_repository,
             session_repository=user_session_repository,
+        ),
+        admin_service=AdminService(
+            user_repository=user_repository,
+            session_repository=user_session_repository,
+            strategy_repository=strategy_repository,
+            task_repository=task_repository,
         ),
         strategy_service=strategy_service,
         indicator_service=IndicatorService(indicator_repository),
@@ -225,6 +234,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return _login_redirect("/workspace")
         return FileResponse(static_dir / "workspace.html")
 
+    @app.get("/admin")
+    def admin_page(request: Request):
+        user = _get_current_user(request, services.auth_service)
+        if user is None:
+            return _login_redirect("/admin")
+        if not services.auth_service.is_admin(user):
+            return RedirectResponse(url="/workspace", status_code=status.HTTP_302_FOUND)
+        return FileResponse(static_dir / "admin.html")
+
     @app.get("/strategy")
     def strategy_page(request: Request):
         if _get_current_user(request, services.auth_service) is None:
@@ -274,6 +292,54 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 user_id=current_user.user_id,
                 workspace_id=current_user.workspace_id,
             ),
+        )
+
+    @app.get(f"{app_settings.api_prefix}/admin/summary")
+    def get_admin_summary(request: Request) -> JSONResponse:
+        _require_admin_user(request, services.auth_service)
+        return _success_response(
+            request,
+            data=services.admin_service.build_summary(),
+        )
+
+    @app.get(f"{app_settings.api_prefix}/admin/users")
+    def list_admin_users(request: Request) -> JSONResponse:
+        _require_admin_user(request, services.auth_service)
+        return _success_response(
+            request,
+            data={"items": services.admin_service.list_users()},
+        )
+
+    @app.put(f"{app_settings.api_prefix}/admin/users/{{user_id}}/role")
+    def update_admin_user_role(
+        request: Request,
+        user_id: str,
+        payload: AdminUserRoleUpdateRequest,
+    ) -> JSONResponse:
+        current_user = _require_admin_user(request, services.auth_service)
+        try:
+            updated = services.admin_service.update_user_role(
+                current_user_id=current_user.user_id,
+                target_user_id=user_id,
+                role=payload.role,
+            )
+        except Exception as exc:
+            if hasattr(exc, "code") and hasattr(exc, "message"):
+                status_code = status.HTTP_404_NOT_FOUND if exc.code == "NOT_FOUND" else (
+                    status.HTTP_409_CONFLICT if exc.code == "STATE_CONFLICT" else status.HTTP_400_BAD_REQUEST
+                )
+                raise HTTPException(
+                    status_code=status_code,
+                    detail=ErrorPayload(code=exc.code, message=exc.message).model_dump(),
+                ) from exc
+            raise
+        return _success_response(
+            request,
+            data={
+                "user_id": updated.user_id,
+                "username": updated.username,
+                "role": updated.role,
+            },
         )
 
     @app.post(f"{app_settings.api_prefix}/auth/register")
@@ -1070,6 +1136,16 @@ def _require_current_user(request: Request, auth_service: AuthService):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=ErrorPayload(code="UNAUTHORIZED", message="login required").model_dump(),
+        )
+    return user
+
+
+def _require_admin_user(request: Request, auth_service: AuthService):
+    user = _require_current_user(request, auth_service)
+    if not auth_service.is_admin(user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=ErrorPayload(code="FORBIDDEN", message="admin access required").model_dump(),
         )
     return user
 

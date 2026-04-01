@@ -706,10 +706,59 @@ th {
   color: var(--warning);
 }
 
+.admin-chip {
+  background: rgba(204, 122, 0, 0.12);
+  color: var(--warning);
+}
+
+.admin-hero {
+  background:
+    linear-gradient(135deg, rgba(204, 122, 0, 0.12), rgba(255, 255, 255, 0.94)),
+    var(--surface);
+}
+
+.admin-kpi-row {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
+.admin-quick-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.distribution-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.distribution-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.role-editor {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.role-save-btn {
+  padding: 10px 14px;
+}
+
+.role-select {
+  min-width: 132px;
+}
+
 @media (max-width: 960px) {
   .auth-card,
   .kpi-row,
-  .quick-grid {
+  .quick-grid,
+  .admin-kpi-row,
+  .admin-quick-grid {
     grid-template-columns: 1fr;
   }
 }

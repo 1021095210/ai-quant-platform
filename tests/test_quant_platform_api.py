@@ -146,7 +146,7 @@ class QuantPlatformApiTests(unittest.TestCase):
     def test_protected_pages_redirect_to_login_when_unauthenticated(self) -> None:
         client = self._build_client()
 
-        for path in ["/workspace", "/strategy", "/indicators", "/rules", "/backtests", "/replay"]:
+        for path in ["/workspace", "/admin", "/strategy", "/indicators", "/rules", "/backtests", "/replay"]:
             response = client.get(path, follow_redirects=False)
             self.assertEqual(302, response.status_code)
             self.assertEqual(f"/login?next={path}", response.headers["location"])
@@ -165,6 +165,29 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertEqual("1111", me_response.json()["data"]["username"])
         self.assertEqual("user", me_response.json()["data"]["role"])
         self.assertTrue(me_response.json()["data"]["workspace_id"].startswith("ws_"))
+
+    def test_admin_page_requires_admin_role(self) -> None:
+        client = self._build_client()
+        self._login(client, username="1111", password="618618")
+
+        page_response = client.get("/admin", follow_redirects=False)
+        api_response = client.get("/api/v1/admin/summary")
+
+        self.assertEqual(302, page_response.status_code)
+        self.assertEqual("/workspace", page_response.headers["location"])
+        self.assertEqual(403, api_response.status_code)
+        self.assertEqual("FORBIDDEN", api_response.json()["error"]["code"])
+
+    def test_admin_console_page_is_accessible_for_admin(self) -> None:
+        client = self._build_client()
+        self._login(client, username="admin", password="618618")
+
+        response = client.get("/admin")
+
+        self.assertEqual(200, response.status_code)
+        self.assertIn("管理后台", response.text)
+        self.assertIn("用户管理", response.text)
+        self.assertIn("任务审计", response.text)
 
     def test_strategy_page_shows_multi_market_and_multi_timeframe_controls(self) -> None:
         client = self._build_client()
@@ -199,6 +222,102 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertEqual(200, me_response.status_code)
         self.assertEqual("admin", me_response.json()["data"]["username"])
         self.assertEqual("admin", me_response.json()["data"]["role"])
+
+    def test_admin_summary_exposes_platform_metrics_and_users(self) -> None:
+        client = self._build_client()
+        self._login(client, username="admin", password="618618")
+        client.post(
+            "/api/v1/auth/register",
+            json={
+                "username": "operator",
+                "contact": "operator@example.com",
+                "password": "618618",
+            },
+        )
+        client.post("/api/v1/auth/logout")
+        self._login(client, username="operator", password="618618")
+        version_id = client.post(
+            "/api/v1/strategies/projects",
+            json={
+                "title": "管理员汇总策略",
+                "natural_language_prompt": "均线上穿时买入",
+                "strategy_dsl": {"market": "600519.SH", "timeframe": "1d", "asset_type": "stock"},
+                "strategy_python": "def build_strategy():\n    return {}",
+            },
+        ).json()["data"]["version_id"]
+        client.post(
+            "/api/v1/backtests/runs",
+            json={
+                "strategy_version_id": version_id,
+                "dataset": {
+                    "market": "600519.SH",
+                    "timeframe": "1d",
+                    "asset_type": "stock",
+                    "from": "2024-01-01T00:00:00Z",
+                    "to": "2024-12-31T23:59:59Z",
+                },
+                "execution_contract": {
+                    "initial_capital": 100000,
+                    "fee_bps": 3,
+                    "slippage_bps": 2,
+                    "fill_price_rule": "next_bar_open",
+                    "intrabar_match_policy": "no_intrabar_fill",
+                    "calendar": "cn_a_share",
+                    "timezone": "Asia/Shanghai",
+                    "adjustment_mode": "qfq",
+                },
+                "data_snapshot": {"dataset_snapshot_ref": "admin_snapshot"},
+            },
+        )
+        client.post("/api/v1/auth/logout")
+        self._login(client, username="admin", password="618618")
+
+        summary = client.get("/api/v1/admin/summary")
+        users = client.get("/api/v1/admin/users")
+
+        self.assertEqual(200, summary.status_code)
+        self.assertEqual(200, users.status_code)
+        data = summary.json()["data"]
+        self.assertGreaterEqual(data["counts"]["users"], 3)
+        self.assertGreaterEqual(data["counts"]["admins"], 1)
+        self.assertGreaterEqual(data["counts"]["projects"], 1)
+        self.assertGreaterEqual(data["counts"]["backtests"], 1)
+        self.assertTrue(data["recent_tasks"])
+        self.assertTrue(any(item["label"] == "管理员" for item in data["role_distribution"]))
+        self.assertTrue(any(item["dataset_snapshot_ref"] == "admin_snapshot" for item in data["snapshot_states"]))
+        listed_users = users.json()["data"]["items"]
+        self.assertTrue(any(item["username"] == "operator" for item in listed_users))
+        self.assertTrue(any(item["role"] == "admin" for item in listed_users))
+
+    def test_admin_can_update_user_role_but_cannot_demote_self(self) -> None:
+        client = self._build_client()
+        self._login(client, username="admin", password="618618")
+        created = client.post(
+            "/api/v1/auth/register",
+            json={
+                "username": "reviewer",
+                "contact": "reviewer@example.com",
+                "password": "618618",
+            },
+        )
+        created_user_id = created.json()["data"]["user_id"]
+        client.post("/api/v1/auth/logout")
+        self._login(client, username="admin", password="618618")
+
+        promote = client.put(
+            f"/api/v1/admin/users/{created_user_id}/role",
+            json={"role": "admin"},
+        )
+        me = client.get("/api/v1/auth/me").json()["data"]
+        self_demote = client.put(
+            f"/api/v1/admin/users/{me['user_id']}/role",
+            json={"role": "user"},
+        )
+
+        self.assertEqual(200, promote.status_code)
+        self.assertEqual("admin", promote.json()["data"]["role"])
+        self.assertEqual(409, self_demote.status_code)
+        self.assertEqual("STATE_CONFLICT", self_demote.json()["error"]["code"])
 
     def test_register_logs_in_new_user_and_logout_clears_session(self) -> None:
         client = self._build_client()

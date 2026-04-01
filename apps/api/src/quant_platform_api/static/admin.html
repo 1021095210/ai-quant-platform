@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>量化研究平台 · 管理后台</title>
+    <link rel="stylesheet" href="/assets/theme.css" />
+  </head>
+  <body>
+    <div class="layout">
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand-mark">Q</div>
+          <div>
+            <h1>管理后台</h1>
+            <p>用户、任务、平台运行态与治理视图的统一管理台</p>
+          </div>
+        </div>
+        <nav class="nav">
+          <a class="nav-link" data-nav href="/">首页</a>
+          <a class="nav-link" data-nav href="/workspace">工作台</a>
+          <a class="nav-link" data-nav href="/admin">管理后台</a>
+          <a class="nav-link" data-nav href="/strategy">策略工坊</a>
+          <a class="nav-link" data-nav href="/backtests">回测中心</a>
+          <a class="nav-link" data-nav href="/replay">交易复盘</a>
+        </nav>
+      </header>
+
+      <div id="status-banner" class="status-banner">正在加载管理后台。</div>
+
+      <section class="hero admin-hero">
+        <div class="workspace-banner">
+          <div class="identity-chip admin-chip">Admin Console</div>
+          <div>
+            <p class="eyebrow">Operations</p>
+            <h2 id="admin-title">平台管理与运行观察</h2>
+            <p id="admin-subtitle">这里聚合用户、任务、数据快照与平台治理视图，用于支持管理员对平台进行持续运营和风险观察。</p>
+          </div>
+          <div class="actions">
+            <a class="btn secondary" href="/workspace">返回用户工作台</a>
+            <a class="btn primary" href="/backtests">查看任务流</a>
+            <button id="logout-btn" class="btn ghost" type="button">退出登录</button>
+          </div>
+        </div>
+        <div class="hero-panel">
+          <div class="card muted">
+            <span class="mini-label">当前管理员</span>
+            <strong id="admin-name" class="metric-value">加载中</strong>
+          </div>
+          <div class="card muted">
+            <span class="mini-label">平台建议</span>
+            <strong id="admin-headline" class="metric-value">加载中</strong>
+          </div>
+        </div>
+      </section>
+
+      <section class="kpi-row admin-kpi-row" style="margin-top: 22px">
+        <div class="card">
+          <span class="mini-label">用户总数</span>
+          <strong id="metric-users" class="metric-value">0</strong>
+        </div>
+        <div class="card">
+          <span class="mini-label">管理员</span>
+          <strong id="metric-admins" class="metric-value">0</strong>
+        </div>
+        <div class="card">
+          <span class="mini-label">活跃会话</span>
+          <strong id="metric-sessions" class="metric-value">0</strong>
+        </div>
+        <div class="card">
+          <span class="mini-label">策略版本</span>
+          <strong id="metric-projects" class="metric-value">0</strong>
+        </div>
+        <div class="card">
+          <span class="mini-label">回测任务</span>
+          <strong id="metric-backtests" class="metric-value">0</strong>
+        </div>
+        <div class="card">
+          <span class="mini-label">运行中任务</span>
+          <strong id="metric-running" class="metric-value">0</strong>
+        </div>
+      </section>
+
+      <section class="quick-grid admin-quick-grid" style="margin-top: 22px">
+        <div class="card quick-card">
+          <h3>用户管理</h3>
+          <p>查看账户角色、活跃度、项目沉淀，并进行管理员授权调整。</p>
+        </div>
+        <div class="card quick-card">
+          <h3>任务审计</h3>
+          <p>追踪最近的回测、优化、复盘任务状态，快速发现失败和积压。</p>
+        </div>
+        <div class="card quick-card">
+          <h3>平台数据</h3>
+          <p>从数据快照覆盖率、缺失率和时区/日历等维度看当前研究基线。</p>
+        </div>
+        <div class="card quick-card">
+          <h3>治理建议</h3>
+          <p>把用户规模、任务状态和数据风险收束成后台治理动作。</p>
+        </div>
+      </section>
+
+      <section class="grid two stretch" style="margin-top: 22px">
+        <section class="card equal-panel">
+          <div class="panel-header">
+            <h3>角色与任务分布</h3>
+          </div>
+          <div id="distribution-panels" class="grid three"></div>
+        </section>
+        <section class="card equal-panel">
+          <div class="panel-header">
+            <h3>平台治理建议</h3>
+          </div>
+          <div id="governance-notes" class="list empty-state">正在分析平台当前状态。</div>
+        </section>
+      </section>
+
+      <section class="card" style="margin-top: 22px">
+        <div class="panel-header">
+          <h3>用户管理</h3>
+          <span class="muted-note">管理员可在此查看所有账户、研究活跃度和角色，并执行最小角色管理操作。</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>用户</th>
+                <th>角色</th>
+                <th>研究活跃度</th>
+                <th>会话 / 失败任务</th>
+                <th>最近活动</th>
+                <th>角色管理</th>
+              </tr>
+            </thead>
+            <tbody id="admin-users-table">
+              <tr>
+                <td colspan="6" class="empty-state">正在加载用户列表。</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="grid two stretch" style="margin-top: 22px">
+        <section class="card equal-panel">
+          <div class="panel-header">
+            <h3>最近任务审计</h3>
+          </div>
+          <div id="recent-tasks" class="list empty-state">暂无任务记录。</div>
+        </section>
+        <section class="card equal-panel">
+          <div class="panel-header">
+            <h3>平台数据快照</h3>
+          </div>
+          <div id="admin-snapshots" class="list empty-state">暂无数据快照摘要。</div>
+        </section>
+      </section>
+    </div>
+
+    <script type="module" src="/assets/admin.js"></script>
+  </body>
+</html>

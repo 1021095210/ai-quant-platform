@@ -96,7 +96,11 @@ class DatasetSnapshotRepository(Protocol):
 class UserRepository(Protocol):
     def create(self, record: UserRecord) -> UserRecord: ...
 
+    def get(self, user_id: str) -> UserRecord | None: ...
+
     def get_by_username(self, username: str) -> UserRecord | None: ...
+
+    def update_role(self, user_id: str, role: str) -> UserRecord | None: ...
 
     def list(self) -> list[UserRecord]: ...
 
@@ -107,6 +111,8 @@ class UserSessionRepository(Protocol):
     def get_by_token(self, session_token: str) -> UserSessionRecord | None: ...
 
     def delete_by_token(self, session_token: str) -> None: ...
+
+    def list(self) -> list[UserSessionRecord]: ...
 
 
 class TradeUploadRepository(Protocol):
@@ -444,6 +450,37 @@ class SQLAlchemyUserRepository:
                 created_at=item.created_at,
             )
 
+    def get(self, user_id: str) -> UserRecord | None:
+        with self._session_factory() as session:
+            item = session.get(UserORM, user_id)
+            if item is None:
+                return None
+            return UserRecord(
+                user_id=item.user_id,
+                username=item.username,
+                contact=item.contact,
+                password_hash=item.password_hash,
+                role=item.role,
+                created_at=item.created_at,
+            )
+
+    def update_role(self, user_id: str, role: str) -> UserRecord | None:
+        with self._session_factory() as session:
+            item = session.get(UserORM, user_id)
+            if item is None:
+                return None
+            item.role = role
+            session.commit()
+            session.refresh(item)
+            return UserRecord(
+                user_id=item.user_id,
+                username=item.username,
+                contact=item.contact,
+                password_hash=item.password_hash,
+                role=item.role,
+                created_at=item.created_at,
+            )
+
     def list(self) -> list[UserRecord]:
         with self._session_factory() as session:
             items = session.scalars(select(UserORM).order_by(UserORM.created_at.asc())).all()
@@ -499,6 +536,21 @@ class SQLAlchemyUserSessionRepository:
             if item is not None:
                 session.delete(item)
                 session.commit()
+
+    def list(self) -> list[UserSessionRecord]:
+        with self._session_factory() as session:
+            items = session.scalars(
+                select(UserSessionORM).order_by(UserSessionORM.created_at.desc())
+            ).all()
+            return [
+                UserSessionRecord(
+                    session_id=item.session_id,
+                    user_id=item.user_id,
+                    session_token=item.session_token,
+                    created_at=item.created_at,
+                )
+                for item in items
+            ]
 
 
 class SQLAlchemyTaskRepository:

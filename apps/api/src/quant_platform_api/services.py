@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 import csv
-from datetime import datetime
+from datetime import datetime, timedelta
 import hashlib
 from io import StringIO
 import json
@@ -730,6 +730,10 @@ class AuthService:
         normalized = user_id.replace("user_", "")
         return f"ws_{normalized[:12] or 'default'}"
 
+    @staticmethod
+    def is_admin(user: UserProfile | None) -> bool:
+        return bool(user and user.role == "admin")
+
 
 class IndicatorService:
     def __init__(self, repository: CustomIndicatorRepository) -> None:
@@ -1093,6 +1097,292 @@ class WorkspaceService:
             if len(items) >= 4:
                 break
         return items
+
+
+class AdminService:
+    def __init__(
+        self,
+        *,
+        user_repository: UserRepository,
+        session_repository: UserSessionRepository,
+        strategy_repository: StrategyRepository,
+        task_repository: TaskRepository,
+    ) -> None:
+        self._user_repository = user_repository
+        self._session_repository = session_repository
+        self._strategy_repository = strategy_repository
+        self._task_repository = task_repository
+
+    def build_summary(self) -> dict[str, Any]:
+        users = self._user_repository.list()
+        sessions = self._session_repository.list()
+        projects = self._strategy_repository.list_projects()
+        tasks = self._task_repository.list()
+        now = datetime.now(tz=users[0].created_at.tzinfo) if users else datetime.now()
+        cutoff_7d = now - timedelta(days=7)
+
+        enriched_users = self._build_user_rows(users, sessions, projects, tasks)
+        backtests = [item for item in tasks if item.kind == "backtest"]
+        replays = [item for item in tasks if item.kind == "replay"]
+        failed_tasks = [
+            item for item in tasks if item.status in {TaskStatus.FAILED, TaskStatus.CANCELED}
+        ]
+        running_tasks = [item for item in tasks if item.status in {TaskStatus.QUEUED, TaskStatus.RUNNING}]
+        coverage_risk_snapshots = [
+            item for item in self._collect_snapshot_states(backtests)
+            if item["coverage_status"] != "ready"
+            or (item.get("missing_rate_pct") or 0) > 1
+        ]
+
+        return {
+            "counts": {
+                "users": len(users),
+                "admins": len([item for item in users if item.role == "admin"]),
+                "active_sessions": len(sessions),
+                "projects": len(projects),
+                "backtests": len(backtests),
+                "replays": len(replays),
+                "running_tasks": len(running_tasks),
+                "failed_tasks": len(failed_tasks),
+                "new_users_7d": len([item for item in users if item.created_at >= cutoff_7d]),
+            },
+            "role_distribution": self._build_distribution(
+                [item.role for item in users],
+                labels={
+                    "admin": "管理员",
+                    "user": "普通用户",
+                },
+            ),
+            "task_status_distribution": self._build_distribution(
+                [item.status.value for item in tasks],
+                labels={
+                    "pending": "待处理",
+                    "queued": "排队中",
+                    "running": "执行中",
+                    "succeeded": "已成功",
+                    "failed": "已失败",
+                    "canceling": "取消中",
+                    "canceled": "已取消",
+                },
+            ),
+            "task_kind_distribution": self._build_distribution(
+                [item.kind for item in tasks],
+                labels={
+                    "backtest": "回测",
+                    "optimization": "优化",
+                    "replay": "复盘",
+                },
+            ),
+            "recent_users": enriched_users[:8],
+            "recent_tasks": self._build_recent_tasks(tasks, enriched_users),
+            "snapshot_states": self._collect_snapshot_states(backtests),
+            "governance_notes": self._build_governance_notes(
+                users=len(users),
+                running_tasks=len(running_tasks),
+                failed_tasks=len(failed_tasks),
+                coverage_risk_count=len(coverage_risk_snapshots),
+            ),
+        }
+
+    def list_users(self) -> list[dict[str, Any]]:
+        users = self._user_repository.list()
+        sessions = self._session_repository.list()
+        projects = self._strategy_repository.list_projects()
+        tasks = self._task_repository.list()
+        return self._build_user_rows(users, sessions, projects, tasks)
+
+    def update_user_role(
+        self,
+        *,
+        current_user_id: str,
+        target_user_id: str,
+        role: str,
+    ) -> UserRecord:
+        normalized_role = role.strip().lower()
+        if normalized_role not in {"user", "admin"}:
+            raise TaskExecutionError("INVALID_ARGUMENT", "role must be user or admin")
+
+        target = self._user_repository.get(target_user_id)
+        if target is None:
+            raise TaskExecutionError("NOT_FOUND", "user not found")
+        if target.user_id == current_user_id and target.role == "admin" and normalized_role != "admin":
+            raise TaskExecutionError("STATE_CONFLICT", "cannot demote current admin session")
+        if target.role == "admin" and normalized_role != "admin":
+            admin_count = len([item for item in self._user_repository.list() if item.role == "admin"])
+            if admin_count <= 1:
+                raise TaskExecutionError("STATE_CONFLICT", "cannot demote the last admin")
+
+        updated = self._user_repository.update_role(target_user_id, normalized_role)
+        if updated is None:
+            raise TaskExecutionError("NOT_FOUND", "user not found")
+        return updated
+
+    def _build_user_rows(
+        self,
+        users: list[UserRecord],
+        sessions: list[UserSessionRecord],
+        projects: list[StrategyVersionRecord],
+        tasks: list[TaskRecord],
+    ) -> list[dict[str, Any]]:
+        session_count_by_user: dict[str, int] = {}
+        for item in sessions:
+            session_count_by_user[item.user_id] = session_count_by_user.get(item.user_id, 0) + 1
+
+        project_count_by_user: dict[str, int] = {}
+        latest_activity_by_user: dict[str, datetime] = {}
+        for item in projects:
+            project_count_by_user[item.user_id] = project_count_by_user.get(item.user_id, 0) + 1
+            latest_activity_by_user[item.user_id] = max(
+                latest_activity_by_user.get(item.user_id, item.created_at),
+                item.created_at,
+            )
+
+        task_summary_by_user: dict[str, dict[str, int]] = {}
+        for item in tasks:
+            latest_time = item.finished_at or item.started_at or item.created_at
+            latest_activity_by_user[item.user_id] = max(
+                latest_activity_by_user.get(item.user_id, latest_time),
+                latest_time,
+            )
+            summary = task_summary_by_user.setdefault(
+                item.user_id,
+                {
+                    "backtests": 0,
+                    "replays": 0,
+                    "optimizations": 0,
+                    "running_tasks": 0,
+                    "failed_tasks": 0,
+                },
+            )
+            if item.kind == "backtest":
+                summary["backtests"] += 1
+            elif item.kind == "replay":
+                summary["replays"] += 1
+            elif item.kind == "optimization":
+                summary["optimizations"] += 1
+            if item.status in {TaskStatus.QUEUED, TaskStatus.RUNNING}:
+                summary["running_tasks"] += 1
+            if item.status in {TaskStatus.FAILED, TaskStatus.CANCELED}:
+                summary["failed_tasks"] += 1
+
+        items = [
+            {
+                "user_id": item.user_id,
+                "workspace_id": AuthService.workspace_id_for_user_id(item.user_id),
+                "username": item.username,
+                "contact": item.contact,
+                "role": item.role,
+                "created_at": item.created_at.isoformat(),
+                "active_sessions": session_count_by_user.get(item.user_id, 0),
+                "project_count": project_count_by_user.get(item.user_id, 0),
+                "backtest_count": task_summary_by_user.get(item.user_id, {}).get("backtests", 0),
+                "replay_count": task_summary_by_user.get(item.user_id, {}).get("replays", 0),
+                "optimization_count": task_summary_by_user.get(item.user_id, {}).get("optimizations", 0),
+                "running_task_count": task_summary_by_user.get(item.user_id, {}).get("running_tasks", 0),
+                "failed_task_count": task_summary_by_user.get(item.user_id, {}).get("failed_tasks", 0),
+                "last_activity_at": latest_activity_by_user.get(item.user_id, item.created_at).isoformat(),
+            }
+            for item in users
+        ]
+        items.sort(key=lambda item: item["last_activity_at"], reverse=True)
+        return items
+
+    def _build_recent_tasks(
+        self,
+        tasks: list[TaskRecord],
+        users: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        usernames = {item["user_id"]: item["username"] for item in users}
+        return [
+            {
+                "task_id": item.id,
+                "kind": item.kind,
+                "status": item.status.value,
+                "created_at": item.created_at.isoformat(),
+                "workspace_id": item.workspace_id,
+                "user_id": item.user_id,
+                "username": usernames.get(item.user_id, item.user_id),
+                "config_revision": item.config_revision,
+                "dataset_snapshot_ref": item.result.get("dataset_snapshot_ref")
+                or item.payload.get("data_snapshot", {}).get("dataset_snapshot_ref"),
+                "title": item.result.get("strategy_title")
+                or item.result.get("summary")
+                or item.payload.get("strategy_version_id")
+                or item.payload.get("upload_id")
+                or item.kind,
+            }
+            for item in tasks[:10]
+        ]
+
+    def _collect_snapshot_states(self, backtests: list[TaskRecord]) -> list[dict[str, Any]]:
+        seen: set[str] = set()
+        items: list[dict[str, Any]] = []
+        for record in backtests:
+            summary = record.result.get("data_snapshot_summary", {})
+            snapshot_ref = summary.get("dataset_snapshot_ref") or record.payload.get(
+                "data_snapshot",
+                {},
+            ).get("dataset_snapshot_ref")
+            if not snapshot_ref or snapshot_ref in seen:
+                continue
+            seen.add(snapshot_ref)
+            items.append(
+                {
+                    "dataset_snapshot_ref": snapshot_ref,
+                    "provider": summary.get("provider", "未知"),
+                    "coverage_status": summary.get("coverage_status", "unknown"),
+                    "coverage_pct": summary.get("coverage_pct"),
+                    "missing_rate_pct": summary.get("missing_rate_pct"),
+                    "calendar": summary.get("calendar"),
+                    "timezone": summary.get("timezone"),
+                    "warmup_bars": summary.get("warmup_bars"),
+                    "last_synced_at": summary.get("last_synced_at"),
+                    "market": summary.get("market"),
+                    "timeframe": summary.get("timeframe"),
+                }
+            )
+            if len(items) >= 8:
+                break
+        return items
+
+    def _build_distribution(
+        self,
+        items: list[str],
+        *,
+        labels: dict[str, str] | None = None,
+    ) -> list[dict[str, Any]]:
+        counts: dict[str, int] = {}
+        for item in items:
+            counts[item] = counts.get(item, 0) + 1
+        return [
+            {
+                "key": key,
+                "label": labels.get(key, key) if labels else key,
+                "count": value,
+            }
+            for key, value in sorted(counts.items(), key=lambda pair: (-pair[1], pair[0]))
+        ]
+
+    def _build_governance_notes(
+        self,
+        *,
+        users: int,
+        running_tasks: int,
+        failed_tasks: int,
+        coverage_risk_count: int,
+    ) -> list[str]:
+        notes: list[str] = []
+        if users <= 2:
+            notes.append("当前平台仍是低用户规模验证期，建议优先稳住数据可信度和实验对比链路。")
+        if running_tasks:
+            notes.append("平台当前有运行中任务，建议关注长任务积压和未来的独立 worker 演进。")
+        if failed_tasks:
+            notes.append("存在失败或取消任务，管理员应优先检查配置冲突、数据快照引用和环境状态。")
+        if coverage_risk_count:
+            notes.append("部分数据快照存在覆盖风险或缺失率偏高，回测结果在管理视图中需要继续暴露。")
+        if not notes:
+            notes.append("平台运行状态平稳，下一步更适合推进实验对比、审计视图和管理员操作日志。")
+        return notes
 
 
 class AsyncTaskService:

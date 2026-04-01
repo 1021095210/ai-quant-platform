@@ -19,6 +19,7 @@
         <nav class="nav">
           <a class="nav-link" data-nav href="/">首页</a>
           <a class="nav-link" data-nav href="/workspace">工作台</a>
+          <a id="admin-nav-link" class="nav-link" data-nav href="/admin" hidden>管理后台</a>
           <a class="nav-link" data-nav href="/strategy">策略工坊</a>
           <a class="nav-link" data-nav href="/indicators">指标设置</a>
           <a class="nav-link" data-nav href="/rules">规则模块</a>
@@ -40,6 +41,7 @@
           <div class="actions">
             <a class="btn primary" href="/strategy">继续策略研究</a>
             <a class="btn secondary" href="/backtests">进入回测中心</a>
+            <a id="admin-entry-btn" class="btn secondary" href="/admin" hidden>进入管理后台</a>
             <button id="logout-btn" class="btn ghost" type="button">退出登录</button>
           </div>
         </div>
@@ -90,6 +92,10 @@
         <a class="card quick-card" href="/replay">
           <h3>交易复盘</h3>
           <p>上传交割单，识别模式并把建议回灌到策略研究。</p>
+        </a>
+        <a id="admin-quick-card" class="card quick-card" href="/admin" hidden>
+          <h3>管理员后台</h3>
+          <p>查看用户、任务、平台数据与运行态，执行角色管理与运营审视。</p>
         </a>
       </section>
 
@@ -154,6 +160,10 @@
             <div class="list-item">
               <strong>建议下一步</strong>
               <div id="workspace-next-step" class="muted-note">正在分析你的最近研究轨迹。</div>
+            </div>
+            <div id="admin-context-item" class="list-item" hidden>
+              <strong>管理员视角</strong>
+              <div class="muted-note">你同时拥有平台管理权限，可在后台查看用户与平台运行态。</div>
             </div>
           </div>
         </section>

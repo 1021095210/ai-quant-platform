@@ -127,6 +127,15 @@ function chooseNextStep(summary) {
   return "当前研究链路比较完整，建议对同一策略做多组回测配置对比，再进入下一轮迭代。";
 }
 
+function revealAdminEntry() {
+  document.querySelector("#admin-nav-link").hidden = false;
+  document.querySelector("#admin-entry-btn").hidden = false;
+  document.querySelector("#admin-quick-card").hidden = false;
+  document.querySelector("#admin-context-item").hidden = false;
+  document.querySelector("#workspace-subtitle").textContent =
+    "这里集中查看个人研究进展；你同时拥有管理员入口，可进一步查看平台用户、任务与运行态。";
+}
+
 async function loadWorkspace() {
   const user = await fetchCurrentUser();
   if (!user) {
@@ -143,6 +152,9 @@ async function loadWorkspace() {
   document
     .querySelector("#user-role-badge")
     .classList.toggle("admin", user.role === "admin");
+  if (user.role === "admin") {
+    revealAdminEntry();
+  }
 
   const summary = (await api("/api/v1/workspace/summary")).data;
   renderProjects(summary.recent_projects || []);

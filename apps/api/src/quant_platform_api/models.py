@@ -174,6 +174,10 @@ class UserLoginRequest(BaseModel):
     password: str
 
 
+class AdminUserRoleUpdateRequest(BaseModel):
+    role: str
+
+
 class UserProfile(BaseModel):
     user_id: str
     workspace_id: str
