@@ -33,7 +33,7 @@
         <div>
           <p class="eyebrow">Python Strategy Generator</p>
           <h2>把主观交易想法翻译成更接近真实量化平台的 Python 策略骨架。</h2>
-          <p>这里默认面向中国股票 / ETF 日线场景，策略主展示为 Python，系统内部同时保留结构化规则规格用于回测。</p>
+          <p>策略工坊现在支持 A股、美股、加密货币、伦敦金等市场语义，也支持把日线和分钟线混合写进同一套规则。当前回测兼容层仍按主回测周期执行，其余周期会先作为上下文沉淀在 DSL 中。</p>
         </div>
         <div class="hero-panel">
           <div class="card muted">
@@ -55,31 +55,75 @@
           <div class="form-grid">
             <label class="field">
               <span>策略描述</span>
-              <textarea id="strategy-prompt">当 5 日均线上穿 20 日均线，且成交量大于过去 10 日均量的 1.2 倍时买入；止盈 8%，止损 3%。</textarea>
+              <textarea id="strategy-prompt">昨日最低价小于10日均线，昨日收盘价大于10日均线，今日15分钟KDJ金叉时买入；当现价低于15分钟60均线时卖出。</textarea>
             </label>
             <div class="form-grid two">
               <label class="field">
-                <span>标的代码</span>
+                <span>市场范围</span>
+                <select id="strategy-market-scope">
+                  <option value="cn_equity">A股</option>
+                  <option value="us_equity">美股</option>
+                  <option value="crypto">加密货币</option>
+                  <option value="london_gold">伦敦金</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>研究标的 / 代码</span>
                 <input id="strategy-market" value="600519.SH" />
               </label>
+            </div>
+            <div class="form-grid two">
               <label class="field">
                 <span>资产类型</span>
                 <select id="strategy-asset-type">
                   <option value="stock">股票</option>
                   <option value="etf">ETF</option>
+                  <option value="crypto">数字资产</option>
+                  <option value="commodity">商品</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>主执行周期</span>
+                <select id="strategy-timeframe">
+                  <option value="1m">1分钟</option>
+                  <option value="5m">5分钟</option>
+                  <option value="15m" selected>15分钟</option>
+                  <option value="30m">30分钟</option>
+                  <option value="1h">1小时</option>
+                  <option value="4h">4小时</option>
+                  <option value="1d">日线</option>
+                  <option value="1w">周线</option>
+                  <option value="1mo">月线</option>
                 </select>
               </label>
             </div>
+            <label class="field">
+              <span>混合周期观察层</span>
+              <div class="selection-card">
+                <div class="choice-pill-grid">
+                  <label class="choice-pill"><input type="checkbox" name="strategy-timeframes" value="1m" />1分钟</label>
+                  <label class="choice-pill"><input type="checkbox" name="strategy-timeframes" value="5m" />5分钟</label>
+                  <label class="choice-pill"><input type="checkbox" name="strategy-timeframes" value="15m" checked />15分钟</label>
+                  <label class="choice-pill"><input type="checkbox" name="strategy-timeframes" value="30m" />30分钟</label>
+                  <label class="choice-pill"><input type="checkbox" name="strategy-timeframes" value="1h" />1小时</label>
+                  <label class="choice-pill"><input type="checkbox" name="strategy-timeframes" value="4h" />4小时</label>
+                  <label class="choice-pill"><input type="checkbox" name="strategy-timeframes" value="1d" checked />日线</label>
+                  <label class="choice-pill"><input type="checkbox" name="strategy-timeframes" value="1w" />周线</label>
+                  <label class="choice-pill"><input type="checkbox" name="strategy-timeframes" value="1mo" />月线</label>
+                </div>
+                <div class="muted-note">可同时勾选多个周期。例如把“昨日条件”留在日线，把“KDJ 金叉买入”放到 15 分钟层。</div>
+              </div>
+            </label>
             <div class="form-grid two">
               <label class="field">
-                <span>周期</span>
-                <select id="strategy-timeframe">
-                  <option value="1d">日线</option>
-                </select>
+                <span>项目标题</span>
+                <input id="project-title" value="多周期趋势确认策略" />
               </label>
               <label class="field">
-                <span>项目标题</span>
-                <input id="project-title" value="白酒龙头趋势策略" />
+                <span>策略语义提示</span>
+                <div class="selection-card">
+                  <div class="muted-note">主周期规则会进入 `entry / exit`，其他周期条件会进入 `entry_context / exit_context`，这样后续接入更真实的多周期执行引擎时可以直接复用。</div>
+                </div>
               </label>
             </div>
             <label class="toggle">

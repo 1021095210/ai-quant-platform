@@ -17,9 +17,11 @@ const state = {
 
 const nodes = {
   prompt: document.querySelector("#strategy-prompt"),
+  marketScope: document.querySelector("#strategy-market-scope"),
   market: document.querySelector("#strategy-market"),
   assetType: document.querySelector("#strategy-asset-type"),
   timeframe: document.querySelector("#strategy-timeframe"),
+  timeframeOptions: document.querySelectorAll('input[name="strategy-timeframes"]'),
   title: document.querySelector("#project-title"),
   teachingMode: document.querySelector("#teaching-mode-toggle"),
   summary: document.querySelector("#strategy-summary"),
@@ -32,14 +34,50 @@ const nodes = {
   glossaryPreview: document.querySelector("#glossary-preview"),
 };
 
+const MARKET_PRESETS = {
+  cn_equity: { symbol: "600519.SH", assetType: "stock" },
+  us_equity: { symbol: "AAPL", assetType: "stock" },
+  crypto: { symbol: "BTCUSDT", assetType: "crypto" },
+  london_gold: { symbol: "XAUUSD", assetType: "commodity" },
+};
+
+function getSelectedTimeframes() {
+  const selected = Array.from(nodes.timeframeOptions)
+    .filter((item) => item.checked)
+    .map((item) => item.value);
+  if (!selected.includes(nodes.timeframe.value)) {
+    selected.unshift(nodes.timeframe.value);
+  }
+  return [...new Set(selected)];
+}
+
+function syncTimeframeSelection() {
+  const primary = nodes.timeframe.value;
+  const matching = Array.from(nodes.timeframeOptions).find((item) => item.value === primary);
+  if (matching) {
+    matching.checked = true;
+  }
+}
+
+function applyMarketPreset() {
+  const preset = MARKET_PRESETS[nodes.marketScope.value];
+  if (!preset) {
+    return;
+  }
+  nodes.market.value = preset.symbol;
+  nodes.assetType.value = preset.assetType;
+}
+
 async function generateStrategy() {
   setStatus("正在生成 Python 策略...");
   const payload = await api("/api/v1/strategies/generate", {
     method: "POST",
     body: JSON.stringify({
       prompt: nodes.prompt.value,
+      market_scope: nodes.marketScope.value,
       market: nodes.market.value,
       timeframe: nodes.timeframe.value,
+      timeframes: getSelectedTimeframes(),
       asset_type: nodes.assetType.value,
       preferences: { side: "long" },
       teaching_mode: nodes.teachingMode.checked,
@@ -133,6 +171,9 @@ document
 document
   .querySelector("#save-project-btn")
   .addEventListener("click", handle(saveProject));
+nodes.timeframe.addEventListener("change", syncTimeframeSelection);
+nodes.marketScope.addEventListener("change", applyMarketPreset);
 
 restoreSelection();
+syncTimeframeSelection();
 loadKnowledgePreview().catch((error) => setStatus(error.message));

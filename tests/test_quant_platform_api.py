@@ -158,6 +158,18 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertEqual("user", me_response.json()["data"]["role"])
         self.assertTrue(me_response.json()["data"]["workspace_id"].startswith("ws_"))
 
+    def test_strategy_page_shows_multi_market_and_multi_timeframe_controls(self) -> None:
+        client = self._build_client()
+        self._login(client)
+
+        response = client.get("/strategy")
+
+        self.assertEqual(200, response.status_code)
+        self.assertIn("市场范围", response.text)
+        self.assertIn("混合周期观察层", response.text)
+        self.assertIn("加密货币", response.text)
+        self.assertIn("伦敦金", response.text)
+
     def test_admin_can_login_and_access_workspace(self) -> None:
         client = self._build_client()
 
@@ -222,8 +234,42 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertIn("strategy_dsl", payload)
         self.assertEqual("600519.SH", payload["strategy_dsl"]["market"])
         self.assertEqual("1d", payload["strategy_dsl"]["timeframe"])
+        self.assertEqual("cn_equity", payload["strategy_dsl"]["market_scope"])
+        self.assertEqual(["1d"], payload["strategy_dsl"]["timeframes"])
         self.assertTrue(payload["strategy_dsl"]["entry"]["all"])
         self.assertIn("def build_strategy()", payload["strategy_python"])
+
+    def test_generate_strategy_supports_multi_market_and_mixed_timeframes(self) -> None:
+        client = self._build_client()
+
+        response = client.post(
+            "/api/v1/strategies/generate",
+            json={
+                "prompt": "昨日最低价小于10日均线，昨日收盘价大于10日均线，今日15分钟KDJ金叉时买入；当现价低于15分钟60均线时卖出。",
+                "market_scope": "us_equity",
+                "market": "AAPL",
+                "timeframe": "15m",
+                "timeframes": ["15m", "1d", "1w"],
+                "asset_type": "stock",
+                "preferences": {"side": "long"},
+            },
+        )
+
+        self.assertEqual(200, response.status_code)
+        payload = response.json()["data"]
+        strategy_dsl = payload["strategy_dsl"]
+        self.assertEqual("us_equity", strategy_dsl["market_scope"])
+        self.assertEqual("AAPL", strategy_dsl["market"])
+        self.assertEqual("15m", strategy_dsl["timeframe"])
+        self.assertEqual(["15m", "1d", "1w"], strategy_dsl["timeframes"])
+        self.assertEqual("multi_timeframe", strategy_dsl["analysis_mode"])
+        self.assertEqual("1d", strategy_dsl["backtest_timeframe"])
+        self.assertTrue(any(item["expression"] == "昨日最低价小于10日均线" for item in strategy_dsl["entry_context"]))
+        self.assertTrue(any(item["expression"] == "昨日收盘价大于10日均线" for item in strategy_dsl["entry_context"]))
+        self.assertTrue(any("KDJ金叉" in item["expression"] for item in strategy_dsl["entry_context"]))
+        self.assertTrue(any("60均线" in item["expression"] for item in strategy_dsl["exit_context"]))
+        self.assertIn("混合周期条件", payload["human_summary"])
+        self.assertTrue(any("混合周期策略" in item for item in payload["ambiguities"]))
 
     def test_generate_strategy_teaching_mode_adds_comments_and_understands_terms(self) -> None:
         client = self._build_client()

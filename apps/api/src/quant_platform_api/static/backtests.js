@@ -35,7 +35,7 @@ async function loadProjects() {
     ? items
         .map(
           (item) =>
-            `<option value="${item.version_id}" data-market="${item.strategy_dsl.market}" data-asset="${item.strategy_dsl.asset_type || "stock"}">${item.title} · ${item.version_id}</option>`,
+            `<option value="${item.version_id}" data-market="${item.strategy_dsl.market}" data-asset="${item.strategy_dsl.asset_type || "stock"}" data-timeframe="${item.strategy_dsl.timeframe || "1d"}" data-backtest-timeframe="${item.strategy_dsl.backtest_timeframe || "1d"}" data-analysis-mode="${item.strategy_dsl.analysis_mode || "single_timeframe"}" data-timeframes="${(item.strategy_dsl.timeframes || []).join(",")}">${item.title} · ${(item.strategy_dsl.timeframes || [item.strategy_dsl.timeframe || "1d"]).join("/")} · ${item.version_id}</option>`,
         )
         .join("")
     : '<option value="">请先去策略工坊保存策略</option>';
@@ -55,6 +55,12 @@ function applySelectedProjectDefaults() {
   nodes.selectedVersion.textContent = option.value || "未选择";
   nodes.market.value = option.dataset.market || nodes.market.value;
   nodes.assetType.value = option.dataset.asset || "stock";
+  if (option.dataset.analysisMode === "multi_timeframe") {
+    const executionTimeframe = option.dataset.backtestTimeframe || "1d";
+    setStatus(
+      `已加载混合周期策略，当前回测兼容层仍按 ${executionTimeframe} 执行，其他周期条件保留在策略规格中。`,
+    );
+  }
 }
 
 async function runBacktest() {
@@ -68,7 +74,8 @@ async function runBacktest() {
       strategy_version_id: nodes.projectSelect.value,
       dataset: {
         market: nodes.market.value,
-        timeframe: "1d",
+        timeframe:
+          nodes.projectSelect.selectedOptions[0]?.dataset.backtestTimeframe || "1d",
         asset_type: nodes.assetType.value,
         from: `${nodes.from.value}T00:00:00Z`,
         to: `${nodes.to.value}T00:00:00Z`,
@@ -84,7 +91,7 @@ async function runBacktest() {
         adjustment_mode: "qfq",
       },
       data_snapshot: {
-        dataset_snapshot_ref: `${nodes.market.value}_${nodes.from.value}_${nodes.to.value}`,
+        dataset_snapshot_ref: `${nodes.market.value}_${nodes.projectSelect.selectedOptions[0]?.dataset.backtestTimeframe || "1d"}_${nodes.from.value}_${nodes.to.value}`,
       },
     }),
   });

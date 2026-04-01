@@ -115,7 +115,9 @@ class ProjectCreateRequest(BaseModel):
 class StrategyGenerateRequest(BaseModel):
     prompt: str
     market: str
+    market_scope: str = "cn_equity"
     timeframe: str
+    timeframes: list[str] = Field(default_factory=list)
     asset_type: str = "stock"
     preferences: dict[str, Any] = Field(default_factory=dict)
     teaching_mode: bool = False

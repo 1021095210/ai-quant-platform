@@ -6,6 +6,7 @@ from datetime import datetime
 import hashlib
 from io import StringIO
 import json
+import re
 from time import sleep
 from typing import Any, Callable
 
@@ -135,6 +136,192 @@ DEFAULT_GLOSSARY_TERMS: list[dict[str, Any]] = [
     },
 ]
 
+MARKET_SCOPE_LABELS: dict[str, str] = {
+    "cn_equity": "A股",
+    "us_equity": "美股",
+    "crypto": "加密货币",
+    "london_gold": "伦敦金",
+}
+
+TIMEFRAME_LABELS: dict[str, str] = {
+    "1m": "1分钟",
+    "5m": "5分钟",
+    "15m": "15分钟",
+    "30m": "30分钟",
+    "1h": "1小时",
+    "4h": "4小时",
+    "1d": "日线",
+    "1w": "周线",
+    "1mo": "月线",
+}
+
+TIMEFRAME_ORDER: dict[str, int] = {
+    key: index for index, key in enumerate(TIMEFRAME_LABELS.keys(), start=1)
+}
+
+TIMEFRAME_ALIASES: dict[str, str] = {
+    "1m": "1m",
+    "1min": "1m",
+    "1分钟": "1m",
+    "5m": "5m",
+    "5min": "5m",
+    "5分钟": "5m",
+    "15m": "15m",
+    "15min": "15m",
+    "15分钟": "15m",
+    "30m": "30m",
+    "30min": "30m",
+    "30分钟": "30m",
+    "1h": "1h",
+    "60m": "1h",
+    "1hour": "1h",
+    "1小时": "1h",
+    "4h": "4h",
+    "4hour": "4h",
+    "4小时": "4h",
+    "1d": "1d",
+    "day": "1d",
+    "daily": "1d",
+    "日线": "1d",
+    "1w": "1w",
+    "week": "1w",
+    "weekly": "1w",
+    "周线": "1w",
+    "1mo": "1mo",
+    "month": "1mo",
+    "monthly": "1mo",
+    "月线": "1mo",
+}
+
+PROMPT_TIMEFRAME_MARKERS: tuple[tuple[str, str], ...] = (
+    ("日线", "1d"),
+    ("daily", "1d"),
+    ("昨日", "1d"),
+    ("周线", "1w"),
+    ("weekly", "1w"),
+    ("月线", "1mo"),
+    ("monthly", "1mo"),
+)
+
+
+def _canonicalize_timeframe(value: str) -> str:
+    normalized = value.strip().lower().replace(" ", "")
+    return TIMEFRAME_ALIASES.get(normalized, normalized or "1d")
+
+
+def _timeframe_label(value: str) -> str:
+    canonical = _canonicalize_timeframe(value)
+    return TIMEFRAME_LABELS.get(canonical, canonical)
+
+
+def _market_scope_label(value: str) -> str:
+    return MARKET_SCOPE_LABELS.get(value, value)
+
+
+def _extract_prompt_timeframes(prompt: str) -> list[str]:
+    normalized = prompt.lower()
+    detected: list[str] = []
+    regex_markers: tuple[tuple[str, str], ...] = (
+        (r"(?<!\d)15\s*(分钟|min)", "15m"),
+        (r"(?<!\d)5\s*(分钟|min)", "5m"),
+        (r"(?<!\d)1\s*(分钟|min)", "1m"),
+        (r"(?<!\d)30\s*(分钟|min)", "30m"),
+        (r"(?<!\d)1\s*(小时|hour|h)", "1h"),
+        (r"60分钟", "1h"),
+        (r"(?<!\d)4\s*(小时|hour|h)", "4h"),
+    )
+    for pattern, timeframe in regex_markers:
+        if re.search(pattern, prompt, flags=re.IGNORECASE):
+            if timeframe not in detected:
+                detected.append(timeframe)
+    for marker, timeframe in PROMPT_TIMEFRAME_MARKERS:
+        if marker in prompt or marker in normalized:
+            if timeframe not in detected:
+                detected.append(timeframe)
+    return detected
+
+
+def _normalize_strategy_timeframes(
+    primary_timeframe: str,
+    requested_timeframes: list[str],
+    prompt: str,
+) -> list[str]:
+    primary = _canonicalize_timeframe(primary_timeframe or "1d")
+    merged = [primary]
+    for timeframe in requested_timeframes + _extract_prompt_timeframes(prompt):
+        canonical = _canonicalize_timeframe(timeframe)
+        if canonical not in merged:
+            merged.append(canonical)
+    ordered_rest = sorted(
+        [item for item in merged if item != primary],
+        key=lambda item: TIMEFRAME_ORDER.get(item, 999),
+    )
+    return [primary, *ordered_rest]
+
+
+def _build_context_rules(prompt: str, selected_timeframes: list[str]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    normalized = prompt.lower()
+    entry_context: list[dict[str, Any]] = []
+    exit_context: list[dict[str, Any]] = []
+    intraday_timeframe = next(
+        (item for item in selected_timeframes if item in {"1m", "5m", "15m", "30m", "1h", "4h"}),
+        selected_timeframes[0],
+    )
+
+    if ("昨日最低价" in prompt or "昨日低点" in prompt) and "10日均线" in prompt:
+        entry_context.append(
+            {
+                "timeframe": "1d",
+                "expression": "昨日最低价小于10日均线",
+                "indicator": "previous_low_vs_sma10",
+                "operator": "<",
+                "value": "sma_10",
+            }
+        )
+    if ("昨日收盘价" in prompt or "昨收" in prompt) and "10日均线" in prompt:
+        entry_context.append(
+            {
+                "timeframe": "1d",
+                "expression": "昨日收盘价大于10日均线",
+                "indicator": "previous_close_vs_sma10",
+                "operator": ">",
+                "value": "sma_10",
+            }
+        )
+    if "kdj" in normalized and ("金叉" in prompt or "golden cross" in normalized):
+        entry_context.append(
+            {
+                "timeframe": intraday_timeframe,
+                "expression": f"{_timeframe_label(intraday_timeframe)}KDJ金叉",
+                "indicator": "kdj_golden_cross",
+                "operator": "==",
+                "value": True,
+            }
+        )
+    if ("60均线" in prompt or "60 日均线" in prompt or "ma60" in normalized) and ("卖" in prompt or "exit" in normalized):
+        exit_context.append(
+            {
+                "timeframe": intraday_timeframe,
+                "expression": f"现价低于{_timeframe_label(intraday_timeframe)}60均线",
+                "indicator": "price_below_ma60",
+                "operator": "==",
+                "value": True,
+            }
+        )
+
+    if len(selected_timeframes) > 1 and not entry_context:
+        entry_context.append(
+            {
+                "timeframe": selected_timeframes[1],
+                "expression": f"补充观察 {_timeframe_label(selected_timeframes[1])} 级别确认",
+                "indicator": "secondary_timeframe_context",
+                "operator": "==",
+                "value": True,
+            }
+        )
+
+    return entry_context, exit_context
+
 
 class TaskExecutionError(RuntimeError):
     def __init__(self, code: str, message: str) -> None:
@@ -199,6 +386,14 @@ class StrategyService:
         prompt = request.prompt
         normalized = prompt.lower()
         side = "long"
+        primary_timeframe = _canonicalize_timeframe(request.timeframe)
+        selected_timeframes = _normalize_strategy_timeframes(
+            primary_timeframe,
+            request.timeframes,
+            prompt,
+        )
+        market_scope_label = _market_scope_label(request.market_scope)
+        entry_context, exit_context = _build_context_rules(prompt, selected_timeframes)
         indicators: list[dict[str, Any]] = []
         ambiguities: list[str] = []
         custom_indicators = (
@@ -237,6 +432,7 @@ class StrategyService:
                     "params": {"fast": 5, "slow": 20},
                     "operator": "==",
                     "value": True,
+                    "timeframe": primary_timeframe,
                 }
             )
         if "rsi" in normalized:
@@ -246,6 +442,7 @@ class StrategyService:
                     "params": {"period": 14},
                     "operator": "<",
                     "value": 70,
+                    "timeframe": primary_timeframe,
                 }
             )
         if "量" in prompt or "volume" in normalized:
@@ -255,6 +452,7 @@ class StrategyService:
                     "params": {"period": 10},
                     "operator": ">",
                     "value": 1.2,
+                    "timeframe": primary_timeframe,
                 }
             )
         if not indicators:
@@ -264,6 +462,7 @@ class StrategyService:
                     "params": {"lookback": 20},
                     "operator": "==",
                     "value": True,
+                    "timeframe": primary_timeframe,
                 }
             )
 
@@ -274,25 +473,48 @@ class StrategyService:
                     "params": {"source": "custom_library"},
                     "operator": "==",
                     "value": True,
+                    "timeframe": primary_timeframe,
                 }
+            )
+
+        if len(selected_timeframes) > 1:
+            ambiguities.append(
+                "已识别为混合周期策略，额外周期条件已写入 DSL 的 entry_context / exit_context。"
+            )
+        if request.market_scope != "cn_equity":
+            ambiguities.append(
+                "所选市场范围已写入策略规格；当前真实回测仍优先覆盖 A 股日线，其他市场先保留在策略语义层。"
+            )
+        if primary_timeframe != "1d" or len(selected_timeframes) > 1:
+            ambiguities.append(
+                "当前回测引擎仍按日线兼容层执行，可执行规则保留在主周期，跨周期条件已作为上下文存档。"
             )
 
         strategy_dsl = {
             "asset_type": request.asset_type,
+            "market_scope": request.market_scope,
+            "market_scope_label": market_scope_label,
             "market": request.market,
-            "timeframe": request.timeframe,
+            "timeframe": primary_timeframe,
+            "timeframes": selected_timeframes,
+            "analysis_mode": "multi_timeframe" if len(selected_timeframes) > 1 else "single_timeframe",
+            "backtest_timeframe": "1d",
+            "entry_context": entry_context,
             "entry": {"all": indicators},
+            "exit_context": exit_context,
             "exit": {
                 "any": [
                     {
                         "indicator": "take_profit_pct",
                         "operator": ">=",
                         "value": 0.08,
+                        "timeframe": primary_timeframe,
                     },
                     {
                         "indicator": "stop_loss_pct",
                         "operator": "<=",
                         "value": -0.03,
+                        "timeframe": primary_timeframe,
                     },
                 ]
             },
@@ -305,8 +527,14 @@ class StrategyService:
             matched_terms=matched_terms,
         )
         summary_parts = [
-            f"已根据描述生成一套 {request.market} {request.timeframe} 的 {side} 向 Python 策略。"
+            f"已根据描述生成一套面向 {market_scope_label} {request.market} 的 {side} 向 Python 策略，主周期为 {_timeframe_label(primary_timeframe)}。"
         ]
+        if len(selected_timeframes) > 1:
+            summary_parts.append(
+                "已保留混合周期条件："
+                + " / ".join(_timeframe_label(item) for item in selected_timeframes)
+                + "。"
+            )
         if request.teaching_mode:
             summary_parts.append("教学模式已开启，Python 代码中为主要语句补充了逐行注释。")
         if matched_custom_indicators:
@@ -321,6 +549,8 @@ class StrategyService:
                 + "、".join(item.term for item in matched_terms)
                 + "。"
             )
+        if entry_context or exit_context:
+            summary_parts.append("跨周期观察条件已经显式写入策略规格，便于后续接入更真实的多周期执行引擎。")
         return {
             "strategy_dsl": strategy_dsl,
             "strategy_python": strategy_python,
@@ -966,14 +1196,26 @@ def _render_strategy_python(
 ) -> str:
     matched_custom_indicators = matched_custom_indicators or []
     matched_terms = matched_terms or []
+    timeframes = strategy_spec.get("timeframes") or [strategy_spec["timeframe"]]
     lines: list[tuple[str, str | None]] = [
         ("from dataclasses import dataclass", "导入 dataclass，方便把策略基础配置写成清晰的数据结构。"),
         ("", None),
         ("", None),
         ("@dataclass", "把下面这个类声明成 dataclass，省去手写初始化函数。"),
         ("class StrategyConfig:", "集中保存市场、周期、资产类型这些基础配置。"),
+        (
+            f"    market_scope: str = '{strategy_spec.get('market_scope', 'cn_equity')}'",
+            "记录市场范围，方便后续切换到 A股、美股、加密或伦敦金语义。",
+        ),
         (f"    market: str = '{strategy_spec['market']}'", "设置默认研究标的代码。"),
-        (f"    timeframe: str = '{strategy_spec['timeframe']}'", "设置默认周期，这里默认日线。"),
+        (
+            f"    timeframe: str = '{strategy_spec['timeframe']}'",
+            "设置主执行周期，当前回测兼容层会优先参考它。",
+        ),
+        (
+            f"    timeframes: tuple[str, ...] = {tuple(timeframes)!r}",
+            "保留策略涉及的全部周期，混合周期策略会在这里显式列出。",
+        ),
         (f"    asset_type: str = '{strategy_spec.get('asset_type', 'stock')}'", "设置资产类型，决定市场语义和执行约束。"),
     ]
     if matched_custom_indicators:
@@ -998,13 +1240,59 @@ def _render_strategy_python(
     lines.extend(
         [
             ("", None),
+            (
+                f"# 当前回测兼容层实际执行周期：{strategy_spec.get('backtest_timeframe', strategy_spec['timeframe'])}",
+                None,
+            ),
             ("", None),
             ("def build_strategy():", "构造最终给回测引擎使用的策略结构。"),
             ("    config = StrategyConfig()", "先实例化一份基础配置。"),
             ("    return {", "返回机器可执行的策略字典。"),
+            ("        'market_scope': config.market_scope,", "告诉引擎当前策略属于哪个市场范围。"),
             ("        'market': config.market,", "告诉引擎当前回测的标的。"),
             ("        'timeframe': config.timeframe,", "告诉引擎当前回测周期。"),
+            ("        'timeframes': list(config.timeframes),", "保留所有分析周期，供多周期引擎复用。"),
             ("        'asset_type': config.asset_type,", "告诉引擎这是股票还是 ETF。"),
+            (
+                f"        'analysis_mode': '{strategy_spec.get('analysis_mode', 'single_timeframe')}',",
+                "声明当前策略是单周期还是混合周期。",
+            ),
+            (
+                f"        'backtest_timeframe': '{strategy_spec.get('backtest_timeframe', strategy_spec['timeframe'])}',",
+                "标记现有回测兼容层真正执行的周期。",
+            ),
+        ]
+    )
+    if strategy_spec.get("entry_context"):
+        lines.extend(
+            [
+                ("        'entry_context': [", "这里保留跨周期的观察条件，当前先做语义层沉淀。"),
+            ]
+        )
+        for rule in strategy_spec.get("entry_context", []):
+            lines.append(
+                (
+                    "            " + repr(rule) + ",",
+                    f"这是一个跨周期入场上下文，表达式是 {rule.get('expression')}。",
+                )
+            )
+        lines.append(("        ],", "跨周期入场上下文结束。"))
+    if strategy_spec.get("exit_context"):
+        lines.extend(
+            [
+                ("        'exit_context': [", "这里保留跨周期的离场上下文。"),
+            ]
+        )
+        for rule in strategy_spec.get("exit_context", []):
+            lines.append(
+                (
+                    "            " + repr(rule) + ",",
+                    f"这是一个跨周期离场上下文，表达式是 {rule.get('expression')}。",
+                )
+            )
+        lines.append(("        ],", "跨周期离场上下文结束。"))
+    lines.extend(
+        [
             ("        'entry': {", "下面开始定义入场条件。"),
             ("            'all': [", "all 表示这些条件需要同时满足。"),
         ]

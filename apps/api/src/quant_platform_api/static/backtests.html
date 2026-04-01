@@ -33,7 +33,7 @@
         <div>
           <p class="eyebrow">Backtest Center</p>
           <h2>把每次回测都当作一条可追踪记录，而不是只看当前这一轮。</h2>
-          <p>回测默认使用中国股票 / ETF 日线数据；如果 Tushare token 没有权限，系统会自动回退到公开可访问数据源，并在结果里标明实际来源。</p>
+          <p>回测当前仍以中国股票 / ETF 日线兼容层为主；策略工坊里生成的混合周期条件会被完整保存，但现阶段真实执行仍按回测周期运行，并在结果里保留来源说明。</p>
         </div>
         <div class="hero-panel">
           <div class="card muted">
@@ -84,7 +84,7 @@
               <button id="run-backtest-btn">运行回测</button>
               <button id="refresh-backtests-btn" class="btn secondary">刷新历史</button>
             </div>
-            <div class="muted-note">每次运行后，结果会保存在右侧“回测历史”里。</div>
+            <div class="muted-note">如果选择的是混合周期策略，当前回测会按策略中标记的 `backtest_timeframe` 执行，其他周期条件保留在策略规格层。</div>
           </div>
         </section>
 
