@@ -6,3 +6,4 @@
 - `.claude/agents/briefings/2026-04-01_codex_平台契约认证与工作台改造.md`
 - `.claude/agents/briefings/2026-04-01_codex_接力文档镜像入库.md`
 - `.claude/agents/briefings/2026-04-01_codex_用户归属与私有接口收口.md`
+- `.claude/agents/briefings/2026-04-01_codex_移除公开测试账号展示.md`

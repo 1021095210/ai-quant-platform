@@ -121,6 +121,19 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertEqual(200, register_response.status_code)
         self.assertIn("登录后进入你的量化研究工作台", login_response.text)
         self.assertIn("创建账户后直接进入你的用户工作台", register_response.text)
+        self.assertNotIn("默认测试账户", login_response.text)
+        self.assertNotIn("用户名 `1111`", login_response.text)
+        self.assertNotIn("用户名 `admin`", login_response.text)
+
+    def test_home_page_does_not_publicly_show_default_accounts(self) -> None:
+        client = self._build_client()
+
+        response = client.get("/")
+
+        self.assertEqual(200, response.status_code)
+        self.assertNotIn("默认测试账户", response.text)
+        self.assertNotIn("用户名 `1111`", response.text)
+        self.assertNotIn("用户名 `admin`", response.text)
 
     def test_protected_pages_redirect_to_login_when_unauthenticated(self) -> None:
         client = self._build_client()
