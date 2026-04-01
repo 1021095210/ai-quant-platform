@@ -171,7 +171,7 @@
 
 - 以 GitHub 仓库 `main` 分支当前 HEAD 为准
 - 如果本文中的提交信息和 GitHub 页面显示不一致，以 GitHub 页面为准
-- 当前已知远端基线（2026-04-01）：`main` HEAD 预计为 `fbfe8d0`，已移除首页“能力状态”区块，首页仅作为平台入口页（以 GitHub 页面为准）
+- 当前已知远端基线（2026-04-01）：`main` HEAD 预计为 `20bee61`，已完成双视角评审汇总并更新接力优先级（以 GitHub 页面为准）
 
 如果新环境还没有仓库，请先执行：
 
@@ -316,6 +316,7 @@ uvicorn quant_platform_api.main:create_app --factory --app-dir apps/api/src --ho
 - `.claude/agents/briefings/2026-04-01_codex_品牌收敛与规则模块多市场化.md`
 - `.claude/agents/briefings/2026-04-01_codex_策略工坊多市场与混合周期.md`
 - `.claude/agents/briefings/2026-04-01_codex_平台契约认证与工作台改造.md`
+- `.claude/agents/briefings/2026-04-01_codex_移除首页能力状态与双视角评审.md`
 
 另外，UI / 产品审评结论已单独保存，不覆盖当前可运行版本：
 
