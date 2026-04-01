@@ -70,6 +70,25 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertEqual(200, response.status_code)
         return response
 
+    def _register_and_login(
+        self,
+        client: TestClient,
+        *,
+        username: str,
+        contact: str,
+        password: str = "618618",
+    ):
+        response = client.post(
+            "/api/v1/auth/register",
+            json={
+                "username": username,
+                "contact": contact,
+                "password": password,
+            },
+        )
+        self.assertEqual(200, response.status_code)
+        return response
+
     def test_healthz_returns_ok(self) -> None:
         client = self._build_client()
 
@@ -124,6 +143,7 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertEqual(200, me_response.status_code)
         self.assertEqual("1111", me_response.json()["data"]["username"])
         self.assertEqual("user", me_response.json()["data"]["role"])
+        self.assertTrue(me_response.json()["data"]["workspace_id"].startswith("ws_"))
 
     def test_admin_can_login_and_access_workspace(self) -> None:
         client = self._build_client()
@@ -281,6 +301,7 @@ class QuantPlatformApiTests(unittest.TestCase):
 
     def test_create_strategy_project_returns_project_and_version_ids(self) -> None:
         client = self._build_client()
+        self._login(client)
 
         response = client.post(
             "/api/v1/strategies/projects",
@@ -296,9 +317,12 @@ class QuantPlatformApiTests(unittest.TestCase):
         data = response.json()["data"]
         self.assertIn("project_id", data)
         self.assertIn("version_id", data)
+        self.assertTrue(data["workspace_id"].startswith("ws_"))
+        self.assertTrue(data["user_id"].startswith("user_"))
 
     def test_list_strategy_projects_returns_created_items(self) -> None:
         client = self._build_client()
+        self._login(client)
 
         client.post(
             "/api/v1/strategies/projects",
@@ -318,9 +342,11 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertEqual("趋势策略", items[0]["title"])
         self.assertEqual("600519.SH", items[0]["strategy_dsl"]["market"])
         self.assertIn("def build_strategy()", items[0]["strategy_python"])
+        self.assertTrue(items[0]["workspace_id"].startswith("ws_"))
 
     def test_get_strategy_project_returns_python_code(self) -> None:
         client = self._build_client()
+        self._login(client)
         created = client.post(
             "/api/v1/strategies/projects",
             json={
@@ -338,6 +364,7 @@ class QuantPlatformApiTests(unittest.TestCase):
         payload = response.json()["data"]
         self.assertEqual("ETF 趋势策略", payload["title"])
         self.assertIn("asset_type", payload["strategy_python"])
+        self.assertTrue(payload["workspace_id"].startswith("ws_"))
 
     def test_backtest_run_completes_and_returns_metrics(self) -> None:
         temp_dir = tempfile.TemporaryDirectory()
@@ -348,6 +375,7 @@ class QuantPlatformApiTests(unittest.TestCase):
             database_url=f"sqlite+pysqlite:///{database_path}",
             market_data_database_path=str(market_data_path),
         )
+        self._login(client)
         created_project = client.post(
             "/api/v1/strategies/projects",
             json={
@@ -400,6 +428,8 @@ class QuantPlatformApiTests(unittest.TestCase):
         data = payload["data"]
         self.assertEqual("succeeded", data["status"])
         self.assertEqual(data["status"], data["state"])
+        self.assertTrue(data["user_id"].startswith("user_"))
+        self.assertTrue(data["workspace_id"].startswith("ws_"))
         self.assertEqual("snapshot_v1", data["dataset_snapshot_ref"])
         self.assertEqual("engine_v1", data["engine_version"])
         self.assertTrue(data["config_revision"].startswith("cfg_"))
@@ -419,6 +449,7 @@ class QuantPlatformApiTests(unittest.TestCase):
 
     def test_list_backtest_runs_returns_history(self) -> None:
         client = self._build_client()
+        self._login(client)
         created_project = client.post(
             "/api/v1/strategies/projects",
             json={
@@ -469,14 +500,25 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertEqual("510300.SH", items[0]["market"])
         self.assertEqual("ETF 回测策略", items[0]["strategy_title"])
         self.assertIn("created_at", items[0])
+        self.assertTrue(items[0]["workspace_id"].startswith("ws_"))
 
     def test_optimization_job_completes_and_returns_best_metrics(self) -> None:
         client = self._build_client()
+        self._login(client)
+        version_id = client.post(
+            "/api/v1/strategies/projects",
+            json={
+                "title": "优化策略",
+                "natural_language_prompt": "价格突破前高时买入",
+                "strategy_dsl": {"market": "600519.SH", "timeframe": "1d", "asset_type": "stock"},
+                "strategy_python": "def build_strategy():\n    return {}",
+            },
+        ).json()["data"]["version_id"]
 
         created = client.post(
             "/api/v1/optimization-jobs",
             json={
-                "strategy_version_id": "ver_opt",
+                "strategy_version_id": version_id,
                 "search_space": {
                     "entry.all[0].params.fast": [3, 5, 8],
                     "entry.all[0].params.slow": [15, 20, 30],
@@ -515,6 +557,7 @@ class QuantPlatformApiTests(unittest.TestCase):
 
     def test_dataset_snapshot_ref_conflict_returns_revision_conflict(self) -> None:
         client = self._build_client()
+        self._login(client)
         created_project = client.post(
             "/api/v1/strategies/projects",
             json={
@@ -569,11 +612,20 @@ class QuantPlatformApiTests(unittest.TestCase):
             job_execution_mode="background",
             job_simulation_latency_ms=200,
         )
+        self._login(client)
+        upload_id = client.post(
+            "/api/v1/trades/uploads",
+            files={"file": ("trades.csv", b"symbol,side,entry_time,exit_time,pnl\nBTCUSDT,long,2024-05-01T10:00:00Z,2024-05-01T11:00:00Z,1\n", "text/csv")},
+        ).json()["data"]["upload_id"]
+        client.post(
+            f"/api/v1/trades/uploads/{upload_id}/parse",
+            json={"column_mapping": {"symbol": "symbol", "side": "side", "entry_time": "entry_time", "exit_time": "exit_time", "pnl": "pnl"}},
+        )
 
         created = client.post(
             "/api/v1/replays/analyses",
             json={
-                "upload_id": "upload_001",
+                "upload_id": upload_id,
                 "focus_dimensions": [
                     "volume_structure",
                     "moving_average_structure",
@@ -596,6 +648,7 @@ class QuantPlatformApiTests(unittest.TestCase):
 
     def test_unknown_task_returns_not_found(self) -> None:
         client = self._build_client()
+        self._login(client)
 
         response = client.get("/api/v1/backtests/runs/does-not-exist")
 
@@ -611,6 +664,7 @@ class QuantPlatformApiTests(unittest.TestCase):
         database_url = f"sqlite+pysqlite:///{Path(temp_dir.name) / 'quant_platform.db'}"
 
         first_client = self._build_client(database_url=database_url)
+        self._login(first_client)
         created_project = first_client.post(
             "/api/v1/strategies/projects",
             json={
@@ -655,6 +709,7 @@ class QuantPlatformApiTests(unittest.TestCase):
         task_id = created.json()["data"]["backtest_run_id"]
 
         second_client = self._build_client(database_url=database_url)
+        self._login(second_client)
         fetched = second_client.get(f"/api/v1/backtests/runs/{task_id}")
 
         self.assertEqual(200, fetched.status_code)
@@ -667,6 +722,7 @@ class QuantPlatformApiTests(unittest.TestCase):
 
     def test_trade_upload_parse_and_record_listing_flow(self) -> None:
         client = self._build_client()
+        self._login(client)
         csv_text = (
             "symbol,side,entry_time,exit_time,pnl\n"
             "BTCUSDT,long,2024-05-01T10:00:00Z,2024-05-01T12:00:00Z,120.5\n"
@@ -721,6 +777,7 @@ class QuantPlatformApiTests(unittest.TestCase):
         client = self._build_client(
             database_url=f"sqlite+pysqlite:///{database_path}",
         )
+        self._login(client)
         csv_text = (
             "symbol,side,entry_time,exit_time,pnl\n"
             "BTCUSDT,long,2024-05-01T10:00:00Z,2024-05-01T11:00:00Z,150\n"
@@ -776,6 +833,82 @@ class QuantPlatformApiTests(unittest.TestCase):
                 (data["dataset_snapshot_ref"],),
             ).fetchone()
         self.assertEqual(("cn_a_share", "stock", "1d", "qfq"), snapshot_row)
+
+    def test_private_resource_endpoints_require_login(self) -> None:
+        client = self._build_client()
+
+        response = client.get("/api/v1/strategies/projects")
+        upload_response = client.post(
+            "/api/v1/trades/uploads",
+            files={"file": ("trades.csv", b"symbol,side,entry_time,exit_time,pnl\n", "text/csv")},
+        )
+
+        self.assertEqual(401, response.status_code)
+        self.assertEqual("UNAUTHORIZED", response.json()["error"]["code"])
+        self.assertEqual(401, upload_response.status_code)
+        self.assertEqual("UNAUTHORIZED", upload_response.json()["error"]["code"])
+
+    def test_user_only_sees_own_projects_backtests_and_uploads(self) -> None:
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        database_url = f"sqlite+pysqlite:///{Path(temp_dir.name) / 'quant_platform.db'}"
+
+        owner_client = self._build_client(database_url=database_url)
+        self._login(owner_client)
+        project = owner_client.post(
+            "/api/v1/strategies/projects",
+            json={
+                "title": "用户一策略",
+                "natural_language_prompt": "均线上穿买入",
+                "strategy_dsl": {"market": "600519.SH", "timeframe": "1d", "asset_type": "stock"},
+                "strategy_python": "def build_strategy():\n    return {}",
+            },
+        ).json()["data"]
+        upload = owner_client.post(
+            "/api/v1/trades/uploads",
+            files={"file": ("trades.csv", b"symbol,side,entry_time,exit_time,pnl\nBTCUSDT,long,2024-05-01T10:00:00Z,2024-05-01T11:00:00Z,1\n", "text/csv")},
+        ).json()["data"]
+        owner_client.post(
+            "/api/v1/backtests/runs",
+            json={
+                "strategy_version_id": project["version_id"],
+                "dataset": {
+                    "market": "600519.SH",
+                    "timeframe": "1d",
+                    "asset_type": "stock",
+                    "from": "2024-01-01T00:00:00Z",
+                    "to": "2024-12-31T23:59:59Z",
+                },
+                "execution_contract": {
+                    "initial_capital": 100000,
+                    "fee_bps": 3,
+                    "slippage_bps": 2,
+                    "fill_price_rule": "next_bar_open",
+                    "intrabar_match_policy": "no_intrabar_fill",
+                    "calendar": "cn_a_share",
+                    "timezone": "Asia/Shanghai",
+                    "adjustment_mode": "qfq",
+                },
+                "data_snapshot": {"dataset_snapshot_ref": "owner_only_snapshot"},
+            },
+        )
+
+        other_client = self._build_client(database_url=database_url)
+        self._register_and_login(
+            other_client,
+            username="other_user",
+            contact="other@example.com",
+        )
+
+        projects_response = other_client.get("/api/v1/strategies/projects")
+        backtests_response = other_client.get("/api/v1/backtests/runs")
+        project_get_response = other_client.get(f"/api/v1/strategies/projects/{project['version_id']}")
+        records_response = other_client.get(f"/api/v1/trades/uploads/{upload['upload_id']}/records")
+
+        self.assertEqual([], projects_response.json()["data"]["items"])
+        self.assertEqual([], backtests_response.json()["data"]["items"])
+        self.assertEqual(404, project_get_response.status_code)
+        self.assertEqual(404, records_response.status_code)
 
 
 if __name__ == "__main__":

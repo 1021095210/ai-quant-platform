@@ -35,8 +35,21 @@ def create_schema(session_factory: sessionmaker) -> None:
             connection.execute(
                 text("ALTER TABLE strategy_versions ADD COLUMN strategy_python_text TEXT")
             )
+    strategy_column_definitions = {
+        "user_id": "VARCHAR(64) DEFAULT ''",
+        "workspace_id": "VARCHAR(64) DEFAULT 'ws_default'",
+    }
+    for column_name, column_definition in strategy_column_definitions.items():
+        if column_name not in strategy_columns:
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        f"ALTER TABLE strategy_versions ADD COLUMN {column_name} {column_definition}"
+                    )
+                )
     task_columns = {column["name"] for column in inspector.get_columns("tasks")}
     task_column_definitions = {
+        "user_id": "VARCHAR(64) DEFAULT ''",
         "workspace_id": "VARCHAR(64) DEFAULT 'ws_default'",
         "environment": "VARCHAR(32) DEFAULT 'dev'",
         "resource_refs_json": "TEXT DEFAULT '{}'",
@@ -62,3 +75,16 @@ def create_schema(session_factory: sessionmaker) -> None:
     if "role" not in user_columns:
         with engine.begin() as connection:
             connection.execute(text("ALTER TABLE users ADD COLUMN role VARCHAR(32) DEFAULT 'user'"))
+    trade_upload_columns = {column["name"] for column in inspector.get_columns("trade_uploads")}
+    trade_upload_column_definitions = {
+        "user_id": "VARCHAR(64) DEFAULT ''",
+        "workspace_id": "VARCHAR(64) DEFAULT 'ws_default'",
+    }
+    for column_name, column_definition in trade_upload_column_definitions.items():
+        if column_name not in trade_upload_columns:
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        f"ALTER TABLE trade_uploads ADD COLUMN {column_name} {column_definition}"
+                    )
+                )

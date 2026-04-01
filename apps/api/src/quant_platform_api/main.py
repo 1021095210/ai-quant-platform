@@ -391,7 +391,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         request: Request,
         payload: ProjectCreateRequest,
     ) -> JSONResponse:
+        current_user = _require_current_user(request, services.auth_service)
         version = services.strategy_service.create_project(
+            user_id=current_user.user_id,
+            workspace_id=current_user.workspace_id,
             title=payload.title,
             natural_language_prompt=payload.natural_language_prompt,
             strategy_dsl=payload.strategy_dsl,
@@ -402,12 +405,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             data={
                 "project_id": version.project_id,
                 "version_id": version.version_id,
+                "workspace_id": version.workspace_id,
+                "user_id": version.user_id,
             }
         )
 
     @app.get(f"{app_settings.api_prefix}/strategies/projects")
     def list_strategy_projects(request: Request) -> JSONResponse:
-        items = services.strategy_service.list_projects()
+        current_user = _require_current_user(request, services.auth_service)
+        items = services.strategy_service.list_projects(
+            user_id=current_user.user_id,
+            workspace_id=current_user.workspace_id,
+        )
         return _success_response(
             request,
             data={
@@ -415,6 +424,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     {
                         "project_id": item.project_id,
                         "version_id": item.version_id,
+                        "workspace_id": item.workspace_id,
+                        "user_id": item.user_id,
                         "title": item.title,
                         "natural_language_prompt": item.natural_language_prompt,
                         "strategy_dsl": item.strategy_dsl,
@@ -428,7 +439,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get(f"{app_settings.api_prefix}/strategies/projects/{{version_id}}")
     def get_strategy_project(request: Request, version_id: str) -> JSONResponse:
-        item = services.strategy_service.get_project(version_id)
+        current_user = _require_current_user(request, services.auth_service)
+        item = services.strategy_service.get_project(
+            version_id,
+            user_id=current_user.user_id,
+            workspace_id=current_user.workspace_id,
+        )
         if item is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -442,6 +458,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             data={
                 "project_id": item.project_id,
                 "version_id": item.version_id,
+                "workspace_id": item.workspace_id,
+                "user_id": item.user_id,
                 "title": item.title,
                 "natural_language_prompt": item.natural_language_prompt,
                 "strategy_dsl": item.strategy_dsl,
@@ -455,16 +473,35 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         request: Request,
         payload: BacktestCreateRequest,
     ) -> JSONResponse:
+        current_user = _require_current_user(request, services.auth_service)
+        strategy = services.strategy_service.get_project(
+            payload.strategy_version_id,
+            user_id=current_user.user_id,
+            workspace_id=current_user.workspace_id,
+        )
+        if strategy is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=ErrorPayload(
+                    code="NOT_FOUND",
+                    message="strategy project not found",
+                ).model_dump(),
+            )
         _ensure_dataset_snapshot(dataset_snapshot_repository, payload)
+        payload_dict = payload.model_dump(by_alias=True, mode="json")
+        payload_dict["user_id"] = current_user.user_id
+        payload_dict["workspace_id"] = current_user.workspace_id
         record = services.backtest_service.submit(
             kind="backtest",
-            payload=payload.model_dump(by_alias=True, mode="json"),
+            payload=payload_dict,
             build_result=build_backtest_result(
                 app_settings,
                 services.strategy_service,
                 services.market_data_service,
             ),
             request_id=request.state.request_id,
+            user_id=current_user.user_id,
+            workspace_id=current_user.workspace_id,
             idempotency_key=request.headers.get("Idempotency-Key"),
         )
         return _success_response(
@@ -483,7 +520,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get(f"{app_settings.api_prefix}/backtests/runs")
     def list_backtest_runs(request: Request) -> JSONResponse:
-        records = task_repository.list("backtest")
+        current_user = _require_current_user(request, services.auth_service)
+        records = task_repository.list(
+            "backtest",
+            user_id=current_user.user_id,
+            workspace_id=current_user.workspace_id,
+        )
         return _success_response(
             request,
             data={
@@ -493,6 +535,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         "status": record.status.value,
                         "state": record.status.value,
                         "created_at": record.created_at.isoformat(),
+                        "workspace_id": record.workspace_id,
+                        "user_id": record.user_id,
                         "config_revision": record.config_revision,
                         "strategy_version_id": record.payload.get("strategy_version_id"),
                         "strategy_title": record.result.get("strategy_title", ""),
@@ -508,7 +552,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get(f"{app_settings.api_prefix}/backtests/runs/{{backtest_run_id}}")
     def get_backtest_run(request: Request, backtest_run_id: str) -> JSONResponse:
-        record = _require_task(services.backtest_service.get(backtest_run_id))
+        current_user = _require_current_user(request, services.auth_service)
+        record = _require_task(
+            services.backtest_service.get(
+                backtest_run_id,
+                user_id=current_user.user_id,
+                workspace_id=current_user.workspace_id,
+            )
+        )
         return _success_response(
             request,
             data=_serialize_task(record, "backtest_run_id"),
@@ -516,6 +567,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post(f"{app_settings.api_prefix}/backtests/runs/{{backtest_run_id}}/cancel")
     def cancel_backtest_run(request: Request, backtest_run_id: str) -> JSONResponse:
+        current_user = _require_current_user(request, services.auth_service)
+        _require_task(
+            services.backtest_service.get(
+                backtest_run_id,
+                user_id=current_user.user_id,
+                workspace_id=current_user.workspace_id,
+            )
+        )
         record = _require_task(services.backtest_service.cancel(backtest_run_id))
         return _success_response(
             request,
@@ -531,12 +590,31 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         request: Request,
         payload: OptimizationCreateRequest,
     ) -> JSONResponse:
+        current_user = _require_current_user(request, services.auth_service)
+        strategy = services.strategy_service.get_project(
+            payload.strategy_version_id,
+            user_id=current_user.user_id,
+            workspace_id=current_user.workspace_id,
+        )
+        if strategy is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=ErrorPayload(
+                    code="NOT_FOUND",
+                    message="strategy project not found",
+                ).model_dump(),
+            )
         _ensure_dataset_snapshot(dataset_snapshot_repository, payload)
+        payload_dict = payload.model_dump(by_alias=True, mode="json")
+        payload_dict["user_id"] = current_user.user_id
+        payload_dict["workspace_id"] = current_user.workspace_id
         record = services.optimization_service.submit(
             kind="optimization",
-            payload=payload.model_dump(by_alias=True, mode="json"),
+            payload=payload_dict,
             build_result=build_optimization_result(),
             request_id=request.state.request_id,
+            user_id=current_user.user_id,
+            workspace_id=current_user.workspace_id,
             idempotency_key=request.headers.get("Idempotency-Key"),
         )
         return _success_response(
@@ -555,11 +633,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get(f"{app_settings.api_prefix}/optimization-jobs/{{job_id}}")
     def get_optimization_job(request: Request, job_id: str) -> JSONResponse:
-        record = _require_task(services.optimization_service.get(job_id))
+        current_user = _require_current_user(request, services.auth_service)
+        record = _require_task(
+            services.optimization_service.get(
+                job_id,
+                user_id=current_user.user_id,
+                workspace_id=current_user.workspace_id,
+            )
+        )
         return _success_response(request, data=_serialize_task(record, "job_id"))
 
     @app.post(f"{app_settings.api_prefix}/optimization-jobs/{{job_id}}/cancel")
     def cancel_optimization_job(request: Request, job_id: str) -> JSONResponse:
+        current_user = _require_current_user(request, services.auth_service)
+        _require_task(
+            services.optimization_service.get(
+                job_id,
+                user_id=current_user.user_id,
+                workspace_id=current_user.workspace_id,
+            )
+        )
         record = _require_task(services.optimization_service.cancel(job_id))
         return _success_response(
             request,
@@ -575,19 +668,40 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         request: Request,
         payload: ReplayCreateRequest,
     ) -> JSONResponse:
+        current_user = _require_current_user(request, services.auth_service)
+        upload = services.trade_upload_service.get_upload(
+            payload.upload_id,
+            user_id=current_user.user_id,
+            workspace_id=current_user.workspace_id,
+        )
+        if upload is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=ErrorPayload(
+                    code="NOT_FOUND",
+                    message="trade upload not found",
+                ).model_dump(),
+            )
         _ensure_replay_dataset_snapshot(
             dataset_snapshot_repository,
             services.trade_upload_service,
             payload,
+            user_id=current_user.user_id,
+            workspace_id=current_user.workspace_id,
         )
+        payload_dict = payload.model_dump(mode="json")
+        payload_dict["user_id"] = current_user.user_id
+        payload_dict["workspace_id"] = current_user.workspace_id
         record = services.replay_service.submit(
             kind="replay",
-            payload=payload.model_dump(mode="json"),
+            payload=payload_dict,
             build_result=build_replay_result(
                 app_settings,
                 services.trade_upload_service,
             ),
             request_id=request.state.request_id,
+            user_id=current_user.user_id,
+            workspace_id=current_user.workspace_id,
             idempotency_key=request.headers.get("Idempotency-Key"),
         )
         return _success_response(
@@ -606,7 +720,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get(f"{app_settings.api_prefix}/replays/analyses/{{analysis_id}}")
     def get_replay_analysis(request: Request, analysis_id: str) -> JSONResponse:
-        record = _require_task(services.replay_service.get(analysis_id))
+        current_user = _require_current_user(request, services.auth_service)
+        record = _require_task(
+            services.replay_service.get(
+                analysis_id,
+                user_id=current_user.user_id,
+                workspace_id=current_user.workspace_id,
+            )
+        )
         return _success_response(
             request,
             data=_serialize_task(record, "analysis_id"),
@@ -614,6 +735,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post(f"{app_settings.api_prefix}/replays/analyses/{{analysis_id}}/cancel")
     def cancel_replay_analysis(request: Request, analysis_id: str) -> JSONResponse:
+        current_user = _require_current_user(request, services.auth_service)
+        _require_task(
+            services.replay_service.get(
+                analysis_id,
+                user_id=current_user.user_id,
+                workspace_id=current_user.workspace_id,
+            )
+        )
         record = _require_task(services.replay_service.cancel(analysis_id))
         return _success_response(
             request,
@@ -626,8 +755,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post(f"{app_settings.api_prefix}/trades/uploads")
     async def upload_trades(request: Request, file: UploadFile = File(...)) -> JSONResponse:
+        current_user = _require_current_user(request, services.auth_service)
         raw = (await file.read()).decode("utf-8")
-        upload = services.trade_upload_service.create_upload(file.filename, raw)
+        upload = services.trade_upload_service.create_upload(
+            file.filename,
+            raw,
+            user_id=current_user.user_id,
+            workspace_id=current_user.workspace_id,
+        )
         return _success_response(
             request,
             data={
@@ -643,8 +778,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         upload_id: str,
         payload: TradeUploadParseRequest,
     ) -> JSONResponse:
+        current_user = _require_current_user(request, services.auth_service)
         mapping = payload.column_mapping
-        upload = services.trade_upload_service.parse_upload(upload_id, mapping)
+        upload = services.trade_upload_service.parse_upload(
+            upload_id,
+            mapping,
+            user_id=current_user.user_id,
+            workspace_id=current_user.workspace_id,
+        )
         if upload is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -666,7 +807,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get(f"{app_settings.api_prefix}/trades/uploads/{{upload_id}}/records")
     def get_trade_records(request: Request, upload_id: str) -> JSONResponse:
-        upload = services.trade_upload_service.get_upload(upload_id)
+        current_user = _require_current_user(request, services.auth_service)
+        upload = services.trade_upload_service.get_upload(
+            upload_id,
+            user_id=current_user.user_id,
+            workspace_id=current_user.workspace_id,
+        )
         if upload is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -697,6 +843,7 @@ def _serialize_task(record: Any, identifier_key: str) -> dict[str, Any]:
         identifier_key: record.id,
         "task_id": record.id,
         "task_type": record.kind,
+        "user_id": record.user_id,
         "status": record.status.value,
         "state": record.status.value,
         "progress_pct": record.progress_pct,
@@ -755,13 +902,20 @@ def _ensure_replay_dataset_snapshot(
     repository: Any,
     trade_upload_service: Any,
     payload: ReplayCreateRequest,
+    *,
+    user_id: str | None = None,
+    workspace_id: str | None = None,
 ) -> None:
     if payload.data_snapshot is None:
         payload.data_snapshot = DataSnapshotConfig(
             dataset_snapshot_ref=f"replay_{payload.upload_id}_snapshot"
         )
 
-    upload = trade_upload_service.get_upload(payload.upload_id)
+    upload = trade_upload_service.get_upload(
+        payload.upload_id,
+        user_id=user_id,
+        workspace_id=workspace_id,
+    )
     date_from = utcnow()
     date_to = date_from
     if upload is not None and upload.records:
@@ -807,6 +961,16 @@ def _resolve_request_id(request: Request) -> str:
 
 def _get_current_user(request: Request, auth_service: AuthService):
     return auth_service.get_user_by_session_token(request.cookies.get(SESSION_COOKIE_NAME))
+
+
+def _require_current_user(request: Request, auth_service: AuthService):
+    user = _get_current_user(request, auth_service)
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=ErrorPayload(code="UNAUTHORIZED", message="login required").model_dump(),
+        )
+    return user
 
 
 def _set_session_cookie(response: JSONResponse, session_token: str) -> None:

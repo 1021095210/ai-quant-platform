@@ -37,7 +37,13 @@ from quant_platform_api.orm import (
 class TaskRepository(Protocol):
     def create(self, record: TaskRecord) -> TaskRecord: ...
 
-    def get(self, task_id: str) -> TaskRecord | None: ...
+    def get(
+        self,
+        task_id: str,
+        *,
+        user_id: str | None = None,
+        workspace_id: str | None = None,
+    ) -> TaskRecord | None: ...
 
     def mark_queued(self, task_id: str) -> TaskRecord | None: ...
 
@@ -49,7 +55,13 @@ class TaskRepository(Protocol):
 
     def cancel(self, task_id: str) -> TaskRecord | None: ...
 
-    def list(self, kind: str | None = None) -> list[TaskRecord]: ...
+    def list(
+        self,
+        kind: str | None = None,
+        *,
+        user_id: str | None = None,
+        workspace_id: str | None = None,
+    ) -> list[TaskRecord]: ...
 
 
 class StrategyRepository(Protocol):
@@ -57,9 +69,20 @@ class StrategyRepository(Protocol):
 
     def exists(self, version_id: str) -> bool: ...
 
-    def list_projects(self) -> list[StrategyVersionRecord]: ...
+    def list_projects(
+        self,
+        *,
+        user_id: str | None = None,
+        workspace_id: str | None = None,
+    ) -> list[StrategyVersionRecord]: ...
 
-    def get(self, version_id: str) -> StrategyVersionRecord | None: ...
+    def get(
+        self,
+        version_id: str,
+        *,
+        user_id: str | None = None,
+        workspace_id: str | None = None,
+    ) -> StrategyVersionRecord | None: ...
 
 
 class DatasetSnapshotRepository(Protocol):
@@ -87,7 +110,13 @@ class UserSessionRepository(Protocol):
 class TradeUploadRepository(Protocol):
     def create(self, record: TradeUploadRecord) -> TradeUploadRecord: ...
 
-    def get(self, upload_id: str) -> TradeUploadRecord | None: ...
+    def get(
+        self,
+        upload_id: str,
+        *,
+        user_id: str | None = None,
+        workspace_id: str | None = None,
+    ) -> TradeUploadRecord | None: ...
 
     def update(self, record: TradeUploadRecord) -> TradeUploadRecord: ...
 
@@ -114,10 +143,22 @@ class InMemoryTaskRepository:
             self._items[record.id] = deepcopy(record)
             return deepcopy(record)
 
-    def get(self, task_id: str) -> TaskRecord | None:
+    def get(
+        self,
+        task_id: str,
+        *,
+        user_id: str | None = None,
+        workspace_id: str | None = None,
+    ) -> TaskRecord | None:
         with self._lock:
             record = self._items.get(task_id)
-            return deepcopy(record) if record else None
+            if record is None:
+                return None
+            if user_id is not None and record.user_id != user_id:
+                return None
+            if workspace_id is not None and record.workspace_id != workspace_id:
+                return None
+            return deepcopy(record)
 
     def mark_queued(self, task_id: str) -> TaskRecord | None:
         with self._lock:
@@ -172,11 +213,21 @@ class InMemoryTaskRepository:
             record.finished_at = utcnow()
             return deepcopy(record)
 
-    def list(self, kind: str | None = None) -> list[TaskRecord]:
+    def list(
+        self,
+        kind: str | None = None,
+        *,
+        user_id: str | None = None,
+        workspace_id: str | None = None,
+    ) -> list[TaskRecord]:
         with self._lock:
             items = list(self._items.values())
             if kind is not None:
                 items = [item for item in items if item.kind == kind]
+            if user_id is not None:
+                items = [item for item in items if item.user_id == user_id]
+            if workspace_id is not None:
+                items = [item for item in items if item.workspace_id == workspace_id]
             items.sort(key=lambda item: item.created_at, reverse=True)
             return [deepcopy(item) for item in items]
 
@@ -195,14 +246,36 @@ class InMemoryStrategyRepository:
         with self._lock:
             return version_id in self._items
 
-    def list_projects(self) -> list[StrategyVersionRecord]:
+    def list_projects(
+        self,
+        *,
+        user_id: str | None = None,
+        workspace_id: str | None = None,
+    ) -> list[StrategyVersionRecord]:
         with self._lock:
-            return [deepcopy(item) for item in self._items.values()]
+            items = list(self._items.values())
+            if user_id is not None:
+                items = [item for item in items if item.user_id == user_id]
+            if workspace_id is not None:
+                items = [item for item in items if item.workspace_id == workspace_id]
+            return [deepcopy(item) for item in items]
 
-    def get(self, version_id: str) -> StrategyVersionRecord | None:
+    def get(
+        self,
+        version_id: str,
+        *,
+        user_id: str | None = None,
+        workspace_id: str | None = None,
+    ) -> StrategyVersionRecord | None:
         with self._lock:
             item = self._items.get(version_id)
-            return deepcopy(item) if item else None
+            if item is None:
+                return None
+            if user_id is not None and item.user_id != user_id:
+                return None
+            if workspace_id is not None and item.workspace_id != workspace_id:
+                return None
+            return deepcopy(item)
 
 
 class SQLAlchemyStrategyRepository:
@@ -214,6 +287,8 @@ class SQLAlchemyStrategyRepository:
             orm = StrategyVersionORM(
                 version_id=record.version_id,
                 project_id=record.project_id,
+                user_id=record.user_id,
+                workspace_id=record.workspace_id,
                 title=record.title,
                 natural_language_prompt=record.natural_language_prompt,
                 strategy_dsl_json=json.dumps(record.strategy_dsl, ensure_ascii=False),
@@ -229,15 +304,25 @@ class SQLAlchemyStrategyRepository:
             orm = session.get(StrategyVersionORM, version_id)
             return orm is not None
 
-    def list_projects(self) -> list[StrategyVersionRecord]:
+    def list_projects(
+        self,
+        *,
+        user_id: str | None = None,
+        workspace_id: str | None = None,
+    ) -> list[StrategyVersionRecord]:
         with self._session_factory() as session:
-            items = session.scalars(
-                select(StrategyVersionORM).order_by(StrategyVersionORM.created_at.desc())
-            ).all()
+            statement = select(StrategyVersionORM).order_by(StrategyVersionORM.created_at.desc())
+            if user_id is not None:
+                statement = statement.where(StrategyVersionORM.user_id == user_id)
+            if workspace_id is not None:
+                statement = statement.where(StrategyVersionORM.workspace_id == workspace_id)
+            items = session.scalars(statement).all()
             return [
                 StrategyVersionRecord(
                     project_id=item.project_id,
                     version_id=item.version_id,
+                    user_id=item.user_id,
+                    workspace_id=item.workspace_id,
                     title=item.title,
                     natural_language_prompt=item.natural_language_prompt,
                     strategy_dsl=json.loads(item.strategy_dsl_json),
@@ -247,14 +332,27 @@ class SQLAlchemyStrategyRepository:
                 for item in items
             ]
 
-    def get(self, version_id: str) -> StrategyVersionRecord | None:
+    def get(
+        self,
+        version_id: str,
+        *,
+        user_id: str | None = None,
+        workspace_id: str | None = None,
+    ) -> StrategyVersionRecord | None:
         with self._session_factory() as session:
-            item = session.get(StrategyVersionORM, version_id)
+            statement = select(StrategyVersionORM).where(StrategyVersionORM.version_id == version_id)
+            if user_id is not None:
+                statement = statement.where(StrategyVersionORM.user_id == user_id)
+            if workspace_id is not None:
+                statement = statement.where(StrategyVersionORM.workspace_id == workspace_id)
+            item = session.scalar(statement)
             if item is None:
                 return None
             return StrategyVersionRecord(
                 project_id=item.project_id,
                 version_id=item.version_id,
+                user_id=item.user_id,
+                workspace_id=item.workspace_id,
                 title=item.title,
                 natural_language_prompt=item.natural_language_prompt,
                 strategy_dsl=json.loads(item.strategy_dsl_json),
@@ -406,9 +504,20 @@ class SQLAlchemyTaskRepository:
             session.commit()
         return record
 
-    def get(self, task_id: str) -> TaskRecord | None:
+    def get(
+        self,
+        task_id: str,
+        *,
+        user_id: str | None = None,
+        workspace_id: str | None = None,
+    ) -> TaskRecord | None:
         with self._session_factory() as session:
-            orm = session.get(TaskORM, task_id)
+            statement = select(TaskORM).where(TaskORM.id == task_id)
+            if user_id is not None:
+                statement = statement.where(TaskORM.user_id == user_id)
+            if workspace_id is not None:
+                statement = statement.where(TaskORM.workspace_id == workspace_id)
+            orm = session.scalar(statement)
             return self._from_orm(orm) if orm else None
 
     def mark_queued(self, task_id: str) -> TaskRecord | None:
@@ -481,11 +590,21 @@ class SQLAlchemyTaskRepository:
                 statement = statement.where(TaskORM.kind == kind)
             return list(session.scalars(statement))
 
-    def list(self, kind: str | None = None) -> list[TaskRecord]:
+    def list(
+        self,
+        kind: str | None = None,
+        *,
+        user_id: str | None = None,
+        workspace_id: str | None = None,
+    ) -> list[TaskRecord]:
         with self._session_factory() as session:
             statement = select(TaskORM).order_by(TaskORM.created_at.desc())
             if kind is not None:
                 statement = statement.where(TaskORM.kind == kind)
+            if user_id is not None:
+                statement = statement.where(TaskORM.user_id == user_id)
+            if workspace_id is not None:
+                statement = statement.where(TaskORM.workspace_id == workspace_id)
             items = session.scalars(statement).all()
             return [self._from_orm(item) for item in items]
 
@@ -493,6 +612,7 @@ class SQLAlchemyTaskRepository:
         return TaskORM(
             id=record.id,
             kind=record.kind,
+            user_id=record.user_id,
             status=record.status.value,
             progress_pct=record.progress_pct,
             workspace_id=record.workspace_id,
@@ -528,6 +648,7 @@ class SQLAlchemyTaskRepository:
         return TaskRecord(
             id=orm.id,
             kind=orm.kind,
+            user_id=orm.user_id,
             status=TaskStatus(orm.status),
             progress_pct=orm.progress_pct,
             workspace_id=orm.workspace_id,
@@ -562,9 +683,20 @@ class SQLAlchemyTradeUploadRepository:
             session.commit()
         return record
 
-    def get(self, upload_id: str) -> TradeUploadRecord | None:
+    def get(
+        self,
+        upload_id: str,
+        *,
+        user_id: str | None = None,
+        workspace_id: str | None = None,
+    ) -> TradeUploadRecord | None:
         with self._session_factory() as session:
-            orm = session.get(TradeUploadORM, upload_id)
+            statement = select(TradeUploadORM).where(TradeUploadORM.upload_id == upload_id)
+            if user_id is not None:
+                statement = statement.where(TradeUploadORM.user_id == user_id)
+            if workspace_id is not None:
+                statement = statement.where(TradeUploadORM.workspace_id == workspace_id)
+            orm = session.scalar(statement)
             return self._from_orm(orm) if orm else None
 
     def update(self, record: TradeUploadRecord) -> TradeUploadRecord:
@@ -575,6 +707,8 @@ class SQLAlchemyTradeUploadRepository:
                 session.add(orm)
             else:
                 orm.source_file_name = record.source_file_name
+                orm.user_id = record.user_id
+                orm.workspace_id = record.workspace_id
                 orm.raw_text = record.raw_text
                 orm.status = record.status
                 orm.detected_columns_json = json.dumps(
@@ -593,6 +727,8 @@ class SQLAlchemyTradeUploadRepository:
     def _to_orm(self, record: TradeUploadRecord) -> TradeUploadORM:
         return TradeUploadORM(
             upload_id=record.upload_id,
+            user_id=record.user_id,
+            workspace_id=record.workspace_id,
             source_file_name=record.source_file_name,
             raw_text=record.raw_text,
             status=record.status,
@@ -608,6 +744,8 @@ class SQLAlchemyTradeUploadRepository:
     def _from_orm(self, orm: TradeUploadORM) -> TradeUploadRecord:
         return TradeUploadRecord(
             upload_id=orm.upload_id,
+            user_id=orm.user_id,
+            workspace_id=orm.workspace_id,
             source_file_name=orm.source_file_name,
             raw_text=orm.raw_text,
             status=orm.status,

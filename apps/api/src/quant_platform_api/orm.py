@@ -13,6 +13,8 @@ class StrategyVersionORM(Base):
 
     version_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     project_id: Mapped[str] = mapped_column(String(64), index=True)
+    user_id: Mapped[str] = mapped_column(String(64), index=True, default="")
+    workspace_id: Mapped[str] = mapped_column(String(64), index=True, default="ws_default")
     title: Mapped[str] = mapped_column(String(255))
     natural_language_prompt: Mapped[str] = mapped_column(Text())
     strategy_dsl_json: Mapped[str] = mapped_column(Text())
@@ -60,6 +62,7 @@ class TaskORM(Base):
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     kind: Mapped[str] = mapped_column(String(32), index=True)
+    user_id: Mapped[str] = mapped_column(String(64), index=True, default="")
     status: Mapped[str] = mapped_column(String(32), index=True)
     progress_pct: Mapped[int] = mapped_column(Integer())
     workspace_id: Mapped[str] = mapped_column(String(64), default="ws_default")
@@ -86,6 +89,8 @@ class TradeUploadORM(Base):
     __tablename__ = "trade_uploads"
 
     upload_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(64), index=True, default="")
+    workspace_id: Mapped[str] = mapped_column(String(64), index=True, default="ws_default")
     source_file_name: Mapped[str] = mapped_column(String(255))
     raw_text: Mapped[str] = mapped_column(Text())
     status: Mapped[str] = mapped_column(String(32), index=True)

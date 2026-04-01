@@ -148,6 +148,7 @@ class UserLoginRequest(BaseModel):
 
 class UserProfile(BaseModel):
     user_id: str
+    workspace_id: str
     username: str
     contact: str
     role: str
@@ -169,6 +170,8 @@ class TradeRecordItem(BaseModel):
 
 class TradeUploadRecord(BaseModel):
     upload_id: str = Field(default_factory=lambda: f"upload_{uuid4().hex[:8]}")
+    user_id: str
+    workspace_id: str
     source_file_name: str
     raw_text: str
     status: str = "uploaded"
@@ -239,6 +242,7 @@ class ProjectVersionCreated(BaseModel):
 class TaskRecord(BaseModel):
     id: str = Field(default_factory=lambda: uuid4().hex)
     kind: str
+    user_id: str = ""
     status: TaskStatus = TaskStatus.PENDING
     progress_pct: int = 0
     workspace_id: str = "ws_default"
@@ -264,6 +268,8 @@ class TaskRecord(BaseModel):
 class StrategyVersionRecord(BaseModel):
     project_id: str = Field(default_factory=lambda: f"proj_{uuid4().hex[:8]}")
     version_id: str = Field(default_factory=lambda: f"ver_{uuid4().hex[:8]}")
+    user_id: str
+    workspace_id: str
     title: str
     natural_language_prompt: str
     strategy_dsl: dict[str, Any]

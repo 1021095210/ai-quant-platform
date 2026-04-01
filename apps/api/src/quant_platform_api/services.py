@@ -157,12 +157,16 @@ class StrategyService:
     def create_project(
         self,
         *,
+        user_id: str,
+        workspace_id: str,
         title: str,
         natural_language_prompt: str,
         strategy_dsl: dict[str, Any],
         strategy_python: str | None = None,
     ) -> StrategyVersionRecord:
         record = StrategyVersionRecord(
+            user_id=user_id,
+            workspace_id=workspace_id,
             title=title,
             natural_language_prompt=natural_language_prompt,
             strategy_dsl=strategy_dsl,
@@ -170,11 +174,26 @@ class StrategyService:
         )
         return self._repository.create(record)
 
-    def list_projects(self) -> list[StrategyVersionRecord]:
-        return self._repository.list_projects()
+    def list_projects(
+        self,
+        *,
+        user_id: str,
+        workspace_id: str,
+    ) -> list[StrategyVersionRecord]:
+        return self._repository.list_projects(user_id=user_id, workspace_id=workspace_id)
 
-    def get_project(self, version_id: str) -> StrategyVersionRecord | None:
-        return self._repository.get(version_id)
+    def get_project(
+        self,
+        version_id: str,
+        *,
+        user_id: str,
+        workspace_id: str,
+    ) -> StrategyVersionRecord | None:
+        return self._repository.get(
+            version_id,
+            user_id=user_id,
+            workspace_id=workspace_id,
+        )
 
     def generate_strategy(self, request: StrategyGenerateRequest) -> dict[str, Any]:
         prompt = request.prompt
@@ -398,11 +417,17 @@ class AuthService:
     def _to_profile(self, record: UserRecord) -> UserProfile:
         return UserProfile(
             user_id=record.user_id,
+            workspace_id=self.workspace_id_for_user_id(record.user_id),
             username=record.username,
             contact=record.contact,
             role=record.role,
             created_at=record.created_at,
         )
+
+    @staticmethod
+    def workspace_id_for_user_id(user_id: str) -> str:
+        normalized = user_id.replace("user_", "")
+        return f"ws_{normalized[:12] or 'default'}"
 
 
 class IndicatorService:
@@ -516,22 +541,50 @@ class TradeUploadService:
     def __init__(self, repository: TradeUploadRepository) -> None:
         self._repository = repository
 
-    def create_upload(self, source_file_name: str, raw_text: str) -> TradeUploadRecord:
+    def create_upload(
+        self,
+        source_file_name: str,
+        raw_text: str,
+        *,
+        user_id: str,
+        workspace_id: str,
+    ) -> TradeUploadRecord:
         detected_columns = self._detect_columns(raw_text)
         record = TradeUploadRecord(
+            user_id=user_id,
+            workspace_id=workspace_id,
             source_file_name=source_file_name,
             raw_text=raw_text,
             detected_columns=detected_columns,
         )
         return self._repository.create(record)
 
-    def get_upload(self, upload_id: str) -> TradeUploadRecord | None:
-        return self._repository.get(upload_id)
+    def get_upload(
+        self,
+        upload_id: str,
+        *,
+        user_id: str | None = None,
+        workspace_id: str | None = None,
+    ) -> TradeUploadRecord | None:
+        return self._repository.get(
+            upload_id,
+            user_id=user_id,
+            workspace_id=workspace_id,
+        )
 
     def parse_upload(
-        self, upload_id: str, column_mapping: dict[str, str]
+        self,
+        upload_id: str,
+        column_mapping: dict[str, str],
+        *,
+        user_id: str | None = None,
+        workspace_id: str | None = None,
     ) -> TradeUploadRecord | None:
-        record = self._repository.get(upload_id)
+        record = self._repository.get(
+            upload_id,
+            user_id=user_id,
+            workspace_id=workspace_id,
+        )
         if record is None:
             return None
 
@@ -590,12 +643,17 @@ class AsyncTaskService:
         payload: dict[str, Any],
         build_result: Callable[[str, dict[str, Any]], dict[str, Any]],
         request_id: str,
+        user_id: str,
+        workspace_id: str,
         idempotency_key: str | None = None,
     ) -> TaskRecord:
         record = self._repository.create(
             TaskRecord(
                 kind=kind,
+                user_id=user_id,
                 payload=payload,
+                workspace_id=workspace_id,
+                created_by=user_id,
                 request_id=request_id,
                 trace_id=request_id,
                 idempotency_key=idempotency_key,
@@ -613,8 +671,18 @@ class AsyncTaskService:
         assert latest is not None
         return latest
 
-    def get(self, task_id: str) -> TaskRecord | None:
-        return self._repository.get(task_id)
+    def get(
+        self,
+        task_id: str,
+        *,
+        user_id: str | None = None,
+        workspace_id: str | None = None,
+    ) -> TaskRecord | None:
+        return self._repository.get(
+            task_id,
+            user_id=user_id,
+            workspace_id=workspace_id,
+        )
 
     def cancel(self, task_id: str) -> TaskRecord | None:
         return self._repository.cancel(task_id)
@@ -688,7 +756,11 @@ def build_backtest_result(
     market_data_service: MarketDataService,
 ) -> Callable[[str, dict[str, Any]], dict[str, Any]]:
     def _builder(task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
-        project = strategy_service.get_project(payload["strategy_version_id"])
+        project = strategy_service.get_project(
+            payload["strategy_version_id"],
+            user_id=payload.get("user_id", ""),
+            workspace_id=payload.get("workspace_id", "ws_default"),
+        )
         if project is None:
             raise TaskExecutionError("NOT_FOUND", "strategy version not found")
 
