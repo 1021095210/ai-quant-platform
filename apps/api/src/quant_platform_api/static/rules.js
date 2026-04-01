@@ -4,6 +4,7 @@ activateNav("/rules");
 
 const nodes = {
   defaultRules: document.querySelector("#default-rules"),
+  resetDefaultRulesBtn: document.querySelector("#reset-default-rules-btn"),
   saveDefaultRulesBtn: document.querySelector("#save-default-rules-btn"),
   glossaryLibrary: document.querySelector("#glossary-library"),
   term: document.querySelector("#glossary-term"),
@@ -138,6 +139,16 @@ async function saveDefaultRules() {
   setStatus(`默认规则已保存，更新人：${payload.data.updated_by}。`);
 }
 
+async function resetDefaultRules() {
+  setStatus("正在恢复平台默认规则...");
+  const payload = await api("/api/v1/rules/defaults/reset", {
+    method: "POST",
+  });
+  renderRules(payload.data.items);
+  bindRuleItemRemoveActions();
+  setStatus(`平台默认规则已恢复，更新人：${payload.data.updated_by}。`);
+}
+
 function bindRuleItemRemoveActions() {
   nodes.defaultRules.querySelectorAll("[data-remove-rule-item]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -147,6 +158,7 @@ function bindRuleItemRemoveActions() {
 }
 
 document.querySelector("#save-glossary-btn").addEventListener("click", handle(saveGlossaryTerm));
+nodes.resetDefaultRulesBtn.addEventListener("click", handle(resetDefaultRules));
 nodes.saveDefaultRulesBtn.addEventListener("click", handle(saveDefaultRules));
 
 loadPage()

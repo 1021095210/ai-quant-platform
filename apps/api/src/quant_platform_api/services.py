@@ -841,6 +841,12 @@ class RuleService:
         records = self._default_rule_repository.replace_all(normalized)
         return [item.model_dump(mode="json") for item in records]
 
+    def reset_default_rules(self) -> list[dict[str, Any]]:
+        records = self._default_rule_repository.replace_all(
+            _builtin_default_rule_sections()
+        )
+        return [item.model_dump(mode="json") for item in records]
+
     def list_glossary_terms(self) -> list[dict[str, Any]]:
         custom_terms = [
             {

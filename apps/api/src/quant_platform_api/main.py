@@ -389,6 +389,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             },
         )
 
+    @app.post(f"{app_settings.api_prefix}/rules/defaults/reset")
+    def reset_default_rules(request: Request) -> JSONResponse:
+        current_user = _require_current_user(request, services.auth_service)
+        items = services.rule_service.reset_default_rules()
+        return _success_response(
+            request,
+            data={
+                "items": items,
+                "updated_by": current_user.username,
+            },
+        )
+
     @app.get(f"{app_settings.api_prefix}/rules/glossary")
     def list_glossary_terms(request: Request) -> JSONResponse:
         return _success_response(

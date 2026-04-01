@@ -110,6 +110,8 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertIn("text/html", response.headers["content-type"])
         self.assertIn("量化研究平台", response.text)
         self.assertNotIn("中国股票 / ETF 量化研究平台", response.text)
+        self.assertIn("在统一研究工作流中管理策略、回测与交易复盘。", response.text)
+        self.assertIn("能力状态", response.text)
         self.assertIn("首页", response.text)
 
     def test_public_auth_pages_are_accessible(self) -> None:
@@ -412,6 +414,47 @@ class QuantPlatformApiTests(unittest.TestCase):
             )
         )
 
+    def test_default_rules_can_be_reset_to_platform_defaults(self) -> None:
+        client = self._build_client()
+        self._login(client)
+
+        client.put(
+            "/api/v1/rules/defaults",
+            json={
+                "items": [
+                    {
+                        "section_id": "rule_cn_equity",
+                        "section": "A股默认研究规则",
+                        "items": [
+                            {
+                                "title": "临时规则",
+                                "description": "临时描述",
+                            }
+                        ],
+                    }
+                ]
+            },
+        )
+
+        reset_response = client.post("/api/v1/rules/defaults/reset")
+
+        self.assertEqual(200, reset_response.status_code)
+        items = reset_response.json()["data"]["items"]
+        self.assertTrue(
+            any(
+                rule["title"] == "默认执行参数应视平台设置和策略设置而定"
+                for section in items
+                for rule in section["items"]
+            )
+        )
+        self.assertFalse(
+            any(
+                rule["title"] == "临时规则"
+                for section in items
+                for rule in section["items"]
+            )
+        )
+
     def test_rules_page_reflects_multi_market_copy(self) -> None:
         client = self._build_client()
         self._login(client)
@@ -422,6 +465,7 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertIn("多市场默认研究规则与 AI 术语理解库", response.text)
         self.assertIn("覆盖 A股、美股、加密货币和伦敦金等市场语境", response.text)
         self.assertIn("保存默认规则", response.text)
+        self.assertIn("恢复平台默认值", response.text)
 
     def test_create_strategy_project_returns_project_and_version_ids(self) -> None:
         client = self._build_client()
