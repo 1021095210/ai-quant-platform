@@ -122,3 +122,12 @@ class GlossaryTermORM(Base):
     meaning: Mapped[str] = mapped_column(Text())
     example: Mapped[str | None] = mapped_column(Text(), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+
+class DefaultRuleSectionORM(Base):
+    __tablename__ = "default_rule_sections"
+
+    section_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    section: Mapped[str] = mapped_column(String(255), index=True)
+    items_json: Mapped[str] = mapped_column(Text(), default="[]")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)

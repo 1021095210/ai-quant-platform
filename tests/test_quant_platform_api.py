@@ -365,6 +365,53 @@ class QuantPlatformApiTests(unittest.TestCase):
         items = glossary.json()["data"]["items"]
         self.assertTrue(any(item["term"] == "地天板" for item in items))
 
+    def test_default_rules_can_be_updated_after_login(self) -> None:
+        client = self._build_client()
+        self._login(client)
+
+        updated = client.put(
+            "/api/v1/rules/defaults",
+            json={
+                "items": [
+                    {
+                        "section_id": "rule_cn_equity",
+                        "section": "A股默认研究规则",
+                        "items": [
+                            {
+                                "title": "执行参数按平台设置决定",
+                                "description": "默认周期、复权和成交方式应以当前平台设置和策略设置为准，而不是固定写死为日线前复权次日开盘成交。",
+                            }
+                        ],
+                    },
+                    {
+                        "section_id": "rule_crypto",
+                        "section": "加密货币默认研究规则",
+                        "items": [
+                            {
+                                "title": "允许分钟级执行",
+                                "description": "如果执行层支持，分钟级信号可以在盘中触发和成交。",
+                            }
+                        ],
+                    },
+                ]
+            },
+        )
+
+        self.assertEqual(200, updated.status_code)
+        self.assertEqual("1111", updated.json()["data"]["updated_by"])
+
+        listed = client.get("/api/v1/rules/defaults")
+        self.assertEqual(200, listed.status_code)
+        items = listed.json()["data"]["items"]
+        self.assertTrue(any(section["section"] == "A股默认研究规则" for section in items))
+        self.assertTrue(
+            any(
+                rule["title"] == "执行参数按平台设置决定"
+                for section in items
+                for rule in section["items"]
+            )
+        )
+
     def test_rules_page_reflects_multi_market_copy(self) -> None:
         client = self._build_client()
         self._login(client)
@@ -374,6 +421,7 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertEqual(200, response.status_code)
         self.assertIn("多市场默认研究规则与 AI 术语理解库", response.text)
         self.assertIn("覆盖 A股、美股、加密货币和伦敦金等市场语境", response.text)
+        self.assertIn("保存默认规则", response.text)
 
     def test_create_strategy_project_returns_project_and_version_ids(self) -> None:
         client = self._build_client()

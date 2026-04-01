@@ -17,6 +17,9 @@ from quant_platform_api.models import (
     CustomIndicatorCreateRequest,
     CustomIndicatorGenerateRequest,
     CustomIndicatorRecord,
+    DefaultRuleItem,
+    DefaultRuleSection,
+    DefaultRuleUpdateRequest,
     ErrorPayload,
     GlossaryTermCreateRequest,
     GlossaryTermRecord,
@@ -31,6 +34,7 @@ from quant_platform_api.models import (
 )
 from quant_platform_api.repository import (
     CustomIndicatorRepository,
+    DefaultRuleRepository,
     UserRepository,
     UserSessionRepository,
     GlossaryTermRepository,
@@ -91,6 +95,7 @@ BUILTIN_INDICATORS: list[dict[str, Any]] = [
 
 DEFAULT_RULE_SECTIONS: list[dict[str, Any]] = [
     {
+        "section_id": "rule_cn_equity",
         "section": "A股默认研究规则",
         "items": [
             {
@@ -102,8 +107,8 @@ DEFAULT_RULE_SECTIONS: list[dict[str, Any]] = [
                 "description": "策略执行默认按整手撮合，避免生成不符合 A 股习惯的下单描述。",
             },
             {
-                "title": "默认使用日线、前复权、次日开盘成交",
-                "description": "当前平台以研究和教学为主，回测默认不做日内撮合，避免把信号强行解释成盘中成交。",
+                "title": "默认执行参数应视平台设置和策略设置而定",
+                "description": "平台初始建议可从日线、前复权、次日开盘成交起步，但实际应允许切换到其他周期、复权模式和盘中成交逻辑。",
             },
             {
                 "title": "ETF 研究允许与股票共用策略描述",
@@ -112,6 +117,7 @@ DEFAULT_RULE_SECTIONS: list[dict[str, Any]] = [
         ],
     },
     {
+        "section_id": "rule_us_equity",
         "section": "美股默认研究规则",
         "items": [
             {
@@ -129,6 +135,7 @@ DEFAULT_RULE_SECTIONS: list[dict[str, Any]] = [
         ],
     },
     {
+        "section_id": "rule_crypto",
         "section": "加密货币默认研究规则",
         "items": [
             {
@@ -146,6 +153,7 @@ DEFAULT_RULE_SECTIONS: list[dict[str, Any]] = [
         ],
     },
     {
+        "section_id": "rule_london_gold",
         "section": "伦敦金默认研究规则",
         "items": [
             {
@@ -163,6 +171,17 @@ DEFAULT_RULE_SECTIONS: list[dict[str, Any]] = [
         ],
     }
 ]
+
+
+def _builtin_default_rule_sections() -> list[DefaultRuleSection]:
+    return [
+        DefaultRuleSection(
+            section_id=item["section_id"],
+            section=item["section"],
+            items=[DefaultRuleItem(**rule) for rule in item.get("items", [])],
+        )
+        for item in DEFAULT_RULE_SECTIONS
+    ]
 
 DEFAULT_GLOSSARY_TERMS: list[dict[str, Any]] = [
     {
@@ -778,11 +797,49 @@ class IndicatorService:
 
 
 class RuleService:
-    def __init__(self, repository: GlossaryTermRepository) -> None:
-        self._repository = repository
+    def __init__(
+        self,
+        glossary_repository: GlossaryTermRepository,
+        default_rule_repository: DefaultRuleRepository,
+    ) -> None:
+        self._glossary_repository = glossary_repository
+        self._default_rule_repository = default_rule_repository
 
     def list_default_rules(self) -> list[dict[str, Any]]:
-        return DEFAULT_RULE_SECTIONS
+        records = self._default_rule_repository.list()
+        if not records:
+            records = _builtin_default_rule_sections()
+            self._default_rule_repository.replace_all(records)
+        return [item.model_dump(mode="json") for item in records]
+
+    def update_default_rules(
+        self,
+        request: DefaultRuleUpdateRequest,
+    ) -> list[dict[str, Any]]:
+        normalized: list[DefaultRuleSection] = []
+        for section in request.items:
+            title = section.section.strip()
+            if not title:
+                continue
+            items = [
+                DefaultRuleItem(
+                    title=item.title.strip(),
+                    description=item.description.strip(),
+                )
+                for item in section.items
+                if item.title.strip() and item.description.strip()
+            ]
+            normalized.append(
+                DefaultRuleSection(
+                    section_id=section.section_id,
+                    section=title,
+                    items=items,
+                )
+            )
+        if not normalized:
+            normalized = _builtin_default_rule_sections()
+        records = self._default_rule_repository.replace_all(normalized)
+        return [item.model_dump(mode="json") for item in records]
 
     def list_glossary_terms(self) -> list[dict[str, Any]]:
         custom_terms = [
@@ -793,7 +850,7 @@ class RuleService:
                 "example": item.example,
                 "source": "custom",
             }
-            for item in self._repository.list()
+            for item in self._glossary_repository.list()
         ]
         default_terms = [
             {
@@ -815,7 +872,7 @@ class RuleService:
             meaning=request.meaning,
             example=request.example,
         )
-        return self._repository.create(record)
+        return self._glossary_repository.create(record)
 
 
 class TradeUploadService:

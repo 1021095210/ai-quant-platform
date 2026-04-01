@@ -319,6 +319,22 @@ class GlossaryTermRecord(BaseModel):
     created_at: datetime = Field(default_factory=utcnow)
 
 
+class DefaultRuleItem(BaseModel):
+    title: str
+    description: str
+
+
+class DefaultRuleSection(BaseModel):
+    section_id: str = Field(default_factory=lambda: f"rule_section_{uuid4().hex[:8]}")
+    section: str
+    items: list[DefaultRuleItem] = Field(default_factory=list)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class DefaultRuleUpdateRequest(BaseModel):
+    items: list[DefaultRuleSection] = Field(default_factory=list)
+
+
 class UserRecord(BaseModel):
     user_id: str = Field(default_factory=lambda: f"user_{uuid4().hex[:10]}")
     username: str

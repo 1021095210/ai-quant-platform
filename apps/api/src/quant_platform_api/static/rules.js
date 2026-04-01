@@ -4,6 +4,7 @@ activateNav("/rules");
 
 const nodes = {
   defaultRules: document.querySelector("#default-rules"),
+  saveDefaultRulesBtn: document.querySelector("#save-default-rules-btn"),
   glossaryLibrary: document.querySelector("#glossary-library"),
   term: document.querySelector("#glossary-term"),
   meaning: document.querySelector("#glossary-meaning"),
@@ -28,24 +29,55 @@ function renderRules(items) {
   nodes.defaultRules.innerHTML = items
     .map(
       (section) => `
-        <div class="list-item">
-          <strong>${section.section}</strong>
-          <div class="rule-list">
+        <div class="list-item" data-rule-section="${section.section_id}">
+          <label class="field">
+            <span>分组名称</span>
+            <input data-section-name value="${section.section}" />
+          </label>
+          <div class="rule-list" data-rule-items>
             ${(section.items || [])
-              .map(
-                (item) => `
-                  <div class="rule-item">
-                    <h4>${item.title}</h4>
-                    <p>${item.description}</p>
-                  </div>
-                `,
-              )
+              .map((item, index) => renderRuleItem(section.section_id, item, index))
               .join("")}
+          </div>
+          <div class="inline-actions" style="margin-top: 12px">
+            <button type="button" class="btn ghost" data-add-rule-item="${section.section_id}">新增规则项</button>
           </div>
         </div>
       `,
     )
     .join("");
+
+  nodes.defaultRules.querySelectorAll("[data-add-rule-item]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const sectionNode = button.closest("[data-rule-section]");
+      const itemContainer = sectionNode.querySelector("[data-rule-items]");
+      const nextIndex = itemContainer.querySelectorAll("[data-rule-item]").length;
+      itemContainer.insertAdjacentHTML(
+        "beforeend",
+        renderRuleItem(button.dataset.addRuleItem, { title: "", description: "" }, nextIndex),
+      );
+      bindRuleItemRemoveActions();
+    });
+  });
+}
+
+function renderRuleItem(sectionId, item, index) {
+  return `
+                  <div class="rule-item stack" data-rule-item="${sectionId}_${index}">
+                    <label class="field">
+                      <span>规则标题</span>
+                      <input data-rule-title value="${item.title || ""}" />
+                    </label>
+                    <label class="field">
+                      <span>规则说明</span>
+                      <textarea data-rule-description>${item.description || ""}</textarea>
+                    </label>
+                    <div class="inline-actions">
+                      <button type="button" class="btn ghost" data-remove-rule-item>删除这一项</button>
+                    </div>
+                  </div>
+                `,
+  `;
 }
 
 function renderGlossary(items) {
@@ -82,6 +114,41 @@ async function saveGlossaryTerm() {
   setStatus("术语解释已保存，策略工坊现在会把它当成 AI 的补充语义。");
 }
 
-document.querySelector("#save-glossary-btn").addEventListener("click", handle(saveGlossaryTerm));
+function collectDefaultRules() {
+  return Array.from(nodes.defaultRules.querySelectorAll("[data-rule-section]")).map((sectionNode) => ({
+    section_id: sectionNode.dataset.ruleSection,
+    section: sectionNode.querySelector("[data-section-name]").value,
+    items: Array.from(sectionNode.querySelectorAll("[data-rule-item]")).map((itemNode) => ({
+      title: itemNode.querySelector("[data-rule-title]").value,
+      description: itemNode.querySelector("[data-rule-description]").value,
+    })),
+  }));
+}
 
-loadPage().catch((error) => setStatus(error.message));
+async function saveDefaultRules() {
+  setStatus("正在保存默认规则...");
+  const payload = await api("/api/v1/rules/defaults", {
+    method: "PUT",
+    body: JSON.stringify({
+      items: collectDefaultRules(),
+    }),
+  });
+  renderRules(payload.data.items);
+  bindRuleItemRemoveActions();
+  setStatus(`默认规则已保存，更新人：${payload.data.updated_by}。`);
+}
+
+function bindRuleItemRemoveActions() {
+  nodes.defaultRules.querySelectorAll("[data-remove-rule-item]").forEach((button) => {
+    button.addEventListener("click", () => {
+      button.closest("[data-rule-item]").remove();
+    });
+  });
+}
+
+document.querySelector("#save-glossary-btn").addEventListener("click", handle(saveGlossaryTerm));
+nodes.saveDefaultRulesBtn.addEventListener("click", handle(saveDefaultRules));
+
+loadPage()
+  .then(() => bindRuleItemRemoveActions())
+  .catch((error) => setStatus(error.message));

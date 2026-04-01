@@ -26,6 +26,7 @@ from quant_platform_api.models import (
     CustomIndicatorCreateRequest,
     CustomIndicatorGenerateRequest,
     DataSnapshotConfig,
+    DefaultRuleUpdateRequest,
     DatasetSnapshotRecord,
     ErrorEnvelope,
     ErrorPayload,
@@ -43,6 +44,7 @@ from quant_platform_api.models import (
 )
 from quant_platform_api.repository import (
     SQLAlchemyCustomIndicatorRepository,
+    SQLAlchemyDefaultRuleRepository,
     SQLAlchemyDatasetSnapshotRepository,
     SQLAlchemyGlossaryTermRepository,
     SQLAlchemyStrategyRepository,
@@ -90,6 +92,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     task_repository = SQLAlchemyTaskRepository(session_factory)
     indicator_repository = SQLAlchemyCustomIndicatorRepository(session_factory)
     glossary_repository = SQLAlchemyGlossaryTermRepository(session_factory)
+    default_rule_repository = SQLAlchemyDefaultRuleRepository(session_factory)
     user_repository = SQLAlchemyUserRepository(session_factory)
     user_session_repository = SQLAlchemyUserSessionRepository(session_factory)
     primary_market_provider = None
@@ -120,7 +123,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             glossary_repository,
         ),
         indicator_service=IndicatorService(indicator_repository),
-        rule_service=RuleService(glossary_repository),
+        rule_service=RuleService(glossary_repository, default_rule_repository),
         trade_upload_service=TradeUploadService(trade_upload_repository),
         market_data_service=market_data_service,
         backtest_service=AsyncTaskService(
@@ -369,6 +372,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return _success_response(
             request,
             data={"items": services.rule_service.list_default_rules()},
+        )
+
+    @app.put(f"{app_settings.api_prefix}/rules/defaults")
+    def update_default_rules(
+        request: Request,
+        payload: DefaultRuleUpdateRequest,
+    ) -> JSONResponse:
+        current_user = _require_current_user(request, services.auth_service)
+        items = services.rule_service.update_default_rules(payload)
+        return _success_response(
+            request,
+            data={
+                "items": items,
+                "updated_by": current_user.username,
+            },
         )
 
     @app.get(f"{app_settings.api_prefix}/rules/glossary")

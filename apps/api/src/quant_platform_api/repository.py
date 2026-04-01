@@ -5,11 +5,12 @@ from copy import deepcopy
 from threading import Lock
 from typing import Protocol
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import sessionmaker
 
 from quant_platform_api.models import (
     CustomIndicatorRecord,
+    DefaultRuleSection,
     DatasetSnapshotRecord,
     ErrorPayload,
     GlossaryTermRecord,
@@ -24,6 +25,7 @@ from quant_platform_api.models import (
 )
 from quant_platform_api.orm import (
     CustomIndicatorORM,
+    DefaultRuleSectionORM,
     DatasetSnapshotORM,
     GlossaryTermORM,
     StrategyVersionORM,
@@ -131,6 +133,12 @@ class GlossaryTermRepository(Protocol):
     def create(self, record: GlossaryTermRecord) -> GlossaryTermRecord: ...
 
     def list(self) -> list[GlossaryTermRecord]: ...
+
+
+class DefaultRuleRepository(Protocol):
+    def list(self) -> list[DefaultRuleSection]: ...
+
+    def replace_all(self, records: list[DefaultRuleSection]) -> list[DefaultRuleSection]: ...
 
 
 class InMemoryTaskRepository:
@@ -833,3 +841,41 @@ class SQLAlchemyGlossaryTermRepository:
                 )
                 for item in items
             ]
+
+
+class SQLAlchemyDefaultRuleRepository:
+    def __init__(self, session_factory: sessionmaker) -> None:
+        self._session_factory = session_factory
+
+    def list(self) -> list[DefaultRuleSection]:
+        with self._session_factory() as session:
+            items = session.scalars(
+                select(DefaultRuleSectionORM).order_by(DefaultRuleSectionORM.updated_at.asc())
+            ).all()
+            return [
+                DefaultRuleSection(
+                    section_id=item.section_id,
+                    section=item.section,
+                    items=json.loads(item.items_json),
+                    updated_at=item.updated_at,
+                )
+                for item in items
+            ]
+
+    def replace_all(self, records: list[DefaultRuleSection]) -> list[DefaultRuleSection]:
+        with self._session_factory() as session:
+            session.execute(delete(DefaultRuleSectionORM))
+            for record in records:
+                session.add(
+                    DefaultRuleSectionORM(
+                        section_id=record.section_id,
+                        section=record.section,
+                        items_json=json.dumps(
+                            [item.model_dump() for item in record.items],
+                            ensure_ascii=False,
+                        ),
+                        updated_at=record.updated_at,
+                    )
+                )
+            session.commit()
+        return records
