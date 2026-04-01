@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import dataclass
 from datetime import date, datetime
+import hashlib
 from io import StringIO
 import sqlite3
 from pathlib import Path
@@ -384,7 +385,61 @@ class MarketDataCacheRepository:
         end_date: str,
         source: str,
     ) -> None:
+        ingest_batch_id = self._build_ingest_batch_id(
+            ts_code=ts_code,
+            asset_type=asset_type,
+            adjustment_mode=adjustment_mode,
+            start_date=start_date,
+            end_date=end_date,
+            source=source,
+        )
         with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO instruments (
+                    instrument_id, ts_code, market, asset_type, listed_status, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(instrument_id)
+                DO UPDATE SET
+                    ts_code = excluded.ts_code,
+                    market = excluded.market,
+                    asset_type = excluded.asset_type,
+                    listed_status = excluded.listed_status,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    ts_code,
+                    ts_code,
+                    _infer_market_from_ts_code(ts_code),
+                    asset_type,
+                    "listed",
+                    datetime.utcnow().isoformat(),
+                ),
+            )
+            connection.execute(
+                """
+                INSERT INTO ingest_batches (
+                    ingest_batch_id, source, market, frequency, adjustment_mode,
+                    started_at, completed_at, status
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(ingest_batch_id)
+                DO UPDATE SET
+                    completed_at = excluded.completed_at,
+                    status = excluded.status
+                """,
+                (
+                    ingest_batch_id,
+                    source,
+                    _infer_market_from_ts_code(ts_code),
+                    "1d",
+                    adjustment_mode,
+                    datetime.utcnow().isoformat(),
+                    datetime.utcnow().isoformat(),
+                    "completed",
+                ),
+            )
             connection.executemany(
                 """
                 INSERT INTO market_bars (
@@ -446,6 +501,34 @@ class MarketDataCacheRepository:
                     datetime.utcnow().isoformat(),
                 ),
             )
+            connection.execute(
+                """
+                INSERT INTO coverage_stats (
+                    instrument_id, market, frequency, adjustment_mode,
+                    min_trade_date, max_trade_date, last_synced_at,
+                    coverage_status, ingest_batch_id
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(instrument_id, market, frequency, adjustment_mode)
+                DO UPDATE SET
+                    min_trade_date = excluded.min_trade_date,
+                    max_trade_date = excluded.max_trade_date,
+                    last_synced_at = excluded.last_synced_at,
+                    coverage_status = excluded.coverage_status,
+                    ingest_batch_id = excluded.ingest_batch_id
+                """,
+                (
+                    ts_code,
+                    _infer_market_from_ts_code(ts_code),
+                    "1d",
+                    adjustment_mode,
+                    start_date,
+                    end_date,
+                    datetime.utcnow().isoformat(),
+                    "ready",
+                    ingest_batch_id,
+                ),
+            )
             connection.commit()
 
     def get_bars(
@@ -498,8 +581,61 @@ class MarketDataCacheRepository:
     def _connect(self) -> sqlite3.Connection:
         return sqlite3.connect(self._database_path)
 
+    def _build_ingest_batch_id(
+        self,
+        *,
+        ts_code: str,
+        asset_type: str,
+        adjustment_mode: str,
+        start_date: str,
+        end_date: str,
+        source: str,
+    ) -> str:
+        digest = hashlib.sha256(
+            f"{ts_code}:{asset_type}:{adjustment_mode}:{start_date}:{end_date}:{source}".encode(
+                "utf-8"
+            )
+        ).hexdigest()
+        return f"ingest_{digest[:16]}"
+
     def _ensure_schema(self) -> None:
         with self._connect() as connection:
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS instruments (
+                    instrument_id TEXT PRIMARY KEY,
+                    ts_code TEXT NOT NULL UNIQUE,
+                    market TEXT NOT NULL,
+                    asset_type TEXT NOT NULL,
+                    listed_status TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS trading_calendar (
+                    market TEXT NOT NULL,
+                    trade_date TEXT NOT NULL,
+                    is_open INTEGER NOT NULL,
+                    PRIMARY KEY (market, trade_date)
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS ingest_batches (
+                    ingest_batch_id TEXT PRIMARY KEY,
+                    source TEXT NOT NULL,
+                    market TEXT NOT NULL,
+                    frequency TEXT NOT NULL,
+                    adjustment_mode TEXT NOT NULL,
+                    started_at TEXT NOT NULL,
+                    completed_at TEXT NOT NULL,
+                    status TEXT NOT NULL
+                )
+                """
+            )
             connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS market_bars (
@@ -532,6 +668,33 @@ class MarketDataCacheRepository:
                     source TEXT NOT NULL,
                     synced_at TEXT NOT NULL,
                     PRIMARY KEY (ts_code, asset_type, adjustment_mode, start_date, end_date)
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS coverage_stats (
+                    instrument_id TEXT NOT NULL,
+                    market TEXT NOT NULL,
+                    frequency TEXT NOT NULL,
+                    adjustment_mode TEXT NOT NULL,
+                    min_trade_date TEXT NOT NULL,
+                    max_trade_date TEXT NOT NULL,
+                    last_synced_at TEXT NOT NULL,
+                    coverage_status TEXT NOT NULL,
+                    ingest_batch_id TEXT NOT NULL,
+                    PRIMARY KEY (instrument_id, market, frequency, adjustment_mode)
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS correction_batches (
+                    correction_batch_id TEXT PRIMARY KEY,
+                    reason TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    affected_range TEXT NOT NULL,
+                    created_at TEXT NOT NULL
                 )
                 """
             )
@@ -652,6 +815,12 @@ def infer_asset_type(ts_code: str) -> str:
     if symbol.startswith(("15", "16", "50", "51", "52", "56", "58")):
         return "etf"
     return "stock"
+
+
+def _infer_market_from_ts_code(ts_code: str) -> str:
+    if ts_code.upper().endswith(".SZ"):
+        return "cn_sz"
+    return "cn_sh"
 
 
 def _safe_float(value: Any) -> float | None:

@@ -62,7 +62,7 @@ async function pollTask(url) {
   for (let index = 0; index < 20; index += 1) {
     const payload = await api(url);
     const data = payload.data;
-    if (["completed", "failed", "cancelled"].includes(data.status)) {
+    if (["succeeded", "failed", "canceled"].includes(data.status)) {
       return data;
     }
     await new Promise((resolve) => setTimeout(resolve, 250));

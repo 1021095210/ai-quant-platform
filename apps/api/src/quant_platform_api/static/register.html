@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>量化研究平台 · 注册</title>
+    <link rel="stylesheet" href="/assets/theme.css" />
+  </head>
+  <body>
+    <div class="auth-shell">
+      <section class="auth-card">
+        <section class="auth-panel">
+          <div class="identity-chip">New Workspace</div>
+          <p class="eyebrow" style="margin-top: 18px">Register</p>
+          <h1 class="auth-title">创建账户后直接进入你的用户工作台</h1>
+          <p class="auth-subtitle">
+            注册时只需要用户名、手机或邮箱、密码。注册成功后会自动登录，并跳转到工作台。
+          </p>
+          <div id="status-banner" class="status-banner">请填写注册信息。</div>
+          <form id="register-form" class="form-grid" style="margin-top: 18px">
+            <label class="field">
+              <span>用户名</span>
+              <input id="username" autocomplete="username" />
+            </label>
+            <label class="field">
+              <span>手机 / 邮箱</span>
+              <input id="contact" autocomplete="email" placeholder="13800000000 或 you@example.com" />
+            </label>
+            <label class="field">
+              <span>密码</span>
+              <input id="password" type="password" autocomplete="new-password" />
+            </label>
+            <div class="actions">
+              <button type="submit">注册并进入</button>
+              <a class="btn secondary" href="/login">已有账户登录</a>
+              <a class="btn ghost" href="/">返回首页</a>
+            </div>
+          </form>
+        </section>
+
+        <aside class="auth-aside">
+          <p class="eyebrow">Why Workspace</p>
+          <h2>注册后会获得的入口</h2>
+          <div class="list" style="margin-top: 18px">
+            <div class="list-item">
+              <strong>用户工作台</strong>
+              <div class="muted-note">查看最近策略、回测记录、账户角色和快捷入口。</div>
+            </div>
+            <div class="list-item">
+              <strong>研究链路</strong>
+              <div class="muted-note">从自然语言策略生成，到数据快照回测，再到交割单复盘，使用同一套账户状态。</div>
+            </div>
+            <div class="list-item">
+              <strong>接力友好</strong>
+              <div class="muted-note">账户、任务、数据快照和回测结果都继续落在当前 GitHub 项目代码与数据结构中。</div>
+            </div>
+          </div>
+        </aside>
+      </section>
+    </div>
+
+    <script type="module" src="/assets/register.js"></script>
+  </body>
+</html>

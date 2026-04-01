@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import sqlite3
 import tempfile
 import time
 import unittest
@@ -37,29 +38,48 @@ class QuantPlatformApiTests(unittest.TestCase):
         job_execution_mode: str = "immediate",
         job_simulation_latency_ms: int = 0,
         database_url: str | None = None,
+        market_data_database_path: str | None = None,
     ) -> TestClient:
         temp_dir = tempfile.TemporaryDirectory()
         self.addCleanup(temp_dir.cleanup)
         if database_url is None:
             database_url = f"sqlite+pysqlite:///{Path(temp_dir.name) / 'quant_platform.db'}"
+        if market_data_database_path is None:
+            market_data_database_path = str(Path(temp_dir.name) / "market_data.db")
 
         settings = Settings(
             database_url=database_url,
-            market_data_database_path=str(Path(temp_dir.name) / "market_data.db"),
+            market_data_database_path=market_data_database_path,
             market_data_provider="demo",
             job_execution_mode=job_execution_mode,
             job_simulation_latency_ms=job_simulation_latency_ms,
         )
         return TestClient(create_app(settings))
 
+    def _login(
+        self,
+        client: TestClient,
+        *,
+        username: str = "1111",
+        password: str = "618618",
+    ):
+        response = client.post(
+            "/api/v1/auth/login",
+            json={"username": username, "password": password},
+        )
+        self.assertEqual(200, response.status_code)
+        return response
+
     def test_healthz_returns_ok(self) -> None:
         client = self._build_client()
 
-        response = client.get("/healthz")
+        response = client.get("/healthz", headers={"X-Request-Id": "req_healthz_test"})
 
         self.assertEqual(200, response.status_code)
         payload = response.json()
         self.assertTrue(payload["success"])
+        self.assertEqual("req_healthz_test", payload["request_id"])
+        self.assertEqual("req_healthz_test", response.headers["X-Request-Id"])
         self.assertEqual("ok", payload["data"]["status"])
 
     def test_index_page_serves_web_app_shell(self) -> None:
@@ -70,26 +90,85 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertEqual(200, response.status_code)
         self.assertIn("text/html", response.headers["content-type"])
         self.assertIn("中国股票 / ETF 量化研究平台", response.text)
+        self.assertIn("首页", response.text)
 
-    def test_main_product_pages_are_accessible(self) -> None:
+    def test_public_auth_pages_are_accessible(self) -> None:
         client = self._build_client()
 
-        strategy_response = client.get("/strategy")
-        indicators_response = client.get("/indicators")
-        rules_response = client.get("/rules")
-        backtests_response = client.get("/backtests")
-        replay_response = client.get("/replay")
+        login_response = client.get("/login")
+        register_response = client.get("/register")
 
-        self.assertEqual(200, strategy_response.status_code)
-        self.assertEqual(200, indicators_response.status_code)
-        self.assertEqual(200, rules_response.status_code)
-        self.assertEqual(200, backtests_response.status_code)
-        self.assertEqual(200, replay_response.status_code)
-        self.assertIn("策略工坊", strategy_response.text)
-        self.assertIn("指标设置", indicators_response.text)
-        self.assertIn("规则模块", rules_response.text)
-        self.assertIn("回测中心", backtests_response.text)
-        self.assertIn("交易复盘", replay_response.text)
+        self.assertEqual(200, login_response.status_code)
+        self.assertEqual(200, register_response.status_code)
+        self.assertIn("登录后进入你的量化研究工作台", login_response.text)
+        self.assertIn("创建账户后直接进入你的用户工作台", register_response.text)
+
+    def test_protected_pages_redirect_to_login_when_unauthenticated(self) -> None:
+        client = self._build_client()
+
+        for path in ["/workspace", "/strategy", "/indicators", "/rules", "/backtests", "/replay"]:
+            response = client.get(path, follow_redirects=False)
+            self.assertEqual(302, response.status_code)
+            self.assertEqual(f"/login?next={path}", response.headers["location"])
+
+    def test_default_user_can_login_and_access_workspace(self) -> None:
+        client = self._build_client()
+
+        login_response = self._login(client, username="1111", password="618618")
+        workspace_response = client.get("/workspace")
+        me_response = client.get("/api/v1/auth/me")
+
+        self.assertIn("quant_session", login_response.cookies)
+        self.assertEqual(200, workspace_response.status_code)
+        self.assertIn("用户工作台", workspace_response.text)
+        self.assertEqual(200, me_response.status_code)
+        self.assertEqual("1111", me_response.json()["data"]["username"])
+        self.assertEqual("user", me_response.json()["data"]["role"])
+
+    def test_admin_can_login_and_access_workspace(self) -> None:
+        client = self._build_client()
+
+        self._login(client, username="admin", password="618618")
+        me_response = client.get("/api/v1/auth/me")
+
+        self.assertEqual(200, me_response.status_code)
+        self.assertEqual("admin", me_response.json()["data"]["username"])
+        self.assertEqual("admin", me_response.json()["data"]["role"])
+
+    def test_register_logs_in_new_user_and_logout_clears_session(self) -> None:
+        client = self._build_client()
+
+        register_response = client.post(
+            "/api/v1/auth/register",
+            json={
+                "username": "demo_user",
+                "contact": "demo@example.com",
+                "password": "618618",
+            },
+        )
+        me_response = client.get("/api/v1/auth/me")
+        logout_response = client.post("/api/v1/auth/logout")
+        me_after_logout = client.get("/api/v1/auth/me")
+
+        self.assertEqual(200, register_response.status_code)
+        self.assertEqual("demo_user", register_response.json()["data"]["username"])
+        self.assertIn("quant_session", register_response.cookies)
+        self.assertEqual(200, me_response.status_code)
+        self.assertEqual("demo_user", me_response.json()["data"]["username"])
+        self.assertEqual(200, logout_response.status_code)
+        self.assertEqual(401, me_after_logout.status_code)
+        self.assertEqual("UNAUTHORIZED", me_after_logout.json()["error"]["code"])
+
+    def test_login_with_invalid_password_returns_forbidden(self) -> None:
+        client = self._build_client()
+
+        response = client.post(
+            "/api/v1/auth/login",
+            json={"username": "1111", "password": "wrong-password"},
+        )
+
+        self.assertEqual(403, response.status_code)
+        self.assertEqual("FORBIDDEN", response.json()["error"]["code"])
 
     def test_generate_strategy_returns_structured_dsl(self) -> None:
         client = self._build_client()
@@ -261,7 +340,14 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertIn("asset_type", payload["strategy_python"])
 
     def test_backtest_run_completes_and_returns_metrics(self) -> None:
-        client = self._build_client()
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        database_path = Path(temp_dir.name) / "quant_platform.db"
+        market_data_path = Path(temp_dir.name) / "market_data.db"
+        client = self._build_client(
+            database_url=f"sqlite+pysqlite:///{database_path}",
+            market_data_database_path=str(market_data_path),
+        )
         created_project = client.post(
             "/api/v1/strategies/projects",
             json={
@@ -309,12 +395,27 @@ class QuantPlatformApiTests(unittest.TestCase):
         fetched = client.get(f"/api/v1/backtests/runs/{task_id}")
 
         self.assertEqual(200, fetched.status_code)
-        data = fetched.json()["data"]
-        self.assertEqual("completed", data["status"])
+        payload = fetched.json()
+        self.assertIn("request_id", payload)
+        data = payload["data"]
+        self.assertEqual("succeeded", data["status"])
+        self.assertEqual(data["status"], data["state"])
         self.assertEqual("snapshot_v1", data["dataset_snapshot_ref"])
         self.assertEqual("engine_v1", data["engine_version"])
+        self.assertTrue(data["config_revision"].startswith("cfg_"))
         self.assertIn("data_source", data)
         self.assertIn("strategy_python", data)
+
+        with sqlite3.connect(database_path) as connection:
+            snapshot_row = connection.execute(
+                """
+                SELECT market, asset_type, frequency, adjustment_mode
+                FROM dataset_snapshots
+                WHERE dataset_snapshot_ref = ?
+                """,
+                ("snapshot_v1",),
+            ).fetchone()
+        self.assertEqual(("600519.SH", "stock", "1d", "qfq"), snapshot_row)
 
     def test_list_backtest_runs_returns_history(self) -> None:
         client = self._build_client()
@@ -407,9 +508,61 @@ class QuantPlatformApiTests(unittest.TestCase):
 
         self.assertEqual(200, fetched.status_code)
         data = fetched.json()["data"]
-        self.assertEqual("completed", data["status"])
+        self.assertEqual("succeeded", data["status"])
         self.assertIn("profit_factor", data["best_metrics"])
+        self.assertTrue(data["config_revision"].startswith("cfg_"))
         self.assertTrue(data["trials"])
+
+    def test_dataset_snapshot_ref_conflict_returns_revision_conflict(self) -> None:
+        client = self._build_client()
+        created_project = client.post(
+            "/api/v1/strategies/projects",
+            json={
+                "title": "快照冲突策略",
+                "natural_language_prompt": "价格突破前高时买入",
+                "strategy_dsl": {"market": "600519.SH", "timeframe": "1d", "asset_type": "stock"},
+                "strategy_python": "def build_strategy():\n    return {}",
+            },
+        )
+        version_id = created_project.json()["data"]["version_id"]
+
+        payload = {
+            "strategy_version_id": version_id,
+            "dataset": {
+                "market": "600519.SH",
+                "timeframe": "1d",
+                "asset_type": "stock",
+                "from": "2024-01-01T00:00:00Z",
+                "to": "2024-12-31T23:59:59Z",
+            },
+            "execution_contract": {
+                "initial_capital": 100000,
+                "fee_bps": 3,
+                "slippage_bps": 2,
+                "fill_price_rule": "next_bar_open",
+                "intrabar_match_policy": "no_intrabar_fill",
+                "calendar": "cn_a_share",
+                "timezone": "Asia/Shanghai",
+                "adjustment_mode": "qfq",
+            },
+            "data_snapshot": {"dataset_snapshot_ref": "snapshot_conflict"},
+        }
+        first = client.post("/api/v1/backtests/runs", json=payload)
+        self.assertEqual(202, first.status_code)
+
+        conflicted = client.post(
+            "/api/v1/backtests/runs",
+            json={
+                **payload,
+                "dataset": {
+                    **payload["dataset"],
+                    "timeframe": "1w",
+                },
+            },
+        )
+
+        self.assertEqual(409, conflicted.status_code)
+        self.assertEqual("REVISION_CONFLICT", conflicted.json()["error"]["code"])
 
     def test_replay_analysis_can_be_cancelled_in_background_mode(self) -> None:
         client = self._build_client(
@@ -435,10 +588,11 @@ class QuantPlatformApiTests(unittest.TestCase):
         fetched = client.get(f"/api/v1/replays/analyses/{task_id}")
 
         self.assertEqual(200, cancelled.status_code)
-        self.assertEqual("cancelled", cancelled.json()["data"]["status"])
+        self.assertEqual("canceled", cancelled.json()["data"]["status"])
         self.assertEqual(200, fetched.status_code)
-        self.assertEqual("cancelled", fetched.json()["data"]["status"])
-        self.assertEqual("TASK_CANCELLED", fetched.json()["data"]["error"]["code"])
+        self.assertEqual("canceled", fetched.json()["data"]["status"])
+        self.assertEqual("STATE_CONFLICT", fetched.json()["data"]["error"]["code"])
+        self.assertTrue(fetched.json()["data"]["dataset_snapshot_ref"].startswith("replay_"))
 
     def test_unknown_task_returns_not_found(self) -> None:
         client = self._build_client()
@@ -446,7 +600,10 @@ class QuantPlatformApiTests(unittest.TestCase):
         response = client.get("/api/v1/backtests/runs/does-not-exist")
 
         self.assertEqual(404, response.status_code)
-        self.assertEqual("TASK_NOT_FOUND", response.json()["detail"]["code"])
+        payload = response.json()
+        self.assertFalse(payload["success"])
+        self.assertEqual("NOT_FOUND", payload["error"]["code"])
+        self.assertIn("request_id", payload)
 
     def test_task_persists_across_app_restarts(self) -> None:
         temp_dir = tempfile.TemporaryDirectory()
@@ -501,11 +658,12 @@ class QuantPlatformApiTests(unittest.TestCase):
         fetched = second_client.get(f"/api/v1/backtests/runs/{task_id}")
 
         self.assertEqual(200, fetched.status_code)
-        self.assertEqual("completed", fetched.json()["data"]["status"])
+        self.assertEqual("succeeded", fetched.json()["data"]["status"])
         self.assertEqual(
             "persisted_snapshot",
             fetched.json()["data"]["dataset_snapshot_ref"],
         )
+        self.assertTrue(fetched.json()["data"]["config_revision"].startswith("cfg_"))
 
     def test_trade_upload_parse_and_record_listing_flow(self) -> None:
         client = self._build_client()
@@ -557,7 +715,12 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertEqual("short", items[1]["side"])
 
     def test_replay_analysis_uses_uploaded_trade_statistics(self) -> None:
-        client = self._build_client()
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        database_path = Path(temp_dir.name) / "quant_platform.db"
+        client = self._build_client(
+            database_url=f"sqlite+pysqlite:///{database_path}",
+        )
         csv_text = (
             "symbol,side,entry_time,exit_time,pnl\n"
             "BTCUSDT,long,2024-05-01T10:00:00Z,2024-05-01T11:00:00Z,150\n"
@@ -596,10 +759,23 @@ class QuantPlatformApiTests(unittest.TestCase):
 
         self.assertEqual(200, fetched.status_code)
         data = fetched.json()["data"]
-        self.assertEqual("completed", data["status"])
+        self.assertEqual("succeeded", data["status"])
+        self.assertTrue(data["config_revision"].startswith("cfg_"))
+        self.assertTrue(data["dataset_snapshot_ref"].startswith("replay_"))
         self.assertIn("本次复盘共分析 3 笔交易", data["summary"])
         self.assertEqual("long side performed better", data["winning_patterns"][0]["pattern"])
         self.assertTrue(data["suggestion_rules"])
+
+        with sqlite3.connect(database_path) as connection:
+            snapshot_row = connection.execute(
+                """
+                SELECT market, asset_type, frequency, adjustment_mode
+                FROM dataset_snapshots
+                WHERE dataset_snapshot_ref = ?
+                """,
+                (data["dataset_snapshot_ref"],),
+            ).fetchone()
+        self.assertEqual(("cn_a_share", "stock", "1d", "qfq"), snapshot_row)
 
 
 if __name__ == "__main__":

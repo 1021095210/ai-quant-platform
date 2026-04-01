@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>量化研究平台 · 登录</title>
+    <link rel="stylesheet" href="/assets/theme.css" />
+  </head>
+  <body>
+    <div class="auth-shell">
+      <section class="auth-card">
+        <section class="auth-panel">
+          <div class="identity-chip">Quant Platform</div>
+          <p class="eyebrow" style="margin-top: 18px">Sign In</p>
+          <h1 class="auth-title">登录后进入你的量化研究工作台</h1>
+          <p class="auth-subtitle">
+            登录后可访问用户工作台、策略工坊、指标设置、规则模块、回测中心和交易复盘。
+          </p>
+          <div id="status-banner" class="status-banner">请输入用户名和密码。</div>
+          <form id="login-form" class="form-grid" style="margin-top: 18px">
+            <label class="field">
+              <span>用户名</span>
+              <input id="username" autocomplete="username" value="1111" />
+            </label>
+            <label class="field">
+              <span>密码</span>
+              <input id="password" type="password" autocomplete="current-password" value="618618" />
+            </label>
+            <div class="actions">
+              <button type="submit">登录并进入</button>
+              <a class="btn secondary" href="/register">去注册</a>
+              <a class="btn ghost" href="/">返回首页</a>
+            </div>
+          </form>
+        </section>
+
+        <aside class="auth-aside">
+          <p class="eyebrow">Demo Accounts</p>
+          <h2>默认测试账户</h2>
+          <div class="list" style="margin-top: 18px">
+            <div class="list-item">
+              <strong>普通用户</strong>
+              <div class="muted-note">用户名 `1111`</div>
+              <div class="muted-note">密码 `618618`</div>
+            </div>
+            <div class="list-item">
+              <strong>管理员</strong>
+              <div class="muted-note">用户名 `admin`</div>
+              <div class="muted-note">密码 `618618`</div>
+            </div>
+          </div>
+          <div class="list" style="margin-top: 18px">
+            <div class="list-item">
+              <strong>访问逻辑</strong>
+              <div class="muted-note">首页可公开访问，进入工作台和任意研究模块时会先校验登录状态。</div>
+            </div>
+            <div class="list-item">
+              <strong>注册信息</strong>
+              <div class="muted-note">支持使用手机号或邮箱作为联系信息注册新账户。</div>
+            </div>
+          </div>
+        </aside>
+      </section>
+    </div>
+
+    <script type="module" src="/assets/login.js"></script>
+  </body>
+</html>

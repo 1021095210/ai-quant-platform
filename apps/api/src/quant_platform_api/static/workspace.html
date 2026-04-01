@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>量化研究平台 · 用户工作台</title>
+    <link rel="stylesheet" href="/assets/theme.css" />
+  </head>
+  <body>
+    <div class="layout">
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand-mark">Q</div>
+          <div>
+            <h1>用户工作台</h1>
+            <p>账户入口、研究捷径、最近项目与最近回测</p>
+          </div>
+        </div>
+        <nav class="nav">
+          <a class="nav-link" data-nav href="/">首页</a>
+          <a class="nav-link" data-nav href="/workspace">工作台</a>
+          <a class="nav-link" data-nav href="/strategy">策略工坊</a>
+          <a class="nav-link" data-nav href="/indicators">指标设置</a>
+          <a class="nav-link" data-nav href="/rules">规则模块</a>
+          <a class="nav-link" data-nav href="/backtests">回测中心</a>
+          <a class="nav-link" data-nav href="/replay">交易复盘</a>
+        </nav>
+      </header>
+
+      <div id="status-banner" class="status-banner">正在加载你的工作台。</div>
+
+      <section class="hero">
+        <div class="workspace-banner">
+          <div class="identity-chip">User Workspace</div>
+          <div>
+            <p class="eyebrow">Desk</p>
+            <h2 id="workspace-title">欢迎回到你的研究工作台</h2>
+            <p id="workspace-subtitle">这里汇总你的账户身份、最近项目、最近回测和下一步操作入口。</p>
+          </div>
+          <div class="actions">
+            <a class="btn primary" href="/strategy">继续策略研究</a>
+            <a class="btn secondary" href="/backtests">进入回测中心</a>
+            <button id="logout-btn" class="btn ghost" type="button">退出登录</button>
+          </div>
+        </div>
+        <div class="hero-panel">
+          <div class="card muted">
+            <span class="mini-label">当前账户</span>
+            <strong id="user-name" class="metric-value">加载中</strong>
+          </div>
+          <div class="card muted">
+            <span class="mini-label">权限角色</span>
+            <strong id="user-role" class="metric-value">加载中</strong>
+          </div>
+        </div>
+      </section>
+
+      <section class="kpi-row" style="margin-top: 22px">
+        <div class="card">
+          <span class="mini-label">最近策略项目</span>
+          <strong id="project-count" class="metric-value">0</strong>
+        </div>
+        <div class="card">
+          <span class="mini-label">最近回测记录</span>
+          <strong id="backtest-count" class="metric-value">0</strong>
+        </div>
+        <div class="card">
+          <span class="mini-label">账户建立时间</span>
+          <strong id="user-created-at" class="metric-value">加载中</strong>
+        </div>
+      </section>
+
+      <section class="quick-grid" style="margin-top: 22px">
+        <a class="card quick-card" href="/strategy">
+          <h3>策略工坊</h3>
+          <p>从自然语言生成 Python 策略，并保存项目版本。</p>
+        </a>
+        <a class="card quick-card" href="/indicators">
+          <h3>指标设置</h3>
+          <p>整理传统指标，沉淀自己的自定义指标库。</p>
+        </a>
+        <a class="card quick-card" href="/backtests">
+          <h3>回测中心</h3>
+          <p>用统一数据快照运行回测，追踪每次结果与数据来源。</p>
+        </a>
+        <a class="card quick-card" href="/replay">
+          <h3>交易复盘</h3>
+          <p>上传交割单，识别模式并把建议回灌到策略研究。</p>
+        </a>
+      </section>
+
+      <section class="grid two" style="margin-top: 22px">
+        <section class="card">
+          <div class="panel-header">
+            <h3>最近策略项目</h3>
+            <a class="btn secondary" href="/strategy">继续编辑</a>
+          </div>
+          <div id="recent-projects" class="list empty-state">暂无策略项目。</div>
+        </section>
+        <section class="card">
+          <div class="panel-header">
+            <h3>最近回测历史</h3>
+            <a class="btn secondary" href="/backtests">查看全部</a>
+          </div>
+          <div id="recent-backtests" class="list empty-state">暂无回测记录。</div>
+        </section>
+      </section>
+
+      <section class="grid two" style="margin-top: 22px">
+        <section class="card">
+          <div class="panel-header">
+            <h3>账户信息</h3>
+          </div>
+          <div class="list">
+            <div class="list-item">
+              <strong>联系信息</strong>
+              <div id="user-contact" class="muted-note">加载中</div>
+            </div>
+            <div class="list-item">
+              <strong>当前角色</strong>
+              <div class="inline-meta">
+                <span id="user-role-badge" class="badge">user</span>
+              </div>
+            </div>
+          </div>
+        </section>
+        <section class="card">
+          <div class="panel-header">
+            <h3>推荐下一步</h3>
+          </div>
+          <div class="list">
+            <div class="list-item">
+              <strong>先在策略工坊生成策略</strong>
+              <div class="muted-note">如果当前还没有策略项目，先从自然语言生成一份新的 Python 策略骨架。</div>
+            </div>
+            <div class="list-item">
+              <strong>再进入回测中心验证</strong>
+              <div class="muted-note">用统一 `data_snapshot_ref` 运行回测，把结果沉淀到历史记录里。</div>
+            </div>
+            <div class="list-item">
+              <strong>最后用交易复盘回灌经验</strong>
+              <div class="muted-note">导入历史交割单，识别成功与失败模式，再回到策略页迭代。</div>
+            </div>
+          </div>
+        </section>
+      </section>
+    </div>
+
+    <script type="module" src="/assets/workspace.js"></script>
+  </body>
+</html>

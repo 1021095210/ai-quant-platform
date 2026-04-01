@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -119,6 +120,56 @@ class MarketDataTests(unittest.TestCase):
         self.assertTrue(second_meta["served_from_cache"])
         self.assertEqual("stub-provider", second_meta["provider"])
 
+    def test_market_data_cache_database_contains_shared_market_schema_tables(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database_path = Path(temp_dir) / "market_data.db"
+            provider = _StubProvider()
+            service = MarketDataService(
+                cache_repository=MarketDataCacheRepository(str(database_path)),
+                primary_provider=None,
+                fallback_provider=provider,
+            )
+
+            service.load_daily_bars(
+                ts_code="600519.SH",
+                asset_type="stock",
+                start_date=pd.Timestamp("2024-01-02").date(),
+                end_date=pd.Timestamp("2024-01-03").date(),
+                adjustment_mode="qfq",
+            )
+
+            with sqlite3.connect(database_path) as connection:
+                tables = {
+                    row[0]
+                    for row in connection.execute(
+                        "SELECT name FROM sqlite_master WHERE type = 'table'"
+                    ).fetchall()
+                }
+                coverage = connection.execute(
+                    """
+                    SELECT market, frequency, adjustment_mode, coverage_status
+                    FROM coverage_stats
+                    WHERE instrument_id = ?
+                    """,
+                    ("600519.SH",),
+                ).fetchone()
+                ingest_batch = connection.execute(
+                    "SELECT status FROM ingest_batches LIMIT 1"
+                ).fetchone()
+
+        for table_name in {
+            "instruments",
+            "trading_calendar",
+            "ingest_batches",
+            "market_bars",
+            "sync_ranges",
+            "coverage_stats",
+            "correction_batches",
+        }:
+            self.assertIn(table_name, tables)
+        self.assertEqual(("cn_sh", "1d", "qfq", "ready"), coverage)
+        self.assertEqual(("completed",), ingest_batch)
+
     def test_akshare_provider_transforms_tencent_history_for_stock(self) -> None:
         frame = pd.DataFrame(
             [
@@ -198,4 +249,3 @@ class MarketDataTests(unittest.TestCase):
         self.assertEqual("akshare_sina_etf", rows[0].data_source)
         self.assertEqual(9429306.0, rows[0].volume)
         self.assertEqual("2024-01-03", rows[1].trade_date)
-

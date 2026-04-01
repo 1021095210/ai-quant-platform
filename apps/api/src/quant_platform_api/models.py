@@ -13,11 +13,15 @@ def utcnow() -> datetime:
 
 
 class TaskStatus(str, Enum):
+    PENDING = "pending"
     QUEUED = "queued"
     RUNNING = "running"
-    COMPLETED = "completed"
+    SUCCEEDED = "succeeded"
+    COMPLETED = "succeeded"
     FAILED = "failed"
-    CANCELLED = "cancelled"
+    CANCELING = "canceling"
+    CANCELED = "canceled"
+    CANCELLED = "canceled"
 
 
 class ErrorPayload(BaseModel):
@@ -28,11 +32,17 @@ class ErrorPayload(BaseModel):
 
 class SuccessEnvelope(BaseModel):
     success: bool = True
+    request_id: str
     data: Any
+    meta: dict[str, Any] | None = None
+    error: None = None
 
 
 class ErrorEnvelope(BaseModel):
     success: bool = False
+    request_id: str
+    data: None = None
+    meta: None = None
     error: ErrorPayload
 
 
@@ -59,6 +69,19 @@ class DataSnapshotConfig(BaseModel):
     dataset_snapshot_ref: str
 
 
+class DatasetSnapshotRecord(BaseModel):
+    dataset_snapshot_ref: str
+    market: str
+    asset_type: str
+    frequency: str
+    adjustment_mode: str
+    date_from: datetime
+    date_to: datetime
+    provider: str = "shared_market_store"
+    coverage_status: str = "ready"
+    created_at: datetime = Field(default_factory=utcnow)
+
+
 class BacktestCreateRequest(BaseModel):
     strategy_version_id: str
     dataset: DatasetConfig
@@ -79,6 +102,7 @@ class ReplayCreateRequest(BaseModel):
     upload_id: str
     focus_dimensions: list[str]
     custom_prompt: str | None = None
+    data_snapshot: DataSnapshotConfig | None = None
 
 
 class ProjectCreateRequest(BaseModel):
@@ -111,6 +135,25 @@ class TradeUploadCreateResult(BaseModel):
     detected_columns: list[str]
 
 
+class UserRegisterRequest(BaseModel):
+    username: str
+    contact: str
+    password: str
+
+
+class UserLoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+class UserProfile(BaseModel):
+    user_id: str
+    username: str
+    contact: str
+    role: str
+    created_at: datetime
+
+
 class TradeUploadParseRequest(BaseModel):
     column_mapping: dict[str, str]
 
@@ -138,7 +181,9 @@ class TradeUploadRecord(BaseModel):
 class TaskCreatedResponse(BaseModel):
     id: str
     status: TaskStatus
+    state: TaskStatus
     progress_pct: int
+    config_revision: str
     status_url: str
     result_url: str
 
@@ -146,7 +191,9 @@ class TaskCreatedResponse(BaseModel):
 class BacktestResult(BaseModel):
     backtest_run_id: str
     status: TaskStatus
+    state: TaskStatus
     progress_pct: int
+    config_revision: str
     dataset_snapshot_ref: str
     engine_version: str
     data_source: dict[str, Any] = Field(default_factory=dict)
@@ -159,7 +206,9 @@ class BacktestResult(BaseModel):
 class OptimizationResult(BaseModel):
     job_id: str
     status: TaskStatus
+    state: TaskStatus
     progress_pct: int
+    config_revision: str
     best_params: dict[str, Any] = Field(default_factory=dict)
     best_metrics: dict[str, Any] = Field(default_factory=dict)
     trials: list[dict[str, Any]] = Field(default_factory=list)
@@ -169,7 +218,10 @@ class OptimizationResult(BaseModel):
 class ReplayResult(BaseModel):
     analysis_id: str
     status: TaskStatus
+    state: TaskStatus
     progress_pct: int
+    config_revision: str
+    dataset_snapshot_ref: str
     feature_snapshot_ref: str | None = None
     analysis_rule_version: str
     summary: str | None = None
@@ -187,14 +239,26 @@ class ProjectVersionCreated(BaseModel):
 class TaskRecord(BaseModel):
     id: str = Field(default_factory=lambda: uuid4().hex)
     kind: str
-    status: TaskStatus = TaskStatus.QUEUED
+    status: TaskStatus = TaskStatus.PENDING
     progress_pct: int = 0
+    workspace_id: str = "ws_default"
+    environment: str = "dev"
+    resource_refs: dict[str, str] = Field(default_factory=dict)
+    config_revision: str = ""
+    created_by: str = "system"
+    request_id: str = ""
+    trace_id: str = ""
+    idempotency_key: str | None = None
+    priority: str = "normal"
+    retry_count: int = 0
     created_at: datetime = Field(default_factory=utcnow)
     started_at: datetime | None = None
     finished_at: datetime | None = None
     payload: dict[str, Any]
     result: dict[str, Any] = Field(default_factory=dict)
     error: ErrorPayload | None = None
+    error_code: str | None = None
+    error_message: str | None = None
 
 
 class StrategyVersionRecord(BaseModel):
@@ -244,4 +308,20 @@ class GlossaryTermRecord(BaseModel):
     term: str
     meaning: str
     example: str | None = None
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+class UserRecord(BaseModel):
+    user_id: str = Field(default_factory=lambda: f"user_{uuid4().hex[:10]}")
+    username: str
+    contact: str
+    password_hash: str
+    role: str = "user"
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+class UserSessionRecord(BaseModel):
+    session_id: str = Field(default_factory=lambda: f"sess_{uuid4().hex[:10]}")
+    user_id: str
+    session_token: str
     created_at: datetime = Field(default_factory=utcnow)

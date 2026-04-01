@@ -20,6 +20,41 @@ class StrategyVersionORM(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
 
 
+class UserORM(Base):
+    __tablename__ = "users"
+
+    user_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    username: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    contact: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    password_hash: Mapped[str] = mapped_column(Text())
+    role: Mapped[str] = mapped_column(String(32), default="user")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+
+class UserSessionORM(Base):
+    __tablename__ = "user_sessions"
+
+    session_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(64), index=True)
+    session_token: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+
+class DatasetSnapshotORM(Base):
+    __tablename__ = "dataset_snapshots"
+
+    dataset_snapshot_ref: Mapped[str] = mapped_column(String(120), primary_key=True)
+    market: Mapped[str] = mapped_column(String(64), index=True)
+    asset_type: Mapped[str] = mapped_column(String(32))
+    frequency: Mapped[str] = mapped_column(String(32), index=True)
+    adjustment_mode: Mapped[str] = mapped_column(String(32))
+    date_from: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    date_to: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    provider: Mapped[str] = mapped_column(String(64), default="shared_market_store")
+    coverage_status: Mapped[str] = mapped_column(String(32), default="ready")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+
 class TaskORM(Base):
     __tablename__ = "tasks"
 
@@ -27,11 +62,23 @@ class TaskORM(Base):
     kind: Mapped[str] = mapped_column(String(32), index=True)
     status: Mapped[str] = mapped_column(String(32), index=True)
     progress_pct: Mapped[int] = mapped_column(Integer())
+    workspace_id: Mapped[str] = mapped_column(String(64), default="ws_default")
+    environment: Mapped[str] = mapped_column(String(32), default="dev")
+    resource_refs_json: Mapped[str] = mapped_column(Text(), default="{}")
+    config_revision: Mapped[str] = mapped_column(String(128), default="")
+    created_by: Mapped[str] = mapped_column(String(64), default="system")
+    request_id: Mapped[str] = mapped_column(String(64), default="")
+    trace_id: Mapped[str] = mapped_column(String(64), default="")
+    idempotency_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    priority: Mapped[str] = mapped_column(String(32), default="normal")
+    retry_count: Mapped[int] = mapped_column(Integer(), default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     payload_json: Mapped[str] = mapped_column(Text())
     result_json: Mapped[str] = mapped_column(Text(), default="{}")
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text(), nullable=True)
     error_json: Mapped[str | None] = mapped_column(Text(), nullable=True)
 
 

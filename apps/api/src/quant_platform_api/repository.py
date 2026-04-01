@@ -10,6 +10,7 @@ from sqlalchemy.orm import sessionmaker
 
 from quant_platform_api.models import (
     CustomIndicatorRecord,
+    DatasetSnapshotRecord,
     ErrorPayload,
     GlossaryTermRecord,
     StrategyVersionRecord,
@@ -17,14 +18,19 @@ from quant_platform_api.models import (
     TradeUploadRecord,
     TaskRecord,
     TaskStatus,
+    UserRecord,
+    UserSessionRecord,
     utcnow,
 )
 from quant_platform_api.orm import (
     CustomIndicatorORM,
+    DatasetSnapshotORM,
     GlossaryTermORM,
     StrategyVersionORM,
     TaskORM,
     TradeUploadORM,
+    UserORM,
+    UserSessionORM,
 )
 
 
@@ -32,6 +38,8 @@ class TaskRepository(Protocol):
     def create(self, record: TaskRecord) -> TaskRecord: ...
 
     def get(self, task_id: str) -> TaskRecord | None: ...
+
+    def mark_queued(self, task_id: str) -> TaskRecord | None: ...
 
     def mark_running(self, task_id: str) -> TaskRecord | None: ...
 
@@ -52,6 +60,28 @@ class StrategyRepository(Protocol):
     def list_projects(self) -> list[StrategyVersionRecord]: ...
 
     def get(self, version_id: str) -> StrategyVersionRecord | None: ...
+
+
+class DatasetSnapshotRepository(Protocol):
+    def create(self, record: DatasetSnapshotRecord) -> DatasetSnapshotRecord: ...
+
+    def get(self, dataset_snapshot_ref: str) -> DatasetSnapshotRecord | None: ...
+
+
+class UserRepository(Protocol):
+    def create(self, record: UserRecord) -> UserRecord: ...
+
+    def get_by_username(self, username: str) -> UserRecord | None: ...
+
+    def list(self) -> list[UserRecord]: ...
+
+
+class UserSessionRepository(Protocol):
+    def create(self, record: UserSessionRecord) -> UserSessionRecord: ...
+
+    def get_by_token(self, session_token: str) -> UserSessionRecord | None: ...
+
+    def delete_by_token(self, session_token: str) -> None: ...
 
 
 class TradeUploadRepository(Protocol):
@@ -89,10 +119,18 @@ class InMemoryTaskRepository:
             record = self._items.get(task_id)
             return deepcopy(record) if record else None
 
+    def mark_queued(self, task_id: str) -> TaskRecord | None:
+        with self._lock:
+            record = self._items.get(task_id)
+            if record is None or record.status == TaskStatus.CANCELED:
+                return deepcopy(record) if record else None
+            record.status = TaskStatus.QUEUED
+            return deepcopy(record)
+
     def mark_running(self, task_id: str) -> TaskRecord | None:
         with self._lock:
             record = self._items.get(task_id)
-            if record is None or record.status == TaskStatus.CANCELLED:
+            if record is None or record.status == TaskStatus.CANCELED:
                 return deepcopy(record) if record else None
             record.status = TaskStatus.RUNNING
             record.progress_pct = 25
@@ -102,9 +140,9 @@ class InMemoryTaskRepository:
     def complete(self, task_id: str, result: dict) -> TaskRecord | None:
         with self._lock:
             record = self._items.get(task_id)
-            if record is None or record.status == TaskStatus.CANCELLED:
+            if record is None or record.status == TaskStatus.CANCELED:
                 return deepcopy(record) if record else None
-            record.status = TaskStatus.COMPLETED
+            record.status = TaskStatus.SUCCEEDED
             record.progress_pct = 100
             record.finished_at = utcnow()
             record.result = deepcopy(result)
@@ -118,6 +156,8 @@ class InMemoryTaskRepository:
             record.status = TaskStatus.FAILED
             record.finished_at = utcnow()
             record.error = error
+            record.error_code = error.code
+            record.error_message = error.message
             return deepcopy(record)
 
     def cancel(self, task_id: str) -> TaskRecord | None:
@@ -127,7 +167,8 @@ class InMemoryTaskRepository:
                 return None
             if record.status in {TaskStatus.COMPLETED, TaskStatus.FAILED}:
                 return deepcopy(record)
-            record.status = TaskStatus.CANCELLED
+            record.status = TaskStatus.CANCELING
+            record.status = TaskStatus.CANCELED
             record.finished_at = utcnow()
             return deepcopy(record)
 
@@ -222,6 +263,138 @@ class SQLAlchemyStrategyRepository:
             )
 
 
+class SQLAlchemyDatasetSnapshotRepository:
+    def __init__(self, session_factory: sessionmaker) -> None:
+        self._session_factory = session_factory
+
+    def create(self, record: DatasetSnapshotRecord) -> DatasetSnapshotRecord:
+        with self._session_factory() as session:
+            session.add(
+                DatasetSnapshotORM(
+                    dataset_snapshot_ref=record.dataset_snapshot_ref,
+                    market=record.market,
+                    asset_type=record.asset_type,
+                    frequency=record.frequency,
+                    adjustment_mode=record.adjustment_mode,
+                    date_from=record.date_from,
+                    date_to=record.date_to,
+                    provider=record.provider,
+                    coverage_status=record.coverage_status,
+                    created_at=record.created_at,
+                )
+            )
+            session.commit()
+        return record
+
+    def get(self, dataset_snapshot_ref: str) -> DatasetSnapshotRecord | None:
+        with self._session_factory() as session:
+            item = session.get(DatasetSnapshotORM, dataset_snapshot_ref)
+            if item is None:
+                return None
+            return DatasetSnapshotRecord(
+                dataset_snapshot_ref=item.dataset_snapshot_ref,
+                market=item.market,
+                asset_type=item.asset_type,
+                frequency=item.frequency,
+                adjustment_mode=item.adjustment_mode,
+                date_from=item.date_from,
+                date_to=item.date_to,
+                provider=item.provider,
+                coverage_status=item.coverage_status,
+                created_at=item.created_at,
+            )
+
+
+class SQLAlchemyUserRepository:
+    def __init__(self, session_factory: sessionmaker) -> None:
+        self._session_factory = session_factory
+
+    def create(self, record: UserRecord) -> UserRecord:
+        with self._session_factory() as session:
+            session.add(
+                UserORM(
+                    user_id=record.user_id,
+                    username=record.username,
+                    contact=record.contact,
+                    password_hash=record.password_hash,
+                    role=record.role,
+                    created_at=record.created_at,
+                )
+            )
+            session.commit()
+        return record
+
+    def get_by_username(self, username: str) -> UserRecord | None:
+        with self._session_factory() as session:
+            item = session.scalar(select(UserORM).where(UserORM.username == username))
+            if item is None:
+                return None
+            return UserRecord(
+                user_id=item.user_id,
+                username=item.username,
+                contact=item.contact,
+                password_hash=item.password_hash,
+                role=item.role,
+                created_at=item.created_at,
+            )
+
+    def list(self) -> list[UserRecord]:
+        with self._session_factory() as session:
+            items = session.scalars(select(UserORM).order_by(UserORM.created_at.asc())).all()
+            return [
+                UserRecord(
+                    user_id=item.user_id,
+                    username=item.username,
+                    contact=item.contact,
+                    password_hash=item.password_hash,
+                    role=item.role,
+                    created_at=item.created_at,
+                )
+                for item in items
+            ]
+
+
+class SQLAlchemyUserSessionRepository:
+    def __init__(self, session_factory: sessionmaker) -> None:
+        self._session_factory = session_factory
+
+    def create(self, record: UserSessionRecord) -> UserSessionRecord:
+        with self._session_factory() as session:
+            session.add(
+                UserSessionORM(
+                    session_id=record.session_id,
+                    user_id=record.user_id,
+                    session_token=record.session_token,
+                    created_at=record.created_at,
+                )
+            )
+            session.commit()
+        return record
+
+    def get_by_token(self, session_token: str) -> UserSessionRecord | None:
+        with self._session_factory() as session:
+            item = session.scalar(
+                select(UserSessionORM).where(UserSessionORM.session_token == session_token)
+            )
+            if item is None:
+                return None
+            return UserSessionRecord(
+                session_id=item.session_id,
+                user_id=item.user_id,
+                session_token=item.session_token,
+                created_at=item.created_at,
+            )
+
+    def delete_by_token(self, session_token: str) -> None:
+        with self._session_factory() as session:
+            item = session.scalar(
+                select(UserSessionORM).where(UserSessionORM.session_token == session_token)
+            )
+            if item is not None:
+                session.delete(item)
+                session.commit()
+
+
 class SQLAlchemyTaskRepository:
     def __init__(self, session_factory: sessionmaker) -> None:
         self._session_factory = session_factory
@@ -238,10 +411,20 @@ class SQLAlchemyTaskRepository:
             orm = session.get(TaskORM, task_id)
             return self._from_orm(orm) if orm else None
 
+    def mark_queued(self, task_id: str) -> TaskRecord | None:
+        with self._session_factory() as session:
+            orm = session.get(TaskORM, task_id)
+            if orm is None or orm.status == TaskStatus.CANCELED.value:
+                return self._from_orm(orm) if orm else None
+            orm.status = TaskStatus.QUEUED.value
+            session.commit()
+            session.refresh(orm)
+            return self._from_orm(orm)
+
     def mark_running(self, task_id: str) -> TaskRecord | None:
         with self._session_factory() as session:
             orm = session.get(TaskORM, task_id)
-            if orm is None or orm.status == TaskStatus.CANCELLED.value:
+            if orm is None or orm.status == TaskStatus.CANCELED.value:
                 return self._from_orm(orm) if orm else None
             orm.status = TaskStatus.RUNNING.value
             orm.progress_pct = 25
@@ -253,9 +436,9 @@ class SQLAlchemyTaskRepository:
     def complete(self, task_id: str, result: dict) -> TaskRecord | None:
         with self._session_factory() as session:
             orm = session.get(TaskORM, task_id)
-            if orm is None or orm.status == TaskStatus.CANCELLED.value:
+            if orm is None or orm.status == TaskStatus.CANCELED.value:
                 return self._from_orm(orm) if orm else None
-            orm.status = TaskStatus.COMPLETED.value
+            orm.status = TaskStatus.SUCCEEDED.value
             orm.progress_pct = 100
             orm.finished_at = utcnow()
             orm.result_json = json.dumps(result, ensure_ascii=False)
@@ -270,6 +453,8 @@ class SQLAlchemyTaskRepository:
                 return None
             orm.status = TaskStatus.FAILED.value
             orm.finished_at = utcnow()
+            orm.error_code = error.code
+            orm.error_message = error.message
             orm.error_json = error.model_dump_json()
             session.commit()
             session.refresh(orm)
@@ -282,7 +467,8 @@ class SQLAlchemyTaskRepository:
                 return None
             if orm.status in {TaskStatus.COMPLETED.value, TaskStatus.FAILED.value}:
                 return self._from_orm(orm)
-            orm.status = TaskStatus.CANCELLED.value
+            orm.status = TaskStatus.CANCELING.value
+            orm.status = TaskStatus.CANCELED.value
             orm.finished_at = utcnow()
             session.commit()
             session.refresh(orm)
@@ -309,28 +495,59 @@ class SQLAlchemyTaskRepository:
             kind=record.kind,
             status=record.status.value,
             progress_pct=record.progress_pct,
+            workspace_id=record.workspace_id,
+            environment=record.environment,
+            resource_refs_json=json.dumps(record.resource_refs, ensure_ascii=False),
+            config_revision=record.config_revision,
+            created_by=record.created_by,
+            request_id=record.request_id,
+            trace_id=record.trace_id,
+            idempotency_key=record.idempotency_key,
+            priority=record.priority,
+            retry_count=record.retry_count,
             created_at=record.created_at,
             started_at=record.started_at,
             finished_at=record.finished_at,
             payload_json=json.dumps(record.payload, ensure_ascii=False),
             result_json=json.dumps(record.result, ensure_ascii=False),
+            error_code=record.error.code if record.error else record.error_code,
+            error_message=record.error.message if record.error else record.error_message,
             error_json=record.error.model_dump_json() if record.error else None,
         )
 
     def _from_orm(self, orm: TaskORM) -> TaskRecord:
+        error = (
+            ErrorPayload.model_validate_json(orm.error_json)
+            if orm.error_json
+            else (
+                ErrorPayload(code=orm.error_code, message=orm.error_message or "")
+                if orm.error_code
+                else None
+            )
+        )
         return TaskRecord(
             id=orm.id,
             kind=orm.kind,
             status=TaskStatus(orm.status),
             progress_pct=orm.progress_pct,
+            workspace_id=orm.workspace_id,
+            environment=orm.environment,
+            resource_refs=json.loads(orm.resource_refs_json),
+            config_revision=orm.config_revision,
+            created_by=orm.created_by,
+            request_id=orm.request_id,
+            trace_id=orm.trace_id,
+            idempotency_key=orm.idempotency_key,
+            priority=orm.priority,
+            retry_count=orm.retry_count,
             created_at=orm.created_at,
             started_at=orm.started_at,
             finished_at=orm.finished_at,
             payload=json.loads(orm.payload_json),
             result=json.loads(orm.result_json),
-            error=ErrorPayload.model_validate_json(orm.error_json)
-            if orm.error_json
-            else None,
+            error=error,
+            error_code=error.code if error else orm.error_code,
+            error_message=error.message if error else orm.error_message,
         )
 
 

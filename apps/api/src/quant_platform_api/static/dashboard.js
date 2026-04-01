@@ -1,69 +1,36 @@
 import {
   activateNav,
-  api,
-  formatDateTime,
-  getSelectedVersion,
+  fetchCurrentUser,
   setStatus,
 } from "/assets/shared.js";
 
 activateNav("/");
 
 async function loadDashboard() {
-  const { versionId } = getSelectedVersion();
-  document.querySelector("#current-version").textContent = versionId || "未选择";
+  const user = await fetchCurrentUser();
+  const accountNode = document.querySelector("#home-account");
+  const primaryAction = document.querySelector("#primary-cta");
+  const secondaryAction = document.querySelector("#secondary-cta");
+  const authHint = document.querySelector("#auth-hint");
 
-  const [projectsPayload, backtestsPayload] = await Promise.all([
-    api("/api/v1/strategies/projects"),
-    api("/api/v1/backtests/runs"),
-  ]);
-
-  renderProjects(projectsPayload.data.items.slice(0, 4));
-  renderBacktests(backtestsPayload.data.items.slice(0, 4));
-
-  if (backtestsPayload.data.items.length) {
-    document.querySelector("#latest-backtest-status").textContent =
-      backtestsPayload.data.items[0].status;
-  }
-  setStatus("总览已刷新。");
-}
-
-function renderProjects(items) {
-  const node = document.querySelector("#recent-projects");
-  if (!items.length) {
-    node.textContent = "暂无策略项目。";
+  if (user) {
+    accountNode.textContent = `${user.username} / ${user.role}`;
+    primaryAction.textContent = "进入用户工作台";
+    primaryAction.href = "/workspace";
+    secondaryAction.textContent = "继续策略研究";
+    secondaryAction.href = "/strategy";
+    authHint.textContent = "已检测到登录状态，可直接进入工作台和各研究模块。";
+    setStatus(`欢迎回来，${user.username}。`);
     return;
   }
-  node.innerHTML = items
-    .map(
-      (item) => `
-        <div class="list-item">
-          <strong>${item.title}</strong>
-          <div class="muted-note">${item.version_id}</div>
-          <div class="muted-note">${item.strategy_dsl.market} / ${item.strategy_dsl.timeframe}</div>
-        </div>
-      `,
-    )
-    .join("");
-}
 
-function renderBacktests(items) {
-  const node = document.querySelector("#recent-backtests");
-  if (!items.length) {
-    node.textContent = "暂无回测记录。";
-    return;
-  }
-  node.innerHTML = items
-    .map(
-      (item) => `
-        <div class="list-item">
-          <strong>${item.strategy_title || item.market}</strong>
-          <div class="muted-note">${item.market} · ${formatDateTime(item.created_at)}</div>
-          <div class="muted-note">收益 ${item.metrics.total_return_pct ?? 0}% / 交易 ${item.metrics.trade_count ?? 0} 次</div>
-          <div class="muted-note">数据源：${item.data_source.provider || "未知"}</div>
-        </div>
-      `,
-    )
-    .join("");
+  accountNode.textContent = "未登录";
+  primaryAction.textContent = "登录后进入工作台";
+  primaryAction.href = "/workspace";
+  secondaryAction.textContent = "注册试用账户";
+  secondaryAction.href = "/register";
+  authHint.textContent = "首页可公开访问，进入工作台或任何研究模块时会先跳转到登录页。";
+  setStatus("平台入口已就绪。");
 }
 
 loadDashboard().catch((error) => setStatus(error.message));

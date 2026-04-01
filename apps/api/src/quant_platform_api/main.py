@@ -3,9 +3,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
+from uuid import uuid4
 
-from fastapi import FastAPI, File, HTTPException, UploadFile, status
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile, status
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from quant_platform_api.market_data import (
@@ -21,6 +25,9 @@ from quant_platform_api.models import (
     BacktestCreateRequest,
     CustomIndicatorCreateRequest,
     CustomIndicatorGenerateRequest,
+    DataSnapshotConfig,
+    DatasetSnapshotRecord,
+    ErrorEnvelope,
     ErrorPayload,
     GlossaryTermCreateRequest,
     OptimizationCreateRequest,
@@ -30,16 +37,23 @@ from quant_platform_api.models import (
     ReplayCreateRequest,
     SuccessEnvelope,
     TaskStatus,
+    UserLoginRequest,
+    UserRegisterRequest,
+    utcnow,
 )
 from quant_platform_api.repository import (
     SQLAlchemyCustomIndicatorRepository,
+    SQLAlchemyDatasetSnapshotRepository,
     SQLAlchemyGlossaryTermRepository,
     SQLAlchemyStrategyRepository,
     SQLAlchemyTaskRepository,
     SQLAlchemyTradeUploadRepository,
+    SQLAlchemyUserRepository,
+    SQLAlchemyUserSessionRepository,
 )
 from quant_platform_api.services import (
     AsyncTaskService,
+    AuthService,
     IndicatorService,
     RuleService,
     StrategyService,
@@ -49,10 +63,13 @@ from quant_platform_api.services import (
     build_replay_result,
 )
 
+SESSION_COOKIE_NAME = "quant_session"
+
 
 @dataclass(slots=True)
 class AppServices:
     settings: Settings
+    auth_service: AuthService
     strategy_service: StrategyService
     indicator_service: IndicatorService
     rule_service: RuleService
@@ -68,10 +85,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     session_factory = build_session_factory(app_settings.database_url)
     create_schema(session_factory)
     strategy_repository = SQLAlchemyStrategyRepository(session_factory)
+    dataset_snapshot_repository = SQLAlchemyDatasetSnapshotRepository(session_factory)
     trade_upload_repository = SQLAlchemyTradeUploadRepository(session_factory)
     task_repository = SQLAlchemyTaskRepository(session_factory)
     indicator_repository = SQLAlchemyCustomIndicatorRepository(session_factory)
     glossary_repository = SQLAlchemyGlossaryTermRepository(session_factory)
+    user_repository = SQLAlchemyUserRepository(session_factory)
+    user_session_repository = SQLAlchemyUserSessionRepository(session_factory)
     primary_market_provider = None
     if app_settings.market_data_provider in {"auto", "tushare"}:
         primary_market_provider = TushareMarketDataProvider(app_settings.tushare_token)
@@ -90,6 +110,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     services = AppServices(
         settings=app_settings,
+        auth_service=AuthService(
+            user_repository=user_repository,
+            session_repository=user_session_repository,
+        ),
         strategy_service=StrategyService(
             strategy_repository,
             indicator_repository,
@@ -119,53 +143,203 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.task_repository = task_repository
     static_dir = Path(__file__).resolve().parent / "static"
     app.mount("/assets", StaticFiles(directory=static_dir), name="assets")
+    services.auth_service.seed_default_accounts()
+
+    @app.middleware("http")
+    async def attach_request_id(request: Request, call_next):
+        request_id = _resolve_request_id(request)
+        request.state.request_id = request_id
+        request.state.trace_id = request_id
+        response = await call_next(request)
+        response.headers["X-Request-Id"] = request_id
+        return response
+
+    @app.exception_handler(HTTPException)
+    async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
+        detail = exc.detail if isinstance(exc.detail, dict) else {}
+        code = detail.get("code") or _default_error_code(exc.status_code)
+        message = detail.get("message") or _default_error_message(code)
+        return _error_response(
+            request,
+            status_code=exc.status_code,
+            code=code,
+            message=message,
+            details=detail.get("details", {}),
+        )
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_exception_handler(
+        request: Request,
+        exc: RequestValidationError,
+    ) -> JSONResponse:
+        return _error_response(
+            request,
+            status_code=status.HTTP_400_BAD_REQUEST,
+            code="INVALID_ARGUMENT",
+            message="invalid request",
+            details={"errors": exc.errors()},
+        )
+
+    @app.exception_handler(Exception)
+    async def unexpected_exception_handler(
+        request: Request,
+        exc: Exception,
+    ) -> JSONResponse:
+        return _error_response(
+            request,
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            code="INTERNAL_ERROR",
+            message=str(exc) or "internal error",
+        )
 
     @app.get("/")
     def index() -> FileResponse:
         return FileResponse(static_dir / "dashboard.html")
 
+    @app.get("/login")
+    def login_page(request: Request):
+        if _get_current_user(request, services.auth_service) is not None:
+            return RedirectResponse(url="/workspace", status_code=status.HTTP_302_FOUND)
+        return FileResponse(static_dir / "login.html")
+
+    @app.get("/register")
+    def register_page(request: Request):
+        if _get_current_user(request, services.auth_service) is not None:
+            return RedirectResponse(url="/workspace", status_code=status.HTTP_302_FOUND)
+        return FileResponse(static_dir / "register.html")
+
+    @app.get("/workspace")
+    def workspace_page(request: Request):
+        if _get_current_user(request, services.auth_service) is None:
+            return _login_redirect("/workspace")
+        return FileResponse(static_dir / "workspace.html")
+
     @app.get("/strategy")
-    def strategy_page() -> FileResponse:
+    def strategy_page(request: Request):
+        if _get_current_user(request, services.auth_service) is None:
+            return _login_redirect("/strategy")
         return FileResponse(static_dir / "strategy.html")
 
     @app.get("/backtests")
-    def backtests_page() -> FileResponse:
+    def backtests_page(request: Request):
+        if _get_current_user(request, services.auth_service) is None:
+            return _login_redirect("/backtests")
         return FileResponse(static_dir / "backtests.html")
 
     @app.get("/replay")
-    def replay_page() -> FileResponse:
+    def replay_page(request: Request):
+        if _get_current_user(request, services.auth_service) is None:
+            return _login_redirect("/replay")
         return FileResponse(static_dir / "replay.html")
 
     @app.get("/indicators")
-    def indicators_page() -> FileResponse:
+    def indicators_page(request: Request):
+        if _get_current_user(request, services.auth_service) is None:
+            return _login_redirect("/indicators")
         return FileResponse(static_dir / "indicators.html")
 
     @app.get("/rules")
-    def rules_page() -> FileResponse:
+    def rules_page(request: Request):
+        if _get_current_user(request, services.auth_service) is None:
+            return _login_redirect("/rules")
         return FileResponse(static_dir / "rules.html")
 
+    @app.get(f"{app_settings.api_prefix}/auth/me")
+    def get_current_user(request: Request) -> JSONResponse:
+        user = _get_current_user(request, services.auth_service)
+        if user is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=ErrorPayload(code="UNAUTHORIZED", message="login required").model_dump(),
+            )
+        return _success_response(request, data=user.model_dump(mode="json"))
+
+    @app.post(f"{app_settings.api_prefix}/auth/register")
+    def register_user(
+        request: Request,
+        payload: UserRegisterRequest,
+    ) -> JSONResponse:
+        try:
+            user = services.auth_service.register(
+                username=payload.username,
+                contact=payload.contact,
+                password=payload.password,
+            )
+            user, session_token = services.auth_service.login(
+                username=payload.username,
+                password=payload.password,
+            )
+        except Exception as exc:
+            if hasattr(exc, "code") and hasattr(exc, "message"):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT
+                    if exc.code == "STATE_CONFLICT"
+                    else status.HTTP_400_BAD_REQUEST,
+                    detail=ErrorPayload(code=exc.code, message=exc.message).model_dump(),
+                ) from exc
+            raise
+        response = _success_response(request, data=user.model_dump(mode="json"))
+        _set_session_cookie(response, session_token)
+        return response
+
+    @app.post(f"{app_settings.api_prefix}/auth/login")
+    def login_user(
+        request: Request,
+        payload: UserLoginRequest,
+    ) -> JSONResponse:
+        try:
+            user, session_token = services.auth_service.login(
+                username=payload.username,
+                password=payload.password,
+            )
+        except Exception as exc:
+            if hasattr(exc, "code") and hasattr(exc, "message"):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=ErrorPayload(code=exc.code, message=exc.message).model_dump(),
+                ) from exc
+            raise
+        response = _success_response(request, data=user.model_dump(mode="json"))
+        _set_session_cookie(response, session_token)
+        return response
+
+    @app.post(f"{app_settings.api_prefix}/auth/logout")
+    def logout_user(request: Request) -> JSONResponse:
+        services.auth_service.logout(request.cookies.get(SESSION_COOKIE_NAME))
+        response = _success_response(request, data={"logged_out": True})
+        response.delete_cookie(SESSION_COOKIE_NAME, path="/")
+        return response
+
     @app.get("/healthz")
-    def healthz() -> SuccessEnvelope:
-        return SuccessEnvelope(
+    def healthz(request: Request) -> JSONResponse:
+        return _success_response(
+            request,
             data={
                 "status": "ok",
                 "app_name": app_settings.app_name,
                 "job_execution_mode": app_settings.job_execution_mode,
-            }
+            },
         )
 
     @app.post(f"{app_settings.api_prefix}/strategies/generate")
-    def generate_strategy(request: StrategyGenerateRequest) -> SuccessEnvelope:
-        generated = services.strategy_service.generate_strategy(request)
-        return SuccessEnvelope(data=generated)
+    def generate_strategy(
+        request: Request,
+        payload: StrategyGenerateRequest,
+    ) -> JSONResponse:
+        generated = services.strategy_service.generate_strategy(payload)
+        return _success_response(request, data=generated)
 
     @app.get(f"{app_settings.api_prefix}/indicators/builtin")
-    def list_builtin_indicators() -> SuccessEnvelope:
-        return SuccessEnvelope(data={"items": services.indicator_service.list_builtin()})
+    def list_builtin_indicators(request: Request) -> JSONResponse:
+        return _success_response(
+            request,
+            data={"items": services.indicator_service.list_builtin()},
+        )
 
     @app.get(f"{app_settings.api_prefix}/indicators/custom")
-    def list_custom_indicators() -> SuccessEnvelope:
-        return SuccessEnvelope(
+    def list_custom_indicators(request: Request) -> JSONResponse:
+        return _success_response(
+            request,
             data={
                 "items": [
                     item.model_dump(mode="json")
@@ -176,40 +350,55 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post(f"{app_settings.api_prefix}/indicators/custom/generate")
     def generate_custom_indicator(
-        request: CustomIndicatorGenerateRequest,
-    ) -> SuccessEnvelope:
-        generated = services.indicator_service.generate_custom_indicator(request)
-        return SuccessEnvelope(data=generated)
+        request: Request,
+        payload: CustomIndicatorGenerateRequest,
+    ) -> JSONResponse:
+        generated = services.indicator_service.generate_custom_indicator(payload)
+        return _success_response(request, data=generated)
 
     @app.post(f"{app_settings.api_prefix}/indicators/custom")
     def create_custom_indicator(
-        request: CustomIndicatorCreateRequest,
-    ) -> SuccessEnvelope:
-        record = services.indicator_service.create_custom(request)
-        return SuccessEnvelope(data=record.model_dump(mode="json"))
+        request: Request,
+        payload: CustomIndicatorCreateRequest,
+    ) -> JSONResponse:
+        record = services.indicator_service.create_custom(payload)
+        return _success_response(request, data=record.model_dump(mode="json"))
 
     @app.get(f"{app_settings.api_prefix}/rules/defaults")
-    def list_default_rules() -> SuccessEnvelope:
-        return SuccessEnvelope(data={"items": services.rule_service.list_default_rules()})
+    def list_default_rules(request: Request) -> JSONResponse:
+        return _success_response(
+            request,
+            data={"items": services.rule_service.list_default_rules()},
+        )
 
     @app.get(f"{app_settings.api_prefix}/rules/glossary")
-    def list_glossary_terms() -> SuccessEnvelope:
-        return SuccessEnvelope(data={"items": services.rule_service.list_glossary_terms()})
+    def list_glossary_terms(request: Request) -> JSONResponse:
+        return _success_response(
+            request,
+            data={"items": services.rule_service.list_glossary_terms()},
+        )
 
     @app.post(f"{app_settings.api_prefix}/rules/glossary")
-    def create_glossary_term(request: GlossaryTermCreateRequest) -> SuccessEnvelope:
-        record = services.rule_service.create_glossary_term(request)
-        return SuccessEnvelope(data=record.model_dump(mode="json"))
+    def create_glossary_term(
+        request: Request,
+        payload: GlossaryTermCreateRequest,
+    ) -> JSONResponse:
+        record = services.rule_service.create_glossary_term(payload)
+        return _success_response(request, data=record.model_dump(mode="json"))
 
     @app.post(f"{app_settings.api_prefix}/strategies/projects")
-    def create_strategy_project(request: ProjectCreateRequest) -> SuccessEnvelope:
+    def create_strategy_project(
+        request: Request,
+        payload: ProjectCreateRequest,
+    ) -> JSONResponse:
         version = services.strategy_service.create_project(
-            title=request.title,
-            natural_language_prompt=request.natural_language_prompt,
-            strategy_dsl=request.strategy_dsl,
-            strategy_python=request.strategy_python,
+            title=payload.title,
+            natural_language_prompt=payload.natural_language_prompt,
+            strategy_dsl=payload.strategy_dsl,
+            strategy_python=payload.strategy_python,
         )
-        return SuccessEnvelope(
+        return _success_response(
+            request,
             data={
                 "project_id": version.project_id,
                 "version_id": version.version_id,
@@ -217,9 +406,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
 
     @app.get(f"{app_settings.api_prefix}/strategies/projects")
-    def list_strategy_projects() -> SuccessEnvelope:
+    def list_strategy_projects(request: Request) -> JSONResponse:
         items = services.strategy_service.list_projects()
-        return SuccessEnvelope(
+        return _success_response(
+            request,
             data={
                 "items": [
                     {
@@ -237,17 +427,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
 
     @app.get(f"{app_settings.api_prefix}/strategies/projects/{{version_id}}")
-    def get_strategy_project(version_id: str) -> SuccessEnvelope:
+    def get_strategy_project(request: Request, version_id: str) -> JSONResponse:
         item = services.strategy_service.get_project(version_id)
         if item is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=ErrorPayload(
-                    code="PROJECT_NOT_FOUND",
+                    code="NOT_FOUND",
                     message="strategy project not found",
                 ).model_dump(),
             )
-        return SuccessEnvelope(
+        return _success_response(
+            request,
             data={
                 "project_id": item.project_id,
                 "version_id": item.version_id,
@@ -260,36 +451,49 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
 
     @app.post(f"{app_settings.api_prefix}/backtests/runs")
-    def create_backtest_run(request: BacktestCreateRequest) -> SuccessEnvelope:
+    def create_backtest_run(
+        request: Request,
+        payload: BacktestCreateRequest,
+    ) -> JSONResponse:
+        _ensure_dataset_snapshot(dataset_snapshot_repository, payload)
         record = services.backtest_service.submit(
             kind="backtest",
-            payload=request.model_dump(by_alias=True, mode="json"),
+            payload=payload.model_dump(by_alias=True, mode="json"),
             build_result=build_backtest_result(
                 app_settings,
                 services.strategy_service,
                 services.market_data_service,
             ),
+            request_id=request.state.request_id,
+            idempotency_key=request.headers.get("Idempotency-Key"),
         )
-        return SuccessEnvelope(
+        return _success_response(
+            request,
             data={
                 "backtest_run_id": record.id,
                 "status": record.status.value,
+                "state": record.status.value,
                 "progress_pct": record.progress_pct,
+                "config_revision": record.config_revision,
                 "status_url": f"{app_settings.api_prefix}/backtests/runs/{record.id}",
                 "result_url": f"{app_settings.api_prefix}/backtests/runs/{record.id}",
-            }
+            },
+            status_code=status.HTTP_202_ACCEPTED,
         )
 
     @app.get(f"{app_settings.api_prefix}/backtests/runs")
-    def list_backtest_runs() -> SuccessEnvelope:
+    def list_backtest_runs(request: Request) -> JSONResponse:
         records = task_repository.list("backtest")
-        return SuccessEnvelope(
+        return _success_response(
+            request,
             data={
                 "items": [
                     {
                         "backtest_run_id": record.id,
                         "status": record.status.value,
+                        "state": record.status.value,
                         "created_at": record.created_at.isoformat(),
+                        "config_revision": record.config_revision,
                         "strategy_version_id": record.payload.get("strategy_version_id"),
                         "strategy_title": record.result.get("strategy_title", ""),
                         "market": record.payload.get("dataset", {}).get("market"),
@@ -303,84 +507,129 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
 
     @app.get(f"{app_settings.api_prefix}/backtests/runs/{{backtest_run_id}}")
-    def get_backtest_run(backtest_run_id: str) -> SuccessEnvelope:
+    def get_backtest_run(request: Request, backtest_run_id: str) -> JSONResponse:
         record = _require_task(services.backtest_service.get(backtest_run_id))
-        return SuccessEnvelope(data=_serialize_task(record, "backtest_run_id"))
+        return _success_response(
+            request,
+            data=_serialize_task(record, "backtest_run_id"),
+        )
 
     @app.post(f"{app_settings.api_prefix}/backtests/runs/{{backtest_run_id}}/cancel")
-    def cancel_backtest_run(backtest_run_id: str) -> SuccessEnvelope:
+    def cancel_backtest_run(request: Request, backtest_run_id: str) -> JSONResponse:
         record = _require_task(services.backtest_service.cancel(backtest_run_id))
-        return SuccessEnvelope(
+        return _success_response(
+            request,
             data={
                 "backtest_run_id": record.id,
                 "status": record.status.value,
+                "state": record.status.value,
             }
         )
 
     @app.post(f"{app_settings.api_prefix}/optimization-jobs")
-    def create_optimization_job(request: OptimizationCreateRequest) -> SuccessEnvelope:
+    def create_optimization_job(
+        request: Request,
+        payload: OptimizationCreateRequest,
+    ) -> JSONResponse:
+        _ensure_dataset_snapshot(dataset_snapshot_repository, payload)
         record = services.optimization_service.submit(
             kind="optimization",
-            payload=request.model_dump(by_alias=True, mode="json"),
+            payload=payload.model_dump(by_alias=True, mode="json"),
             build_result=build_optimization_result(),
+            request_id=request.state.request_id,
+            idempotency_key=request.headers.get("Idempotency-Key"),
         )
-        return SuccessEnvelope(
+        return _success_response(
+            request,
             data={
                 "job_id": record.id,
                 "status": record.status.value,
+                "state": record.status.value,
                 "progress_pct": record.progress_pct,
+                "config_revision": record.config_revision,
                 "status_url": f"{app_settings.api_prefix}/optimization-jobs/{record.id}",
                 "result_url": f"{app_settings.api_prefix}/optimization-jobs/{record.id}",
-            }
+            },
+            status_code=status.HTTP_202_ACCEPTED,
         )
 
     @app.get(f"{app_settings.api_prefix}/optimization-jobs/{{job_id}}")
-    def get_optimization_job(job_id: str) -> SuccessEnvelope:
+    def get_optimization_job(request: Request, job_id: str) -> JSONResponse:
         record = _require_task(services.optimization_service.get(job_id))
-        return SuccessEnvelope(data=_serialize_task(record, "job_id"))
+        return _success_response(request, data=_serialize_task(record, "job_id"))
 
     @app.post(f"{app_settings.api_prefix}/optimization-jobs/{{job_id}}/cancel")
-    def cancel_optimization_job(job_id: str) -> SuccessEnvelope:
+    def cancel_optimization_job(request: Request, job_id: str) -> JSONResponse:
         record = _require_task(services.optimization_service.cancel(job_id))
-        return SuccessEnvelope(data={"job_id": record.id, "status": record.status.value})
+        return _success_response(
+            request,
+            data={
+                "job_id": record.id,
+                "status": record.status.value,
+                "state": record.status.value,
+            },
+        )
 
     @app.post(f"{app_settings.api_prefix}/replays/analyses")
-    def create_replay_analysis(request: ReplayCreateRequest) -> SuccessEnvelope:
+    def create_replay_analysis(
+        request: Request,
+        payload: ReplayCreateRequest,
+    ) -> JSONResponse:
+        _ensure_replay_dataset_snapshot(
+            dataset_snapshot_repository,
+            services.trade_upload_service,
+            payload,
+        )
         record = services.replay_service.submit(
             kind="replay",
-            payload=request.model_dump(mode="json"),
+            payload=payload.model_dump(mode="json"),
             build_result=build_replay_result(
                 app_settings,
                 services.trade_upload_service,
             ),
+            request_id=request.state.request_id,
+            idempotency_key=request.headers.get("Idempotency-Key"),
         )
-        return SuccessEnvelope(
+        return _success_response(
+            request,
             data={
                 "analysis_id": record.id,
                 "status": record.status.value,
+                "state": record.status.value,
                 "progress_pct": record.progress_pct,
+                "config_revision": record.config_revision,
                 "status_url": f"{app_settings.api_prefix}/replays/analyses/{record.id}",
                 "result_url": f"{app_settings.api_prefix}/replays/analyses/{record.id}",
-            }
+            },
+            status_code=status.HTTP_202_ACCEPTED,
         )
 
     @app.get(f"{app_settings.api_prefix}/replays/analyses/{{analysis_id}}")
-    def get_replay_analysis(analysis_id: str) -> SuccessEnvelope:
+    def get_replay_analysis(request: Request, analysis_id: str) -> JSONResponse:
         record = _require_task(services.replay_service.get(analysis_id))
-        return SuccessEnvelope(data=_serialize_task(record, "analysis_id"))
+        return _success_response(
+            request,
+            data=_serialize_task(record, "analysis_id"),
+        )
 
     @app.post(f"{app_settings.api_prefix}/replays/analyses/{{analysis_id}}/cancel")
-    def cancel_replay_analysis(analysis_id: str) -> SuccessEnvelope:
+    def cancel_replay_analysis(request: Request, analysis_id: str) -> JSONResponse:
         record = _require_task(services.replay_service.cancel(analysis_id))
-        return SuccessEnvelope(
-            data={"analysis_id": record.id, "status": record.status.value}
+        return _success_response(
+            request,
+            data={
+                "analysis_id": record.id,
+                "status": record.status.value,
+                "state": record.status.value,
+            }
         )
 
     @app.post(f"{app_settings.api_prefix}/trades/uploads")
-    async def upload_trades(file: UploadFile = File(...)) -> SuccessEnvelope:
+    async def upload_trades(request: Request, file: UploadFile = File(...)) -> JSONResponse:
         raw = (await file.read()).decode("utf-8")
         upload = services.trade_upload_service.create_upload(file.filename, raw)
-        return SuccessEnvelope(
+        return _success_response(
+            request,
             data={
                 "upload_id": upload.upload_id,
                 "status": upload.status,
@@ -390,20 +639,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post(f"{app_settings.api_prefix}/trades/uploads/{{upload_id}}/parse")
     def parse_trade_upload(
+        request: Request,
         upload_id: str,
         payload: TradeUploadParseRequest,
-    ) -> SuccessEnvelope:
+    ) -> JSONResponse:
         mapping = payload.column_mapping
         upload = services.trade_upload_service.parse_upload(upload_id, mapping)
         if upload is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=ErrorPayload(
-                    code="UPLOAD_NOT_FOUND",
+                    code="NOT_FOUND",
                     message="trade upload not found",
                 ).model_dump(),
             )
-        return SuccessEnvelope(
+        return _success_response(
+            request,
             data={
                 "upload_id": upload.upload_id,
                 "raw_row_count": len(upload.raw_text.splitlines()) - 1,
@@ -414,17 +665,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
 
     @app.get(f"{app_settings.api_prefix}/trades/uploads/{{upload_id}}/records")
-    def get_trade_records(upload_id: str) -> SuccessEnvelope:
+    def get_trade_records(request: Request, upload_id: str) -> JSONResponse:
         upload = services.trade_upload_service.get_upload(upload_id)
         if upload is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=ErrorPayload(
-                    code="UPLOAD_NOT_FOUND",
+                    code="NOT_FOUND",
                     message="trade upload not found",
                 ).model_dump(),
             )
-        return SuccessEnvelope(
+        return _success_response(
+            request,
             data={"items": [item.model_dump(mode="json") for item in upload.records]}
         )
 
@@ -435,7 +687,7 @@ def _require_task(record: Any) -> Any:
     if record is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=ErrorPayload(code="TASK_NOT_FOUND", message="task not found").model_dump(),
+            detail=ErrorPayload(code="NOT_FOUND", message="task not found").model_dump(),
         )
     return record
 
@@ -443,16 +695,201 @@ def _require_task(record: Any) -> Any:
 def _serialize_task(record: Any, identifier_key: str) -> dict[str, Any]:
     payload = {
         identifier_key: record.id,
+        "task_id": record.id,
+        "task_type": record.kind,
         "status": record.status.value,
+        "state": record.status.value,
         "progress_pct": record.progress_pct,
+        "workspace_id": record.workspace_id,
+        "environment": record.environment,
+        "resource_refs": record.resource_refs,
+        "config_revision": record.config_revision,
+        "request_id": record.request_id,
+        "trace_id": record.trace_id,
+        "created_at": record.created_at.isoformat(),
+        "started_at": record.started_at.isoformat() if record.started_at else None,
+        "ended_at": record.finished_at.isoformat() if record.finished_at else None,
     }
     payload.update(record.result)
+    dataset_snapshot_ref = record.payload.get("data_snapshot", {}).get("dataset_snapshot_ref")
+    if dataset_snapshot_ref and "dataset_snapshot_ref" not in payload:
+        payload["dataset_snapshot_ref"] = dataset_snapshot_ref
     if record.error is not None:
         payload["error"] = record.error.model_dump()
-    if record.status == TaskStatus.CANCELLED:
+    if record.status == TaskStatus.CANCELED:
         payload["error"] = {
-            "code": "TASK_CANCELLED",
+            "code": "STATE_CONFLICT",
             "message": "task was cancelled",
             "details": {},
         }
     return payload
+
+
+def _ensure_dataset_snapshot(repository: Any, payload: Any) -> None:
+    record = _build_dataset_snapshot_record(payload)
+    existing = repository.get(record.dataset_snapshot_ref)
+    if existing is None:
+        repository.create(record)
+        return
+    comparable_fields = (
+        "market",
+        "asset_type",
+        "frequency",
+        "adjustment_mode",
+        "date_from",
+        "date_to",
+    )
+    for field_name in comparable_fields:
+        if getattr(existing, field_name) != getattr(record, field_name):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=ErrorPayload(
+                    code="REVISION_CONFLICT",
+                    message="dataset snapshot ref conflicts with existing snapshot metadata",
+                    details={"dataset_snapshot_ref": record.dataset_snapshot_ref},
+                ).model_dump(),
+            )
+
+
+def _ensure_replay_dataset_snapshot(
+    repository: Any,
+    trade_upload_service: Any,
+    payload: ReplayCreateRequest,
+) -> None:
+    if payload.data_snapshot is None:
+        payload.data_snapshot = DataSnapshotConfig(
+            dataset_snapshot_ref=f"replay_{payload.upload_id}_snapshot"
+        )
+
+    upload = trade_upload_service.get_upload(payload.upload_id)
+    date_from = utcnow()
+    date_to = date_from
+    if upload is not None and upload.records:
+        candidate_times = [
+            item.entry_time for item in upload.records
+        ] + [item.exit_time for item in upload.records if item.exit_time is not None]
+        date_from = min(candidate_times)
+        date_to = max(candidate_times)
+
+    record = DatasetSnapshotRecord(
+        dataset_snapshot_ref=payload.data_snapshot.dataset_snapshot_ref,
+        market="cn_a_share",
+        asset_type="stock",
+        frequency="1d",
+        adjustment_mode="qfq",
+        date_from=date_from,
+        date_to=date_to,
+    )
+    existing = repository.get(record.dataset_snapshot_ref)
+    if existing is None:
+        repository.create(record)
+        return
+
+
+def _build_dataset_snapshot_record(payload: Any) -> DatasetSnapshotRecord:
+    dataset = payload.dataset
+    execution_contract = payload.execution_contract
+    return DatasetSnapshotRecord(
+        dataset_snapshot_ref=payload.data_snapshot.dataset_snapshot_ref,
+        market=dataset.market,
+        asset_type=dataset.asset_type,
+        frequency=dataset.timeframe,
+        adjustment_mode=execution_contract.adjustment_mode,
+        date_from=dataset.from_,
+        date_to=dataset.to,
+    )
+
+
+def _resolve_request_id(request: Request) -> str:
+    incoming = request.headers.get("X-Request-Id", "").strip()
+    return incoming or f"req_{uuid4().hex[:12]}"
+
+
+def _get_current_user(request: Request, auth_service: AuthService):
+    return auth_service.get_user_by_session_token(request.cookies.get(SESSION_COOKIE_NAME))
+
+
+def _set_session_cookie(response: JSONResponse, session_token: str) -> None:
+    response.set_cookie(
+        key=SESSION_COOKIE_NAME,
+        value=session_token,
+        httponly=True,
+        max_age=14 * 24 * 60 * 60,
+        samesite="lax",
+        path="/",
+    )
+
+
+def _login_redirect(target_path: str) -> RedirectResponse:
+    next_target = quote(target_path, safe="/")
+    return RedirectResponse(
+        url=f"/login?next={next_target}",
+        status_code=status.HTTP_302_FOUND,
+    )
+
+
+def _default_error_code(status_code: int) -> str:
+    return {
+        400: "INVALID_ARGUMENT",
+        401: "UNAUTHORIZED",
+        403: "FORBIDDEN",
+        404: "NOT_FOUND",
+        409: "STATE_CONFLICT",
+        429: "RATE_LIMITED",
+    }.get(status_code, "INTERNAL_ERROR")
+
+
+def _default_error_message(code: str) -> str:
+    return {
+        "INVALID_ARGUMENT": "invalid request",
+        "UNAUTHORIZED": "unauthorized",
+        "FORBIDDEN": "forbidden",
+        "NOT_FOUND": "resource not found",
+        "STATE_CONFLICT": "state conflict",
+        "RATE_LIMITED": "rate limited",
+        "INTERNAL_ERROR": "internal error",
+    }.get(code, "request failed")
+
+
+def _success_response(
+    request: Request,
+    *,
+    data: Any,
+    status_code: int = status.HTTP_200_OK,
+    meta: dict[str, Any] | None = None,
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=status_code,
+        content=jsonable_encoder(
+            SuccessEnvelope(
+                request_id=request.state.request_id,
+                data=data,
+                meta=meta,
+            )
+        ),
+        headers={"X-Request-Id": request.state.request_id},
+    )
+
+
+def _error_response(
+    request: Request,
+    *,
+    status_code: int,
+    code: str,
+    message: str,
+    details: dict[str, Any] | None = None,
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=status_code,
+        content=jsonable_encoder(
+            ErrorEnvelope(
+                request_id=getattr(request.state, "request_id", _resolve_request_id(request)),
+                error=ErrorPayload(
+                    code=code,
+                    message=message,
+                    details=details or {},
+                ),
+            )
+        ),
+        headers={"X-Request-Id": getattr(request.state, "request_id", _resolve_request_id(request))},
+    )

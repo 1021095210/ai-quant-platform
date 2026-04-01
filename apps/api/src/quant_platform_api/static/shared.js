@@ -34,6 +34,30 @@ export async function api(path, options = {}) {
   return response.json();
 }
 
+export async function fetchCurrentUser() {
+  const response = await fetch("/api/v1/auth/me", {
+    headers: { Accept: "application/json" },
+  });
+  if (response.status === 401) {
+    return null;
+  }
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    throw new Error(payload?.error?.message || "无法获取当前用户信息");
+  }
+  const payload = await response.json();
+  return payload.data;
+}
+
+export async function logout() {
+  await api("/api/v1/auth/logout", { method: "POST" });
+}
+
+export function getNextPath(defaultPath = "/workspace") {
+  const next = new URLSearchParams(window.location.search).get("next") || defaultPath;
+  return next.startsWith("/") ? next : defaultPath;
+}
+
 export function pretty(value) {
   return JSON.stringify(value, null, 2);
 }
@@ -42,7 +66,7 @@ export async function pollTask(url) {
   for (let index = 0; index < 30; index += 1) {
     const payload = await api(url);
     const data = payload.data;
-    if (["completed", "failed", "cancelled"].includes(data.status)) {
+    if (["succeeded", "failed", "canceled"].includes(data.status)) {
       return data;
     }
     await new Promise((resolve) => setTimeout(resolve, 500));

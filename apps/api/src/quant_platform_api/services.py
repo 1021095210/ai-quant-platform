@@ -3,7 +3,9 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 import csv
 from datetime import datetime
+import hashlib
 from io import StringIO
+import json
 from time import sleep
 from typing import Any, Callable
 
@@ -22,14 +24,20 @@ from quant_platform_api.models import (
     TaskRecord,
     TradeRecordItem,
     TradeUploadRecord,
+    UserProfile,
+    UserRecord,
+    UserSessionRecord,
 )
 from quant_platform_api.repository import (
     CustomIndicatorRepository,
+    UserRepository,
+    UserSessionRepository,
     GlossaryTermRepository,
     StrategyRepository,
     TaskRepository,
     TradeUploadRepository,
 )
+from quant_platform_api.security import hash_password, issue_session_token, verify_password
 
 
 BUILTIN_INDICATORS: list[dict[str, Any]] = [
@@ -126,6 +134,13 @@ DEFAULT_GLOSSARY_TERMS: list[dict[str, Any]] = [
         "example": "“一字板不参与”会被解释成避开无法成交或高拥挤的封板形态。",
     },
 ]
+
+
+class TaskExecutionError(RuntimeError):
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
 
 
 class StrategyService:
@@ -309,6 +324,85 @@ class StrategyService:
                 for item in matched_terms
             ],
         }
+
+
+class AuthService:
+    def __init__(
+        self,
+        *,
+        user_repository: UserRepository,
+        session_repository: UserSessionRepository,
+    ) -> None:
+        self._user_repository = user_repository
+        self._session_repository = session_repository
+
+    def seed_default_accounts(self) -> None:
+        defaults = [
+            ("1111", "1111@example.com", "618618", "user"),
+            ("admin", "admin@example.com", "618618", "admin"),
+        ]
+        for username, contact, password, role in defaults:
+            if self._user_repository.get_by_username(username) is None:
+                self._user_repository.create(
+                    UserRecord(
+                        username=username,
+                        contact=contact,
+                        password_hash=hash_password(password),
+                        role=role,
+                    )
+                )
+
+    def register(self, *, username: str, contact: str, password: str) -> UserProfile:
+        normalized_username = username.strip()
+        normalized_contact = contact.strip()
+        if not normalized_username or not normalized_contact or not password:
+            raise TaskExecutionError("INVALID_ARGUMENT", "username, contact and password are required")
+        if self._user_repository.get_by_username(normalized_username) is not None:
+            raise TaskExecutionError("STATE_CONFLICT", "username already exists")
+        record = self._user_repository.create(
+            UserRecord(
+                username=normalized_username,
+                contact=normalized_contact,
+                password_hash=hash_password(password),
+            )
+        )
+        return self._to_profile(record)
+
+    def login(self, *, username: str, password: str) -> tuple[UserProfile, str]:
+        record = self._user_repository.get_by_username(username.strip())
+        if record is None or not verify_password(password, record.password_hash):
+            raise TaskExecutionError("FORBIDDEN", "invalid username or password")
+        session = self._session_repository.create(
+            UserSessionRecord(
+                user_id=record.user_id,
+                session_token=issue_session_token(),
+            )
+        )
+        return self._to_profile(record), session.session_token
+
+    def get_user_by_session_token(self, session_token: str | None) -> UserProfile | None:
+        if not session_token:
+            return None
+        session = self._session_repository.get_by_token(session_token)
+        if session is None:
+            return None
+        for user in self._user_repository.list():
+            if user.user_id == session.user_id:
+                return self._to_profile(user)
+        return None
+
+    def logout(self, session_token: str | None) -> None:
+        if session_token:
+            self._session_repository.delete_by_token(session_token)
+
+    def _to_profile(self, record: UserRecord) -> UserProfile:
+        return UserProfile(
+            user_id=record.user_id,
+            username=record.username,
+            contact=record.contact,
+            role=record.role,
+            created_at=record.created_at,
+        )
 
 
 class IndicatorService:
@@ -495,8 +589,21 @@ class AsyncTaskService:
         kind: str,
         payload: dict[str, Any],
         build_result: Callable[[str, dict[str, Any]], dict[str, Any]],
+        request_id: str,
+        idempotency_key: str | None = None,
     ) -> TaskRecord:
-        record = self._repository.create(TaskRecord(kind=kind, payload=payload))
+        record = self._repository.create(
+            TaskRecord(
+                kind=kind,
+                payload=payload,
+                request_id=request_id,
+                trace_id=request_id,
+                idempotency_key=idempotency_key,
+                config_revision=self._build_config_revision(kind, payload),
+                resource_refs=self._build_resource_refs(payload),
+            )
+        )
+        self._repository.mark_queued(record.id)
         mode = self._settings.job_execution_mode
         if mode == "immediate":
             self._run(record.id, payload, build_result)
@@ -519,7 +626,7 @@ class AsyncTaskService:
         build_result: Callable[[str, dict[str, Any]], dict[str, Any]],
     ) -> None:
         record = self._repository.mark_running(task_id)
-        if record is None or record.status.value == "cancelled":
+        if record is None or record.status.value == "canceled":
             return
 
         latency_ms = max(self._settings.job_simulation_latency_ms, 0)
@@ -527,19 +634,52 @@ class AsyncTaskService:
             sleep(latency_ms / 1000.0)
 
         current = self._repository.get(task_id)
-        if current is None or current.status.value == "cancelled":
+        if current is None or current.status.value == "canceled":
             return
 
         try:
             result = build_result(task_id, payload)
+            result.setdefault("config_revision", current.config_revision)
+            result.setdefault("request_id", current.request_id)
+            result.setdefault("trace_id", current.trace_id)
+        except TaskExecutionError as exc:
+            self._repository.fail(
+                task_id,
+                ErrorPayload(code=exc.code, message=exc.message),
+            )
+            return
         except Exception as exc:  # pragma: no cover - defensive path
             self._repository.fail(
                 task_id,
-                ErrorPayload(code="JOB_EXECUTION_FAILED", message=str(exc)),
+                ErrorPayload(code="INTERNAL_ERROR", message=str(exc)),
             )
             return
 
         self._repository.complete(task_id, result)
+
+    def _build_config_revision(self, kind: str, payload: dict[str, Any]) -> str:
+        snapshot = {
+            "kind": kind,
+            "payload": payload,
+            "backtest_engine_version": self._settings.backtest_engine_version,
+            "strategy_prompt_version": self._settings.strategy_prompt_version,
+            "replay_prompt_version": self._settings.replay_prompt_version,
+        }
+        digest = hashlib.sha256(
+            json.dumps(snapshot, sort_keys=True, ensure_ascii=False).encode("utf-8")
+        ).hexdigest()
+        return f"cfg_{digest[:16]}"
+
+    def _build_resource_refs(self, payload: dict[str, Any]) -> dict[str, str]:
+        refs: dict[str, str] = {}
+        if payload.get("strategy_version_id"):
+            refs["strategy_version_id"] = payload["strategy_version_id"]
+        if payload.get("upload_id"):
+            refs["upload_id"] = payload["upload_id"]
+        dataset_snapshot_ref = payload.get("data_snapshot", {}).get("dataset_snapshot_ref")
+        if dataset_snapshot_ref:
+            refs["dataset_snapshot_ref"] = dataset_snapshot_ref
+        return refs
 
 
 def build_backtest_result(
@@ -550,7 +690,7 @@ def build_backtest_result(
     def _builder(task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         project = strategy_service.get_project(payload["strategy_version_id"])
         if project is None:
-            raise ValueError("strategy version not found")
+            raise TaskExecutionError("NOT_FOUND", "strategy version not found")
 
         dataset = payload["dataset"]
         bars, data_source = market_data_service.load_daily_bars(
@@ -612,7 +752,7 @@ def build_replay_result(
     def _builder(task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         upload = trade_upload_service.get_upload(payload["upload_id"])
         if upload is None:
-            raise ValueError("trade upload not found")
+            raise TaskExecutionError("NOT_FOUND", "trade upload not found")
 
         records = upload.records
         total_count = len(records)
@@ -706,6 +846,7 @@ def build_replay_result(
         )
         return {
             "analysis_id": task_id,
+            "dataset_snapshot_ref": payload["data_snapshot"]["dataset_snapshot_ref"],
             "feature_snapshot_ref": f"feature_snapshot_{payload['upload_id']}",
             "analysis_rule_version": "replay_rule_v1",
             "prompt_template_version": settings.replay_prompt_version,
