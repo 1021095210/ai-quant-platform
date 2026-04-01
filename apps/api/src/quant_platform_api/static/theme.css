@@ -190,10 +190,6 @@ select {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
-.grid.four {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-}
-
 .card {
   background: var(--surface);
   border: 1px solid rgba(191, 212, 255, 0.55);
@@ -214,10 +210,6 @@ select {
 .card p {
   color: var(--text-soft);
   line-height: 1.65;
-}
-
-.capability-card h3 {
-  margin: 10px 0;
 }
 
 .card strong.metric-value {

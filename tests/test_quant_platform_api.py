@@ -111,7 +111,6 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertIn("量化研究平台", response.text)
         self.assertNotIn("中国股票 / ETF 量化研究平台", response.text)
         self.assertIn("在统一研究工作流中管理策略、回测与交易复盘。", response.text)
-        self.assertIn("能力状态", response.text)
         self.assertIn("首页", response.text)
 
     def test_public_auth_pages_are_accessible(self) -> None:
