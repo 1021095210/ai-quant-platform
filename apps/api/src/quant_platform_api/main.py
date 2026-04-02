@@ -6,7 +6,7 @@ from typing import Any
 from urllib.parse import quote
 from uuid import uuid4
 
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile, status
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
@@ -34,6 +34,7 @@ from quant_platform_api.models import (
     ErrorEnvelope,
     ErrorPayload,
     GlossaryTermCreateRequest,
+    TradeUploadManualCreateRequest,
     OptimizationCreateRequest,
     ProjectCreateRequest,
     TradeUploadParseRequest,
@@ -1108,6 +1109,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         upload = services.trade_upload_service.create_upload(
             file.filename,
             raw,
+            upload_kind="csv",
             user_id=current_user.user_id,
             workspace_id=current_user.workspace_id,
         )
@@ -1117,7 +1119,83 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "upload_id": upload.upload_id,
                 "status": upload.status,
                 "detected_columns": upload.detected_columns,
+                "upload_kind": upload.upload_kind,
             }
+        )
+
+    @app.post(f"{app_settings.api_prefix}/trades/uploads/manual")
+    def upload_manual_trades(
+        request: Request,
+        payload: TradeUploadManualCreateRequest,
+    ) -> JSONResponse:
+        current_user = _require_current_user(request, services.auth_service)
+        upload = services.trade_upload_service.create_manual_upload(
+            source_file_name=payload.source_file_name or f"{payload.source_type}_entry.json",
+            upload_kind=payload.source_type,
+            records=[item.model_dump(mode="json") for item in payload.records],
+            metadata={
+                "source_notes": payload.source_notes,
+                "market": payload.market,
+            },
+            user_id=current_user.user_id,
+            workspace_id=current_user.workspace_id,
+        )
+        return _success_response(
+            request,
+            data={
+                "upload_id": upload.upload_id,
+                "status": upload.status,
+                "detected_columns": upload.detected_columns,
+                "upload_kind": upload.upload_kind,
+                "record_count": len(upload.records),
+            },
+        )
+
+    @app.post(f"{app_settings.api_prefix}/trades/uploads/screenshot")
+    async def upload_trade_screenshot(
+        request: Request,
+        file: UploadFile = File(...),
+        symbol: str = Form(...),
+        side: str = Form("long"),
+        entry_time: str = Form(...),
+        exit_time: str | None = Form(None),
+        pnl: float = Form(0.0),
+        market: str | None = Form(None),
+        source_notes: str | None = Form(None),
+    ) -> JSONResponse:
+        current_user = _require_current_user(request, services.auth_service)
+        content = await file.read()
+        upload = services.trade_upload_service.create_manual_upload(
+            source_file_name=file.filename or "trade-screenshot.png",
+            upload_kind="screenshot",
+            records=[
+                {
+                    "symbol": symbol,
+                    "side": side,
+                    "entry_time": entry_time,
+                    "exit_time": exit_time,
+                    "pnl": pnl,
+                }
+            ],
+            metadata={
+                "market": market,
+                "source_notes": source_notes,
+                "attachment_name": file.filename,
+                "attachment_content_type": file.content_type,
+                "attachment_size_bytes": len(content),
+            },
+            user_id=current_user.user_id,
+            workspace_id=current_user.workspace_id,
+        )
+        return _success_response(
+            request,
+            data={
+                "upload_id": upload.upload_id,
+                "status": upload.status,
+                "detected_columns": upload.detected_columns,
+                "upload_kind": upload.upload_kind,
+                "record_count": len(upload.records),
+            },
         )
 
     @app.post(f"{app_settings.api_prefix}/trades/uploads/{{upload_id}}/parse")
