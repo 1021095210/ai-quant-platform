@@ -15,7 +15,14 @@ const nodes = {
   code: document.querySelector("#custom-indicator-code"),
   usage: document.querySelector("#custom-indicator-usage"),
   library: document.querySelector("#custom-indicator-library"),
+  saveButton: document.querySelector("#save-custom-indicator-btn"),
 };
+
+function syncIndicatorActionState() {
+  const ready = Boolean(state.generatedIndicator);
+  nodes.saveButton.disabled = !ready;
+  nodes.saveButton.className = ready ? "btn primary" : "btn disabled";
+}
 
 async function loadPage() {
   const [builtinPayload, customPayload] = await Promise.all([
@@ -100,6 +107,7 @@ async function generateIndicator() {
   nodes.formula.value = payload.data.formula_text;
   nodes.code.value = payload.data.python_code;
   nodes.usage.value = payload.data.usage_hint;
+  syncIndicatorActionState();
   setStatus("自定义指标草稿已生成，可以保存到指标库。");
 }
 
@@ -122,6 +130,7 @@ async function saveIndicator() {
   });
   const libraryPayload = await api("/api/v1/indicators/custom");
   renderLibrary(libraryPayload.data.items);
+  syncIndicatorActionState();
   setStatus("自定义指标已保存，策略工坊现在可以通过指标名称直接调用它。");
 }
 
@@ -132,6 +141,7 @@ document
   .querySelector("#save-custom-indicator-btn")
   .addEventListener("click", handle(saveIndicator));
 
+syncIndicatorActionState();
 loadPage().catch((error) => {
   setStatus(error.message);
   nodes.summary.textContent = pretty({ error: error.message });
