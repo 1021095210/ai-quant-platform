@@ -291,6 +291,9 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertIn("滑点说明", response.text)
         self.assertIn("盘中撮合策略说明", response.text)
         self.assertIn("预热Bar数说明", response.text)
+        self.assertIn("最大回撤保护说明", response.text)
+        self.assertIn("最大持有Bar数说明", response.text)
+        self.assertIn("回测曲线", response.text)
         self.assertIn("实验 / 回测对比", response.text)
         self.assertIn("对比已选回测", response.text)
         self.assertIn("执行配置差异", response.text)
@@ -1612,6 +1615,71 @@ class QuantPlatformApiTests(unittest.TestCase):
             ).fetchone()
         self.assertEqual(("cn_a_share", "stock", "1d", "qfq"), snapshot_row)
 
+    def test_manual_trade_upload_creates_parsed_records(self) -> None:
+        client = self._build_client()
+        self._login(client)
+
+        response = client.post(
+            "/api/v1/trades/uploads/manual",
+            json={
+                "source_type": "manual",
+                "source_file_name": "manual-entry.json",
+                "source_notes": "手动补录",
+                "records": [
+                    {
+                        "symbol": "600519.SH",
+                        "side": "long",
+                        "entry_time": "2024-05-01T09:30:00Z",
+                        "exit_time": "2024-05-03T15:00:00Z",
+                        "pnl": 2800,
+                    }
+                ],
+            },
+        )
+
+        self.assertEqual(200, response.status_code)
+        data = response.json()["data"]
+        self.assertEqual("manual", data["upload_kind"])
+        self.assertEqual("parsed", data["status"])
+        self.assertEqual(1, data["record_count"])
+
+    def test_screenshot_trade_upload_creates_structured_record(self) -> None:
+        client = self._build_client()
+        self._login(client)
+
+        response = client.post(
+            "/api/v1/trades/uploads/screenshot",
+            data={
+                "market": "cn_equity",
+                "symbol": "600519.SH",
+                "side": "long",
+                "entry_time": "2024-05-01T09:30:00Z",
+                "exit_time": "2024-05-03T15:00:00Z",
+                "pnl": "2800",
+                "source_notes": "券商成交截图",
+            },
+            files={"file": ("trade.png", b"fake-image-binary", "image/png")},
+        )
+
+        self.assertEqual(200, response.status_code)
+        data = response.json()["data"]
+        self.assertEqual("screenshot", data["upload_kind"])
+        self.assertEqual("parsed", data["status"])
+        self.assertEqual(1, data["record_count"])
+
+    def test_replay_page_supports_csv_screenshot_and_manual_sources(self) -> None:
+        client = self._build_client()
+        self._login(client)
+
+        response = client.get("/replay")
+
+        self.assertEqual(200, response.status_code)
+        self.assertIn("CSV 导入", response.text)
+        self.assertIn("成交截图", response.text)
+        self.assertIn("手动录入", response.text)
+        self.assertIn("登记截图并生成记录", response.text)
+        self.assertIn("加入手动记录", response.text)
+
     def test_replay_analysis_for_single_side_sample_uses_single_direction_summary(self) -> None:
         client = self._build_client()
         self._login(client)
@@ -1653,7 +1721,17 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertIn("当前样本全部为买入后卖出交易", data["summary"])
         self.assertNotIn("需要重点优化的是买入后卖出交易", data["summary"])
         self.assertEqual("当前样本尚未形成可比较的方向差异", data["losing_patterns"][0]["pattern"])
-        self.assertEqual("优化单一方向入场过滤", data["suggestion_rules"][0]["title"])
+        self.assertEqual("只在日线趋势同向时入场", data["suggestion_rules"][0]["title"])
+        self.assertEqual("加入量能和弱开过滤", data["suggestion_rules"][1]["title"])
+        self.assertEqual("收紧止损并缩短持有周期", data["suggestion_rules"][2]["title"])
+        self.assertEqual(
+            1.2,
+            data["suggestion_rules"][1]["dsl_patch"]["filters"]["volume_confirmation"]["value"],
+        )
+        self.assertEqual(
+            -0.02,
+            data["suggestion_rules"][2]["dsl_patch"]["risk"]["stop_loss_pct"],
+        )
 
     def test_replay_analysis_avoids_short_suggestions_for_cn_equity_uploads(self) -> None:
         temp_dir = tempfile.TemporaryDirectory()
@@ -1703,6 +1781,52 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertNotIn("建议做空", json.dumps(data, ensure_ascii=False))
         self.assertEqual("反向卖出记录当前是主要拖累方向", data["losing_patterns"][0]["pattern"])
         self.assertEqual("先核对反向记录来源", data["suggestion_rules"][0]["title"])
+
+    def test_replay_analysis_uses_crypto_specific_single_side_suggestions(self) -> None:
+        client = self._build_client()
+        self._login(client)
+        csv_text = (
+            "symbol,side,entry_time,exit_time,pnl\n"
+            "BTCUSDT,long,2024-05-01T10:00:00Z,2024-05-01T11:00:00Z,150\n"
+            "SOLUSDT,long,2024-05-03T08:00:00Z,2024-05-03T10:30:00Z,60\n"
+        )
+        upload = client.post(
+            "/api/v1/trades/uploads",
+            files={"file": ("trades.csv", csv_text.encode("utf-8"), "text/csv")},
+        ).json()["data"]
+        upload_id = upload["upload_id"]
+        client.post(
+            f"/api/v1/trades/uploads/{upload_id}/parse",
+            json={
+                "column_mapping": {
+                    "symbol": "symbol",
+                    "side": "side",
+                    "entry_time": "entry_time",
+                    "exit_time": "exit_time",
+                    "pnl": "pnl",
+                }
+            },
+        )
+
+        created = client.post(
+            "/api/v1/replays/analyses",
+            json={
+                "upload_id": upload_id,
+                "focus_dimensions": ["side_performance"],
+            },
+        )
+        analysis_id = created.json()["data"]["analysis_id"]
+        fetched = client.get(f"/api/v1/replays/analyses/{analysis_id}")
+
+        self.assertEqual(200, fetched.status_code)
+        data = fetched.json()["data"]
+        self.assertIn("当前样本全部为做多交易", data["summary"])
+        self.assertEqual("只在更高周期趋势一致时追随动量", data["suggestion_rules"][0]["title"])
+        self.assertEqual(
+            "15m",
+            data["suggestion_rules"][0]["dsl_patch"]["filters"]["trend_confirmation"]["entry_timeframe"],
+        )
+        self.assertEqual("增加波动率过滤和更短的保护止损", data["suggestion_rules"][1]["title"])
 
     def test_private_resource_endpoints_require_login(self) -> None:
         client = self._build_client()
