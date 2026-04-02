@@ -37,12 +37,14 @@
         </div>
         <div class="hero-panel">
           <div class="card muted">
-            <span class="mini-label">当前版本</span>
-            <strong id="current-version" class="metric-value">未保存</strong>
+            <span class="mini-label">保存版本</span>
+            <strong id="current-version" class="metric-value">尚未保存</strong>
           </div>
           <div class="card muted">
-            <span class="mini-label">当前标题</span>
-            <strong id="current-title" class="metric-value">未命名</strong>
+            <label class="field">
+              <span>策略名称</span>
+              <input id="project-title" value="多周期趋势确认策略" placeholder="给这套策略起一个便于识别的名称" />
+            </label>
           </div>
         </div>
       </section>
@@ -114,18 +116,12 @@
                 <div class="muted-note">可同时勾选多个周期。例如把“昨日条件”留在日线，把“KDJ 金叉买入”放到 15 分钟层。</div>
               </div>
             </label>
-            <div class="form-grid two">
-              <label class="field">
-                <span>项目标题</span>
-                <input id="project-title" value="多周期趋势确认策略" />
-              </label>
-              <label class="field">
-                <span>策略语义提示</span>
-                <div class="selection-card">
-                  <div class="muted-note">主周期规则会进入 `entry / exit`，其他周期条件会进入 `entry_context / exit_context`，这样后续接入更真实的多周期执行引擎时可以直接复用。</div>
-                </div>
-              </label>
-            </div>
+            <label class="field">
+              <span>策略语义提示</span>
+              <div class="selection-card">
+                <div class="muted-note">主周期规则会进入 `entry / exit`，其他周期条件会进入 `entry_context / exit_context`，这样后续接入更真实的多周期执行引擎时可以直接复用。</div>
+              </div>
+            </label>
             <label class="toggle">
               <input id="teaching-mode-toggle" type="checkbox" />
               <span>
