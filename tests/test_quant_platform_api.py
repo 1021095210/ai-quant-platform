@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 import sqlite3
 import tempfile
@@ -1594,7 +1595,10 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertTrue(data["config_revision"].startswith("cfg_"))
         self.assertTrue(data["dataset_snapshot_ref"].startswith("replay_"))
         self.assertIn("本次复盘共分析 3 笔交易", data["summary"])
-        self.assertEqual("long side performed better", data["winning_patterns"][0]["pattern"])
+        self.assertIn("当前表现更优的是做多交易", data["summary"])
+        self.assertIn("需要重点优化的是做空交易", data["summary"])
+        self.assertEqual("做多交易的累计盈亏和整体表现当前更优", data["winning_patterns"][0]["pattern"])
+        self.assertIn("把该方向仓位降到优势方向的一半", data["suggestion_rules"][0]["description"])
         self.assertTrue(data["suggestion_rules"])
 
         with sqlite3.connect(database_path) as connection:
@@ -1607,6 +1611,98 @@ class QuantPlatformApiTests(unittest.TestCase):
                 (data["dataset_snapshot_ref"],),
             ).fetchone()
         self.assertEqual(("cn_a_share", "stock", "1d", "qfq"), snapshot_row)
+
+    def test_replay_analysis_for_single_side_sample_uses_single_direction_summary(self) -> None:
+        client = self._build_client()
+        self._login(client)
+        csv_text = (
+            "symbol,side,entry_time,exit_time,pnl\n"
+            "600519.SH,long,2024-05-01T10:00:00Z,2024-05-01T11:00:00Z,150\n"
+            "510300.SH,long,2024-05-03T08:00:00Z,2024-05-03T10:30:00Z,60\n"
+        )
+        upload = client.post(
+            "/api/v1/trades/uploads",
+            files={"file": ("trades.csv", csv_text.encode("utf-8"), "text/csv")},
+        ).json()["data"]
+        upload_id = upload["upload_id"]
+        client.post(
+            f"/api/v1/trades/uploads/{upload_id}/parse",
+            json={
+                "column_mapping": {
+                    "symbol": "symbol",
+                    "side": "side",
+                    "entry_time": "entry_time",
+                    "exit_time": "exit_time",
+                    "pnl": "pnl",
+                }
+            },
+        )
+
+        created = client.post(
+            "/api/v1/replays/analyses",
+            json={
+                "upload_id": upload_id,
+                "focus_dimensions": ["side_performance"],
+            },
+        )
+        analysis_id = created.json()["data"]["analysis_id"]
+        fetched = client.get(f"/api/v1/replays/analyses/{analysis_id}")
+
+        self.assertEqual(200, fetched.status_code)
+        data = fetched.json()["data"]
+        self.assertIn("当前样本全部为买入后卖出交易", data["summary"])
+        self.assertNotIn("需要重点优化的是买入后卖出交易", data["summary"])
+        self.assertEqual("当前样本尚未形成可比较的方向差异", data["losing_patterns"][0]["pattern"])
+        self.assertEqual("优化单一方向入场过滤", data["suggestion_rules"][0]["title"])
+
+    def test_replay_analysis_avoids_short_suggestions_for_cn_equity_uploads(self) -> None:
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        database_path = Path(temp_dir.name) / "quant_platform.db"
+        client = self._build_client(
+            database_url=f"sqlite+pysqlite:///{database_path}",
+        )
+        self._login(client)
+        csv_text = (
+            "symbol,side,entry_time,exit_time,pnl\n"
+            "600519.SH,long,2024-05-01T10:00:00Z,2024-05-01T11:00:00Z,150\n"
+            "000001.SZ,short,2024-05-02T09:00:00Z,2024-05-02T14:00:00Z,-80\n"
+        )
+        upload = client.post(
+            "/api/v1/trades/uploads",
+            files={"file": ("trades.csv", csv_text.encode("utf-8"), "text/csv")},
+        ).json()["data"]
+        upload_id = upload["upload_id"]
+        client.post(
+            f"/api/v1/trades/uploads/{upload_id}/parse",
+            json={
+                "column_mapping": {
+                    "symbol": "symbol",
+                    "side": "side",
+                    "entry_time": "entry_time",
+                    "exit_time": "exit_time",
+                    "pnl": "pnl",
+                }
+            },
+        )
+
+        created = client.post(
+            "/api/v1/replays/analyses",
+            json={
+                "upload_id": upload_id,
+                "focus_dimensions": ["side_performance"],
+            },
+        )
+        analysis_id = created.json()["data"]["analysis_id"]
+        fetched = client.get(f"/api/v1/replays/analyses/{analysis_id}")
+
+        self.assertEqual(200, fetched.status_code)
+        data = fetched.json()["data"]
+        self.assertIn("买入后卖出交易", data["summary"])
+        self.assertIn("反向卖出记录", data["summary"])
+        self.assertNotIn("建议做空", json.dumps(data, ensure_ascii=False))
+        self.assertEqual("反向卖出记录当前是主要拖累方向", data["losing_patterns"][0]["pattern"])
+        self.assertEqual("先核对反向记录来源", data["suggestion_rules"][0]["title"])
 
     def test_private_resource_endpoints_require_login(self) -> None:
         client = self._build_client()
