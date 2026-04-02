@@ -87,7 +87,7 @@ async function refreshProjects() {
       (item) => `
         <div class="project-item">
           <strong>${item.title}</strong>
-          <div>版本: ${item.version_id}</div>
+          <div>版本: ${item.version_label || item.version_id}</div>
           <div>市场: ${item.strategy_dsl.market} / ${item.strategy_dsl.timeframe}</div>
         </div>
       `,
