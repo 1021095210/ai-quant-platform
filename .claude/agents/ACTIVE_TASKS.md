@@ -1,17 +1,3 @@
 # Active Tasks
 
 当前无进行中的任务。
-
-最近完成的接力记录见：
-- `.claude/agents/briefings/2026-04-02_codex_回测对比层与测试发布流程收口.md`
-- `.claude/agents/briefings/2026-04-02_codex_回测结算规则与盘中撮合落引擎.md`
-- `.claude/agents/briefings/2026-04-02_codex_正式部署准备与生产配置收口.md`
-- `.claude/agents/briefings/2026-04-02_codex_规则分组折叠与回测术语提示.md`
-- `.claude/agents/briefings/2026-04-02_codex_规则模块复核与回测可信度说明.md`
-- `.claude/agents/briefings/2026-04-02_codex_管理员运营能力与安全审计.md`
-- `.claude/agents/briefings/2026-04-01_codex_修复规则模块加载故障.md`
-- `.claude/agents/briefings/2026-04-01_codex_管理员后台与平台治理视图.md`
-- `.claude/agents/briefings/2026-04-01_codex_部署基线与架构收口.md`
-- `.claude/agents/briefings/2026-04-01_codex_回测配置快照透明化与研究中枢.md`
-- `.claude/agents/briefings/2026-04-01_codex_移除首页能力状态与双视角评审.md`
-- `.claude/agents/briefings/2026-04-01_codex_默认规则恢复与首页能力状态.md`
