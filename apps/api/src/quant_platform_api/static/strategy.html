@@ -37,8 +37,11 @@
         </div>
         <div class="hero-panel">
           <div class="card muted">
-            <span class="mini-label">保存版本</span>
-            <strong id="current-version" class="metric-value">尚未保存</strong>
+            <label class="field">
+              <span>版本标签</span>
+              <input id="project-version-label" value="研究版A" placeholder="例如：日线验证版 / 盘中观察版 / 第二轮迭代版" />
+            </label>
+            <div id="current-version" class="muted-note" style="margin-top: 10px">系统版本ID将在保存后生成。</div>
           </div>
           <div class="card muted">
             <label class="field">
@@ -131,10 +134,10 @@
             </label>
             <div class="actions">
               <button id="generate-strategy-btn">生成 Python 策略</button>
-              <button id="save-project-btn" class="btn secondary">保存项目</button>
+              <button id="save-project-btn" class="btn disabled" disabled>保存项目</button>
               <a class="btn secondary" href="/indicators">去指标设置</a>
               <a class="btn secondary" href="/rules">去规则模块</a>
-              <a class="btn ghost" href="/backtests">去回测中心</a>
+              <a id="go-backtests-link" class="btn disabled" href="/backtests" aria-disabled="true">去回测中心</a>
             </div>
             <div id="strategy-summary" class="result-box light">等待生成策略。</div>
             <div id="strategy-ambiguities" class="pill-row"></div>
