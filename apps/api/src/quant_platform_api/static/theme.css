@@ -389,6 +389,16 @@ button {
   background: var(--accent-soft);
 }
 
+.btn.disabled,
+button:disabled {
+  color: var(--text-soft);
+  background: linear-gradient(180deg, #e7eefb 0%, #dce6f8 100%);
+  box-shadow: none;
+  cursor: not-allowed;
+  transform: none;
+  opacity: 0.88;
+}
+
 .btn.ghost {
   color: var(--text-soft);
   background: transparent;
@@ -398,6 +408,10 @@ button {
 .btn:hover,
 button:hover {
   transform: translateY(-1px);
+}
+
+button:disabled:hover {
+  transform: none;
 }
 
 .code-block,
