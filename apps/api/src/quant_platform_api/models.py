@@ -178,12 +178,23 @@ class AdminUserRoleUpdateRequest(BaseModel):
     role: str
 
 
+class AdminUserStatusUpdateRequest(BaseModel):
+    status: str
+    reason: str | None = None
+
+
+class AdminUserPasswordResetRequest(BaseModel):
+    new_password: str
+
+
 class UserProfile(BaseModel):
     user_id: str
     workspace_id: str
     username: str
     contact: str
     role: str
+    status: str = "active"
+    status_reason: str | None = None
     created_at: datetime
 
 
@@ -373,6 +384,8 @@ class UserRecord(BaseModel):
     contact: str
     password_hash: str
     role: str = "user"
+    status: str = "active"
+    status_reason: str | None = None
     created_at: datetime = Field(default_factory=utcnow)
 
 
@@ -380,4 +393,25 @@ class UserSessionRecord(BaseModel):
     session_id: str = Field(default_factory=lambda: f"sess_{uuid4().hex[:10]}")
     user_id: str
     session_token: str
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+class AuthEventRecord(BaseModel):
+    event_id: str = Field(default_factory=lambda: f"auth_{uuid4().hex[:10]}")
+    user_id: str | None = None
+    username: str
+    event_type: str
+    outcome: str
+    reason: str | None = None
+    ip_address: str | None = None
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+class AdminAuditLogRecord(BaseModel):
+    log_id: str = Field(default_factory=lambda: f"audit_{uuid4().hex[:10]}")
+    actor_user_id: str
+    target_user_id: str | None = None
+    action: str
+    summary: str
+    details: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=utcnow)

@@ -30,6 +30,8 @@ class UserORM(Base):
     contact: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     password_hash: Mapped[str] = mapped_column(Text())
     role: Mapped[str] = mapped_column(String(32), default="user")
+    status: Mapped[str] = mapped_column(String(32), default="active")
+    status_reason: Mapped[str | None] = mapped_column(Text(), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
 
 
@@ -39,6 +41,31 @@ class UserSessionORM(Base):
     session_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     user_id: Mapped[str] = mapped_column(String(64), index=True)
     session_token: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+
+class AuthEventORM(Base):
+    __tablename__ = "auth_events"
+
+    event_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
+    username: Mapped[str] = mapped_column(String(64), index=True)
+    event_type: Mapped[str] = mapped_column(String(32), index=True)
+    outcome: Mapped[str] = mapped_column(String(32), index=True)
+    reason: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    ip_address: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+
+class AdminAuditLogORM(Base):
+    __tablename__ = "admin_audit_logs"
+
+    log_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    actor_user_id: Mapped[str] = mapped_column(String(64), index=True)
+    target_user_id: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
+    action: Mapped[str] = mapped_column(String(64), index=True)
+    summary: Mapped[str] = mapped_column(Text())
+    details_json: Mapped[str] = mapped_column(Text(), default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
 
 

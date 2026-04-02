@@ -14,6 +14,8 @@ from quant_platform_api.backtest_engine import run_backtest
 from quant_platform_api.config import Settings
 from quant_platform_api.market_data import MarketDataService
 from quant_platform_api.models import (
+    AdminAuditLogRecord,
+    AuthEventRecord,
     CustomIndicatorCreateRequest,
     CustomIndicatorGenerateRequest,
     CustomIndicatorRecord,
@@ -32,8 +34,11 @@ from quant_platform_api.models import (
     UserProfile,
     UserRecord,
     UserSessionRecord,
+    utcnow,
 )
 from quant_platform_api.repository import (
+    AdminAuditLogRepository,
+    AuthEventRepository,
     CustomIndicatorRepository,
     DefaultRuleRepository,
     UserRepository,
@@ -652,9 +657,11 @@ class AuthService:
         *,
         user_repository: UserRepository,
         session_repository: UserSessionRepository,
+        auth_event_repository: AuthEventRepository,
     ) -> None:
         self._user_repository = user_repository
         self._session_repository = session_repository
+        self._auth_event_repository = auth_event_repository
 
     def seed_default_accounts(self) -> None:
         defaults = [
@@ -688,15 +695,57 @@ class AuthService:
         )
         return self._to_profile(record)
 
-    def login(self, *, username: str, password: str) -> tuple[UserProfile, str]:
-        record = self._user_repository.get_by_username(username.strip())
-        if record is None or not verify_password(password, record.password_hash):
+    def login(
+        self,
+        *,
+        username: str,
+        password: str,
+        ip_address: str | None = None,
+    ) -> tuple[UserProfile, str]:
+        normalized_username = username.strip()
+        record = self._user_repository.get_by_username(normalized_username)
+        if record is None:
+            self._record_auth_event(
+                user_id=None,
+                username=normalized_username,
+                event_type="login",
+                outcome="failed",
+                reason="invalid_credentials",
+                ip_address=ip_address,
+            )
+            raise TaskExecutionError("FORBIDDEN", "invalid username or password")
+        if record.status != "active":
+            self._record_auth_event(
+                user_id=record.user_id,
+                username=record.username,
+                event_type="login",
+                outcome="blocked",
+                reason=record.status_reason or "account is suspended",
+                ip_address=ip_address,
+            )
+            raise TaskExecutionError("FORBIDDEN", "account is suspended")
+        if not verify_password(password, record.password_hash):
+            self._record_auth_event(
+                user_id=record.user_id,
+                username=record.username,
+                event_type="login",
+                outcome="failed",
+                reason="invalid_credentials",
+                ip_address=ip_address,
+            )
             raise TaskExecutionError("FORBIDDEN", "invalid username or password")
         session = self._session_repository.create(
             UserSessionRecord(
                 user_id=record.user_id,
                 session_token=issue_session_token(),
             )
+        )
+        self._record_auth_event(
+            user_id=record.user_id,
+            username=record.username,
+            event_type="login",
+            outcome="succeeded",
+            ip_address=ip_address,
         )
         return self._to_profile(record), session.session_token
 
@@ -708,12 +757,25 @@ class AuthService:
             return None
         for user in self._user_repository.list():
             if user.user_id == session.user_id:
+                if user.status != "active":
+                    self._session_repository.delete_by_token(session_token)
+                    return None
                 return self._to_profile(user)
         return None
 
-    def logout(self, session_token: str | None) -> None:
+    def logout(self, session_token: str | None, *, ip_address: str | None = None) -> None:
         if session_token:
+            session = self._session_repository.get_by_token(session_token)
             self._session_repository.delete_by_token(session_token)
+            if session is not None:
+                user = self._user_repository.get(session.user_id)
+                self._record_auth_event(
+                    user_id=session.user_id,
+                    username=user.username if user else session.user_id,
+                    event_type="logout",
+                    outcome="succeeded",
+                    ip_address=ip_address,
+                )
 
     def _to_profile(self, record: UserRecord) -> UserProfile:
         return UserProfile(
@@ -722,7 +784,30 @@ class AuthService:
             username=record.username,
             contact=record.contact,
             role=record.role,
+            status=record.status,
+            status_reason=record.status_reason,
             created_at=record.created_at,
+        )
+
+    def _record_auth_event(
+        self,
+        *,
+        user_id: str | None,
+        username: str,
+        event_type: str,
+        outcome: str,
+        reason: str | None = None,
+        ip_address: str | None = None,
+    ) -> None:
+        self._auth_event_repository.create(
+            AuthEventRecord(
+                user_id=user_id,
+                username=username or "unknown",
+                event_type=event_type,
+                outcome=outcome,
+                reason=reason,
+                ip_address=ip_address,
+            )
         )
 
     @staticmethod
@@ -1105,11 +1190,15 @@ class AdminService:
         *,
         user_repository: UserRepository,
         session_repository: UserSessionRepository,
+        auth_event_repository: AuthEventRepository,
+        audit_log_repository: AdminAuditLogRepository,
         strategy_repository: StrategyRepository,
         task_repository: TaskRepository,
     ) -> None:
         self._user_repository = user_repository
         self._session_repository = session_repository
+        self._auth_event_repository = auth_event_repository
+        self._audit_log_repository = audit_log_repository
         self._strategy_repository = strategy_repository
         self._task_repository = task_repository
 
@@ -1133,11 +1222,24 @@ class AdminService:
             if item["coverage_status"] != "ready"
             or (item.get("missing_rate_pct") or 0) > 1
         ]
+        security_events = self._auth_event_repository.list_recent(limit=200)
+        audit_logs = self._audit_log_repository.list_recent(limit=50)
+        cutoff_24h = now - timedelta(hours=24)
+        failed_logins_24h = len(
+            [
+                item
+                for item in security_events
+                if item.event_type == "login"
+                and item.outcome in {"failed", "blocked"}
+                and item.created_at >= cutoff_24h
+            ]
+        )
 
         return {
             "counts": {
                 "users": len(users),
                 "admins": len([item for item in users if item.role == "admin"]),
+                "suspended_users": len([item for item in users if item.status != "active"]),
                 "active_sessions": len(sessions),
                 "projects": len(projects),
                 "backtests": len(backtests),
@@ -1145,6 +1247,7 @@ class AdminService:
                 "running_tasks": len(running_tasks),
                 "failed_tasks": len(failed_tasks),
                 "new_users_7d": len([item for item in users if item.created_at >= cutoff_7d]),
+                "failed_logins_24h": failed_logins_24h,
             },
             "role_distribution": self._build_distribution(
                 [item.role for item in users],
@@ -1176,11 +1279,16 @@ class AdminService:
             "recent_users": enriched_users[:8],
             "recent_tasks": self._build_recent_tasks(tasks, enriched_users),
             "snapshot_states": self._collect_snapshot_states(backtests),
+            "recent_audit_logs": self.list_audit_logs(limit=8),
+            "recent_security_events": self.list_security_events(limit=8),
             "governance_notes": self._build_governance_notes(
                 users=len(users),
                 running_tasks=len(running_tasks),
                 failed_tasks=len(failed_tasks),
                 coverage_risk_count=len(coverage_risk_snapshots),
+                suspended_users=len([item for item in users if item.status != "active"]),
+                failed_logins_24h=failed_logins_24h,
+                audit_events=len(audit_logs),
             ),
         }
 
@@ -1215,7 +1323,127 @@ class AdminService:
         updated = self._user_repository.update_role(target_user_id, normalized_role)
         if updated is None:
             raise TaskExecutionError("NOT_FOUND", "user not found")
+        self._record_audit_log(
+            actor_user_id=current_user_id,
+            target_user_id=updated.user_id,
+            action="user.role_updated",
+            summary=f"将 {updated.username} 的角色更新为 {normalized_role}",
+            details={"role": normalized_role},
+        )
         return updated
+
+    def update_user_status(
+        self,
+        *,
+        current_user_id: str,
+        target_user_id: str,
+        status: str,
+        reason: str | None,
+    ) -> UserRecord:
+        normalized_status = status.strip().lower()
+        if normalized_status not in {"active", "suspended"}:
+            raise TaskExecutionError("INVALID_ARGUMENT", "status must be active or suspended")
+
+        target = self._user_repository.get(target_user_id)
+        if target is None:
+            raise TaskExecutionError("NOT_FOUND", "user not found")
+        if target.user_id == current_user_id and normalized_status != "active":
+            raise TaskExecutionError("STATE_CONFLICT", "cannot suspend current admin session")
+        if target.role == "admin" and normalized_status != "active":
+            active_admin_count = len(
+                [
+                    item
+                    for item in self._user_repository.list()
+                    if item.role == "admin" and item.status == "active"
+                ]
+            )
+            if active_admin_count <= 1:
+                raise TaskExecutionError("STATE_CONFLICT", "cannot suspend the last active admin")
+
+        normalized_reason = (reason or "").strip() or None
+        updated = self._user_repository.update_status(
+            target_user_id,
+            status=normalized_status,
+            reason=normalized_reason,
+        )
+        if updated is None:
+            raise TaskExecutionError("NOT_FOUND", "user not found")
+        if normalized_status != "active":
+            self._session_repository.delete_by_user_id(target_user_id)
+        self._record_audit_log(
+            actor_user_id=current_user_id,
+            target_user_id=updated.user_id,
+            action="user.status_updated",
+            summary=f"将 {updated.username} 的状态更新为 {normalized_status}",
+            details={"status": normalized_status, "reason": normalized_reason},
+        )
+        return updated
+
+    def reset_user_password(
+        self,
+        *,
+        current_user_id: str,
+        target_user_id: str,
+        new_password: str,
+    ) -> UserRecord:
+        normalized_password = new_password.strip()
+        if len(normalized_password) < 6:
+            raise TaskExecutionError("INVALID_ARGUMENT", "new_password must be at least 6 characters")
+        target = self._user_repository.get(target_user_id)
+        if target is None:
+            raise TaskExecutionError("NOT_FOUND", "user not found")
+        updated = self._user_repository.update_password_hash(
+            target_user_id,
+            hash_password(normalized_password),
+        )
+        if updated is None:
+            raise TaskExecutionError("NOT_FOUND", "user not found")
+        self._session_repository.delete_by_user_id(target_user_id)
+        self._record_audit_log(
+            actor_user_id=current_user_id,
+            target_user_id=updated.user_id,
+            action="user.password_reset",
+            summary=f"已重置 {updated.username} 的登录密码并清理其会话",
+            details={"password_reset": True},
+        )
+        return updated
+
+    def list_audit_logs(self, *, limit: int = 20) -> list[dict[str, Any]]:
+        users_by_id = {item.user_id: item for item in self._user_repository.list()}
+        logs = self._audit_log_repository.list_recent(limit=limit)
+        return [
+            {
+                "log_id": item.log_id,
+                "action": item.action,
+                "summary": item.summary,
+                "actor_user_id": item.actor_user_id,
+                "actor_username": users_by_id.get(item.actor_user_id).username
+                if users_by_id.get(item.actor_user_id)
+                else item.actor_user_id,
+                "target_user_id": item.target_user_id,
+                "target_username": users_by_id.get(item.target_user_id).username
+                if item.target_user_id and users_by_id.get(item.target_user_id)
+                else None,
+                "details": item.details,
+                "created_at": item.created_at.isoformat(),
+            }
+            for item in logs
+        ]
+
+    def list_security_events(self, *, limit: int = 20) -> list[dict[str, Any]]:
+        return [
+            {
+                "event_id": item.event_id,
+                "event_type": item.event_type,
+                "outcome": item.outcome,
+                "username": item.username,
+                "user_id": item.user_id,
+                "reason": item.reason,
+                "ip_address": item.ip_address,
+                "created_at": item.created_at.isoformat(),
+            }
+            for item in self._auth_event_repository.list_recent(limit=limit)
+        ]
 
     def _build_user_rows(
         self,
@@ -1265,6 +1493,29 @@ class AdminService:
             if item.status in {TaskStatus.FAILED, TaskStatus.CANCELED}:
                 summary["failed_tasks"] += 1
 
+        auth_events = self._auth_event_repository.list_recent(limit=500)
+        cutoff_24h = utcnow() - timedelta(hours=24)
+        last_login_by_user: dict[str, datetime] = {}
+        last_failed_login_by_user: dict[str, datetime] = {}
+        failed_login_count_24h_by_user: dict[str, int] = {}
+        for item in auth_events:
+            if item.user_id is None:
+                continue
+            if item.event_type == "login" and item.outcome == "succeeded":
+                last_login_by_user[item.user_id] = max(
+                    last_login_by_user.get(item.user_id, item.created_at),
+                    item.created_at,
+                )
+            if item.event_type == "login" and item.outcome in {"failed", "blocked"}:
+                last_failed_login_by_user[item.user_id] = max(
+                    last_failed_login_by_user.get(item.user_id, item.created_at),
+                    item.created_at,
+                )
+                if item.created_at >= cutoff_24h:
+                    failed_login_count_24h_by_user[item.user_id] = (
+                        failed_login_count_24h_by_user.get(item.user_id, 0) + 1
+                    )
+
         items = [
             {
                 "user_id": item.user_id,
@@ -1272,6 +1523,8 @@ class AdminService:
                 "username": item.username,
                 "contact": item.contact,
                 "role": item.role,
+                "status": item.status,
+                "status_reason": item.status_reason,
                 "created_at": item.created_at.isoformat(),
                 "active_sessions": session_count_by_user.get(item.user_id, 0),
                 "project_count": project_count_by_user.get(item.user_id, 0),
@@ -1280,6 +1533,13 @@ class AdminService:
                 "optimization_count": task_summary_by_user.get(item.user_id, {}).get("optimizations", 0),
                 "running_task_count": task_summary_by_user.get(item.user_id, {}).get("running_tasks", 0),
                 "failed_task_count": task_summary_by_user.get(item.user_id, {}).get("failed_tasks", 0),
+                "failed_login_count_24h": failed_login_count_24h_by_user.get(item.user_id, 0),
+                "last_login_at": last_login_by_user.get(item.user_id).isoformat()
+                if last_login_by_user.get(item.user_id)
+                else None,
+                "last_failed_login_at": last_failed_login_by_user.get(item.user_id).isoformat()
+                if last_failed_login_by_user.get(item.user_id)
+                else None,
                 "last_activity_at": latest_activity_by_user.get(item.user_id, item.created_at).isoformat(),
             }
             for item in users
@@ -1370,6 +1630,9 @@ class AdminService:
         running_tasks: int,
         failed_tasks: int,
         coverage_risk_count: int,
+        suspended_users: int,
+        failed_logins_24h: int,
+        audit_events: int,
     ) -> list[str]:
         notes: list[str] = []
         if users <= 2:
@@ -1380,9 +1643,34 @@ class AdminService:
             notes.append("存在失败或取消任务，管理员应优先检查配置冲突、数据快照引用和环境状态。")
         if coverage_risk_count:
             notes.append("部分数据快照存在覆盖风险或缺失率偏高，回测结果在管理视图中需要继续暴露。")
+        if suspended_users:
+            notes.append("当前存在停用账户，建议定期复核停用原因并确认是否需要恢复或清理。")
+        if failed_logins_24h:
+            notes.append("最近 24 小时存在登录失败或阻断记录，建议关注账户安全和登录提示设计。")
+        if audit_events == 0:
+            notes.append("管理员审计日志刚启用，后续应继续沉淀治理动作证据链。")
         if not notes:
             notes.append("平台运行状态平稳，下一步更适合推进实验对比、审计视图和管理员操作日志。")
         return notes
+
+    def _record_audit_log(
+        self,
+        *,
+        actor_user_id: str,
+        target_user_id: str | None,
+        action: str,
+        summary: str,
+        details: dict[str, Any],
+    ) -> None:
+        self._audit_log_repository.create(
+            AdminAuditLogRecord(
+                actor_user_id=actor_user_id,
+                target_user_id=target_user_id,
+                action=action,
+                summary=summary,
+                details=details,
+            )
+        )
 
 
 class AsyncTaskService:

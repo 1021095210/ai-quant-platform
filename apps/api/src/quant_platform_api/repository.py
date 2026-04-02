@@ -9,6 +9,8 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import sessionmaker
 
 from quant_platform_api.models import (
+    AdminAuditLogRecord,
+    AuthEventRecord,
     CustomIndicatorRecord,
     DefaultRuleSection,
     DatasetSnapshotRecord,
@@ -24,6 +26,8 @@ from quant_platform_api.models import (
     utcnow,
 )
 from quant_platform_api.orm import (
+    AdminAuditLogORM,
+    AuthEventORM,
     CustomIndicatorORM,
     DefaultRuleSectionORM,
     DatasetSnapshotORM,
@@ -102,6 +106,16 @@ class UserRepository(Protocol):
 
     def update_role(self, user_id: str, role: str) -> UserRecord | None: ...
 
+    def update_status(
+        self,
+        user_id: str,
+        *,
+        status: str,
+        reason: str | None,
+    ) -> UserRecord | None: ...
+
+    def update_password_hash(self, user_id: str, password_hash: str) -> UserRecord | None: ...
+
     def list(self) -> list[UserRecord]: ...
 
 
@@ -112,7 +126,21 @@ class UserSessionRepository(Protocol):
 
     def delete_by_token(self, session_token: str) -> None: ...
 
+    def delete_by_user_id(self, user_id: str) -> None: ...
+
     def list(self) -> list[UserSessionRecord]: ...
+
+
+class AuthEventRepository(Protocol):
+    def create(self, record: AuthEventRecord) -> AuthEventRecord: ...
+
+    def list_recent(self, *, limit: int = 50) -> list[AuthEventRecord]: ...
+
+
+class AdminAuditLogRepository(Protocol):
+    def create(self, record: AdminAuditLogRecord) -> AdminAuditLogRecord: ...
+
+    def list_recent(self, *, limit: int = 50) -> list[AdminAuditLogRecord]: ...
 
 
 class TradeUploadRepository(Protocol):
@@ -430,6 +458,8 @@ class SQLAlchemyUserRepository:
                     contact=record.contact,
                     password_hash=record.password_hash,
                     role=record.role,
+                    status=record.status,
+                    status_reason=record.status_reason,
                     created_at=record.created_at,
                 )
             )
@@ -447,6 +477,8 @@ class SQLAlchemyUserRepository:
                 contact=item.contact,
                 password_hash=item.password_hash,
                 role=item.role,
+                status=item.status,
+                status_reason=item.status_reason,
                 created_at=item.created_at,
             )
 
@@ -461,6 +493,8 @@ class SQLAlchemyUserRepository:
                 contact=item.contact,
                 password_hash=item.password_hash,
                 role=item.role,
+                status=item.status,
+                status_reason=item.status_reason,
                 created_at=item.created_at,
             )
 
@@ -478,6 +512,53 @@ class SQLAlchemyUserRepository:
                 contact=item.contact,
                 password_hash=item.password_hash,
                 role=item.role,
+                status=item.status,
+                status_reason=item.status_reason,
+                created_at=item.created_at,
+            )
+
+    def update_status(
+        self,
+        user_id: str,
+        *,
+        status: str,
+        reason: str | None,
+    ) -> UserRecord | None:
+        with self._session_factory() as session:
+            item = session.get(UserORM, user_id)
+            if item is None:
+                return None
+            item.status = status
+            item.status_reason = reason
+            session.commit()
+            session.refresh(item)
+            return UserRecord(
+                user_id=item.user_id,
+                username=item.username,
+                contact=item.contact,
+                password_hash=item.password_hash,
+                role=item.role,
+                status=item.status,
+                status_reason=item.status_reason,
+                created_at=item.created_at,
+            )
+
+    def update_password_hash(self, user_id: str, password_hash: str) -> UserRecord | None:
+        with self._session_factory() as session:
+            item = session.get(UserORM, user_id)
+            if item is None:
+                return None
+            item.password_hash = password_hash
+            session.commit()
+            session.refresh(item)
+            return UserRecord(
+                user_id=item.user_id,
+                username=item.username,
+                contact=item.contact,
+                password_hash=item.password_hash,
+                role=item.role,
+                status=item.status,
+                status_reason=item.status_reason,
                 created_at=item.created_at,
             )
 
@@ -491,6 +572,8 @@ class SQLAlchemyUserRepository:
                     contact=item.contact,
                     password_hash=item.password_hash,
                     role=item.role,
+                    status=item.status,
+                    status_reason=item.status_reason,
                     created_at=item.created_at,
                 )
                 for item in items
@@ -537,6 +620,11 @@ class SQLAlchemyUserSessionRepository:
                 session.delete(item)
                 session.commit()
 
+    def delete_by_user_id(self, user_id: str) -> None:
+        with self._session_factory() as session:
+            session.execute(delete(UserSessionORM).where(UserSessionORM.user_id == user_id))
+            session.commit()
+
     def list(self) -> list[UserSessionRecord]:
         with self._session_factory() as session:
             items = session.scalars(
@@ -547,6 +635,90 @@ class SQLAlchemyUserSessionRepository:
                     session_id=item.session_id,
                     user_id=item.user_id,
                     session_token=item.session_token,
+                    created_at=item.created_at,
+                )
+                for item in items
+            ]
+
+
+class SQLAlchemyAuthEventRepository:
+    def __init__(self, session_factory: sessionmaker) -> None:
+        self._session_factory = session_factory
+
+    def create(self, record: AuthEventRecord) -> AuthEventRecord:
+        with self._session_factory() as session:
+            session.add(
+                AuthEventORM(
+                    event_id=record.event_id,
+                    user_id=record.user_id,
+                    username=record.username,
+                    event_type=record.event_type,
+                    outcome=record.outcome,
+                    reason=record.reason,
+                    ip_address=record.ip_address,
+                    created_at=record.created_at,
+                )
+            )
+            session.commit()
+        return record
+
+    def list_recent(self, *, limit: int = 50) -> list[AuthEventRecord]:
+        with self._session_factory() as session:
+            items = session.scalars(
+                select(AuthEventORM)
+                .order_by(AuthEventORM.created_at.desc())
+                .limit(limit)
+            ).all()
+            return [
+                AuthEventRecord(
+                    event_id=item.event_id,
+                    user_id=item.user_id,
+                    username=item.username,
+                    event_type=item.event_type,
+                    outcome=item.outcome,
+                    reason=item.reason,
+                    ip_address=item.ip_address,
+                    created_at=item.created_at,
+                )
+                for item in items
+            ]
+
+
+class SQLAlchemyAdminAuditLogRepository:
+    def __init__(self, session_factory: sessionmaker) -> None:
+        self._session_factory = session_factory
+
+    def create(self, record: AdminAuditLogRecord) -> AdminAuditLogRecord:
+        with self._session_factory() as session:
+            session.add(
+                AdminAuditLogORM(
+                    log_id=record.log_id,
+                    actor_user_id=record.actor_user_id,
+                    target_user_id=record.target_user_id,
+                    action=record.action,
+                    summary=record.summary,
+                    details_json=json.dumps(record.details, ensure_ascii=False),
+                    created_at=record.created_at,
+                )
+            )
+            session.commit()
+        return record
+
+    def list_recent(self, *, limit: int = 50) -> list[AdminAuditLogRecord]:
+        with self._session_factory() as session:
+            items = session.scalars(
+                select(AdminAuditLogORM)
+                .order_by(AdminAuditLogORM.created_at.desc())
+                .limit(limit)
+            ).all()
+            return [
+                AdminAuditLogRecord(
+                    log_id=item.log_id,
+                    actor_user_id=item.actor_user_id,
+                    target_user_id=item.target_user_id,
+                    action=item.action,
+                    summary=item.summary,
+                    details=json.loads(item.details_json or "{}"),
                     created_at=item.created_at,
                 )
                 for item in items

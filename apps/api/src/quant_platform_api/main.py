@@ -22,7 +22,9 @@ from quant_platform_api.market_data import (
 from quant_platform_api.config import Settings
 from quant_platform_api.db import build_session_factory, create_schema
 from quant_platform_api.models import (
+    AdminUserPasswordResetRequest,
     AdminUserRoleUpdateRequest,
+    AdminUserStatusUpdateRequest,
     BacktestCreateRequest,
     CustomIndicatorCreateRequest,
     CustomIndicatorGenerateRequest,
@@ -44,6 +46,8 @@ from quant_platform_api.models import (
     utcnow,
 )
 from quant_platform_api.repository import (
+    SQLAlchemyAdminAuditLogRepository,
+    SQLAlchemyAuthEventRepository,
     SQLAlchemyCustomIndicatorRepository,
     SQLAlchemyDefaultRuleRepository,
     SQLAlchemyDatasetSnapshotRepository,
@@ -101,6 +105,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     default_rule_repository = SQLAlchemyDefaultRuleRepository(session_factory)
     user_repository = SQLAlchemyUserRepository(session_factory)
     user_session_repository = SQLAlchemyUserSessionRepository(session_factory)
+    auth_event_repository = SQLAlchemyAuthEventRepository(session_factory)
+    admin_audit_log_repository = SQLAlchemyAdminAuditLogRepository(session_factory)
     primary_market_provider = None
     if app_settings.market_data_provider in {"auto", "tushare"}:
         primary_market_provider = TushareMarketDataProvider(app_settings.tushare_token)
@@ -127,10 +133,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         auth_service=AuthService(
             user_repository=user_repository,
             session_repository=user_session_repository,
+            auth_event_repository=auth_event_repository,
         ),
         admin_service=AdminService(
             user_repository=user_repository,
             session_repository=user_session_repository,
+            auth_event_repository=auth_event_repository,
+            audit_log_repository=admin_audit_log_repository,
             strategy_repository=strategy_repository,
             task_repository=task_repository,
         ),
@@ -342,6 +351,88 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             },
         )
 
+    @app.put(f"{app_settings.api_prefix}/admin/users/{{user_id}}/status")
+    def update_admin_user_status(
+        request: Request,
+        user_id: str,
+        payload: AdminUserStatusUpdateRequest,
+    ) -> JSONResponse:
+        current_user = _require_admin_user(request, services.auth_service)
+        try:
+            updated = services.admin_service.update_user_status(
+                current_user_id=current_user.user_id,
+                target_user_id=user_id,
+                status=payload.status,
+                reason=payload.reason,
+            )
+        except Exception as exc:
+            if hasattr(exc, "code") and hasattr(exc, "message"):
+                status_code = status.HTTP_404_NOT_FOUND if exc.code == "NOT_FOUND" else (
+                    status.HTTP_409_CONFLICT if exc.code == "STATE_CONFLICT" else status.HTTP_400_BAD_REQUEST
+                )
+                raise HTTPException(
+                    status_code=status_code,
+                    detail=ErrorPayload(code=exc.code, message=exc.message).model_dump(),
+                ) from exc
+            raise
+        return _success_response(
+            request,
+            data={
+                "user_id": updated.user_id,
+                "username": updated.username,
+                "status": updated.status,
+                "status_reason": updated.status_reason,
+            },
+        )
+
+    @app.post(f"{app_settings.api_prefix}/admin/users/{{user_id}}/reset-password")
+    def reset_admin_user_password(
+        request: Request,
+        user_id: str,
+        payload: AdminUserPasswordResetRequest,
+    ) -> JSONResponse:
+        current_user = _require_admin_user(request, services.auth_service)
+        try:
+            updated = services.admin_service.reset_user_password(
+                current_user_id=current_user.user_id,
+                target_user_id=user_id,
+                new_password=payload.new_password,
+            )
+        except Exception as exc:
+            if hasattr(exc, "code") and hasattr(exc, "message"):
+                status_code = status.HTTP_404_NOT_FOUND if exc.code == "NOT_FOUND" else (
+                    status.HTTP_409_CONFLICT if exc.code == "STATE_CONFLICT" else status.HTTP_400_BAD_REQUEST
+                )
+                raise HTTPException(
+                    status_code=status_code,
+                    detail=ErrorPayload(code=exc.code, message=exc.message).model_dump(),
+                ) from exc
+            raise
+        return _success_response(
+            request,
+            data={
+                "user_id": updated.user_id,
+                "username": updated.username,
+                "password_reset": True,
+            },
+        )
+
+    @app.get(f"{app_settings.api_prefix}/admin/audit-logs")
+    def list_admin_audit_logs(request: Request) -> JSONResponse:
+        _require_admin_user(request, services.auth_service)
+        return _success_response(
+            request,
+            data={"items": services.admin_service.list_audit_logs()},
+        )
+
+    @app.get(f"{app_settings.api_prefix}/admin/security-events")
+    def list_admin_security_events(request: Request) -> JSONResponse:
+        _require_admin_user(request, services.auth_service)
+        return _success_response(
+            request,
+            data={"items": services.admin_service.list_security_events()},
+        )
+
     @app.post(f"{app_settings.api_prefix}/auth/register")
     def register_user(
         request: Request,
@@ -356,6 +447,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             user, session_token = services.auth_service.login(
                 username=payload.username,
                 password=payload.password,
+                ip_address=_client_ip(request),
             )
         except Exception as exc:
             if hasattr(exc, "code") and hasattr(exc, "message"):
@@ -379,6 +471,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             user, session_token = services.auth_service.login(
                 username=payload.username,
                 password=payload.password,
+                ip_address=_client_ip(request),
             )
         except Exception as exc:
             if hasattr(exc, "code") and hasattr(exc, "message"):
@@ -393,7 +486,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post(f"{app_settings.api_prefix}/auth/logout")
     def logout_user(request: Request) -> JSONResponse:
-        services.auth_service.logout(request.cookies.get(SESSION_COOKIE_NAME))
+        services.auth_service.logout(
+            request.cookies.get(SESSION_COOKIE_NAME),
+            ip_address=_client_ip(request),
+        )
         response = _success_response(request, data={"logged_out": True})
         response.delete_cookie(SESSION_COOKIE_NAME, path="/")
         return response
@@ -1159,6 +1255,10 @@ def _set_session_cookie(response: JSONResponse, session_token: str) -> None:
         samesite="lax",
         path="/",
     )
+
+
+def _client_ip(request: Request) -> str | None:
+    return request.client.host if request.client else None
 
 
 def _login_redirect(target_path: str) -> RedirectResponse:

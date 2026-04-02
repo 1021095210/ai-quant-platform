@@ -64,6 +64,10 @@
           <strong id="metric-admins" class="metric-value">0</strong>
         </div>
         <div class="card">
+          <span class="mini-label">停用账户</span>
+          <strong id="metric-suspended" class="metric-value">0</strong>
+        </div>
+        <div class="card">
           <span class="mini-label">活跃会话</span>
           <strong id="metric-sessions" class="metric-value">0</strong>
         </div>
@@ -79,24 +83,28 @@
           <span class="mini-label">运行中任务</span>
           <strong id="metric-running" class="metric-value">0</strong>
         </div>
+        <div class="card">
+          <span class="mini-label">24h 登录风险</span>
+          <strong id="metric-failed-logins" class="metric-value">0</strong>
+        </div>
       </section>
 
       <section class="quick-grid admin-quick-grid" style="margin-top: 22px">
         <div class="card quick-card">
           <h3>用户管理</h3>
-          <p>查看账户角色、活跃度、项目沉淀，并进行管理员授权调整。</p>
+          <p>查看账户角色、状态、研究活跃度，并执行授权、停用和密码重置。</p>
         </div>
         <div class="card quick-card">
           <h3>任务审计</h3>
           <p>追踪最近的回测、优化、复盘任务状态，快速发现失败和积压。</p>
         </div>
         <div class="card quick-card">
-          <h3>平台数据</h3>
-          <p>从数据快照覆盖率、缺失率和时区/日历等维度看当前研究基线。</p>
+          <h3>登录安全</h3>
+          <p>查看成功、失败和被阻断的登录记录，定位账户风险和运营异常。</p>
         </div>
         <div class="card quick-card">
-          <h3>治理建议</h3>
-          <p>把用户规模、任务状态和数据风险收束成后台治理动作。</p>
+          <h3>治理审计</h3>
+          <p>沉淀管理员关键操作，保证用户治理和账号处理都有证据链。</p>
         </div>
       </section>
 
@@ -125,11 +133,11 @@
             <thead>
               <tr>
                 <th>用户</th>
-                <th>角色</th>
+                <th>角色 / 状态</th>
                 <th>研究活跃度</th>
-                <th>会话 / 失败任务</th>
+                <th>安全信号</th>
                 <th>最近活动</th>
-                <th>角色管理</th>
+                <th>管理员操作</th>
               </tr>
             </thead>
             <tbody id="admin-users-table">
@@ -153,6 +161,21 @@
             <h3>平台数据快照</h3>
           </div>
           <div id="admin-snapshots" class="list empty-state">暂无数据快照摘要。</div>
+        </section>
+      </section>
+
+      <section class="grid two stretch" style="margin-top: 22px">
+        <section class="card equal-panel">
+          <div class="panel-header">
+            <h3>管理员审计日志</h3>
+          </div>
+          <div id="admin-audit-logs" class="list empty-state">暂无审计日志。</div>
+        </section>
+        <section class="card equal-panel">
+          <div class="panel-header">
+            <h3>登录安全事件</h3>
+          </div>
+          <div id="admin-security-events" class="list empty-state">暂无安全事件。</div>
         </section>
       </section>
     </div>

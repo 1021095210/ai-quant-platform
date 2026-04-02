@@ -10,7 +10,7 @@ WORKSPACE_ROOT = Path(__file__).resolve().parents[1]
 
 
 class StaticAssetTests(unittest.TestCase):
-    def test_rules_js_has_valid_module_syntax(self) -> None:
+    def _assert_asset_has_valid_module_syntax(self, filename: str) -> None:
         node = shutil.which("node")
         if node is None:
             self.skipTest("node is unavailable")
@@ -22,7 +22,7 @@ class StaticAssetTests(unittest.TestCase):
             / "src"
             / "quant_platform_api"
             / "static"
-            / "rules.js"
+            / filename
         )
         completed = subprocess.run(
             [node, "--check", str(asset_path)],
@@ -34,8 +34,14 @@ class StaticAssetTests(unittest.TestCase):
         self.assertEqual(
             0,
             completed.returncode,
-            msg=completed.stderr or completed.stdout or "rules.js syntax check failed",
+            msg=completed.stderr or completed.stdout or f"{filename} syntax check failed",
         )
+
+    def test_rules_js_has_valid_module_syntax(self) -> None:
+        self._assert_asset_has_valid_module_syntax("rules.js")
+
+    def test_admin_js_has_valid_module_syntax(self) -> None:
+        self._assert_asset_has_valid_module_syntax("admin.js")
 
 
 if __name__ == "__main__":

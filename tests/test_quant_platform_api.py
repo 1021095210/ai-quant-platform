@@ -164,6 +164,7 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertEqual(200, me_response.status_code)
         self.assertEqual("1111", me_response.json()["data"]["username"])
         self.assertEqual("user", me_response.json()["data"]["role"])
+        self.assertEqual("active", me_response.json()["data"]["status"])
         self.assertTrue(me_response.json()["data"]["workspace_id"].startswith("ws_"))
 
     def test_admin_page_requires_admin_role(self) -> None:
@@ -188,6 +189,8 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertIn("管理后台", response.text)
         self.assertIn("用户管理", response.text)
         self.assertIn("任务审计", response.text)
+        self.assertIn("登录安全", response.text)
+        self.assertIn("管理员审计日志", response.text)
 
     def test_strategy_page_shows_multi_market_and_multi_timeframe_controls(self) -> None:
         client = self._build_client()
@@ -280,11 +283,14 @@ class QuantPlatformApiTests(unittest.TestCase):
         data = summary.json()["data"]
         self.assertGreaterEqual(data["counts"]["users"], 3)
         self.assertGreaterEqual(data["counts"]["admins"], 1)
+        self.assertIn("failed_logins_24h", data["counts"])
         self.assertGreaterEqual(data["counts"]["projects"], 1)
         self.assertGreaterEqual(data["counts"]["backtests"], 1)
         self.assertTrue(data["recent_tasks"])
         self.assertTrue(any(item["label"] == "管理员" for item in data["role_distribution"]))
         self.assertTrue(any(item["dataset_snapshot_ref"] == "admin_snapshot" for item in data["snapshot_states"]))
+        self.assertIn("recent_audit_logs", data)
+        self.assertIn("recent_security_events", data)
         listed_users = users.json()["data"]["items"]
         self.assertTrue(any(item["username"] == "operator" for item in listed_users))
         self.assertTrue(any(item["role"] == "admin" for item in listed_users))
@@ -318,6 +324,136 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertEqual("admin", promote.json()["data"]["role"])
         self.assertEqual(409, self_demote.status_code)
         self.assertEqual("STATE_CONFLICT", self_demote.json()["error"]["code"])
+
+    def test_admin_can_suspend_and_reactivate_user(self) -> None:
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        database_url = f"sqlite+pysqlite:///{Path(temp_dir.name) / 'quant_platform.db'}"
+        market_data_database_path = str(Path(temp_dir.name) / "market_data.db")
+        admin_client = self._build_client(
+            database_url=database_url,
+            market_data_database_path=market_data_database_path,
+        )
+        user_client = self._build_client(
+            database_url=database_url,
+            market_data_database_path=market_data_database_path,
+        )
+
+        self._login(admin_client, username="admin", password="618618")
+        created = admin_client.post(
+            "/api/v1/auth/register",
+            json={
+                "username": "suspend_me",
+                "contact": "suspend@example.com",
+                "password": "618618",
+            },
+        )
+        user_id = created.json()["data"]["user_id"]
+        admin_client.post("/api/v1/auth/logout")
+        self._login(admin_client, username="admin", password="618618")
+        user_client.post(
+            "/api/v1/auth/login",
+            json={"username": "suspend_me", "password": "618618"},
+        )
+        suspend = admin_client.put(
+            f"/api/v1/admin/users/{user_id}/status",
+            json={"status": "suspended", "reason": "manual review"},
+        )
+        me_after_suspend = user_client.get("/api/v1/auth/me")
+        login_after_suspend = user_client.post(
+            "/api/v1/auth/login",
+            json={"username": "suspend_me", "password": "618618"},
+        )
+        reactivate = admin_client.put(
+            f"/api/v1/admin/users/{user_id}/status",
+            json={"status": "active", "reason": "restored"},
+        )
+        login_after_reactivate = user_client.post(
+            "/api/v1/auth/login",
+            json={"username": "suspend_me", "password": "618618"},
+        )
+
+        self.assertEqual(200, suspend.status_code)
+        self.assertEqual("suspended", suspend.json()["data"]["status"])
+        self.assertEqual(401, me_after_suspend.status_code)
+        self.assertEqual(403, login_after_suspend.status_code)
+        self.assertEqual("FORBIDDEN", login_after_suspend.json()["error"]["code"])
+        self.assertEqual(200, reactivate.status_code)
+        self.assertEqual("active", reactivate.json()["data"]["status"])
+        self.assertEqual(200, login_after_reactivate.status_code)
+
+    def test_admin_can_reset_password_and_old_password_stops_working(self) -> None:
+        client = self._build_client()
+        self._login(client, username="admin", password="618618")
+        created = client.post(
+            "/api/v1/auth/register",
+            json={
+                "username": "reset_me",
+                "contact": "reset@example.com",
+                "password": "618618",
+            },
+        )
+        user_id = created.json()["data"]["user_id"]
+        client.post("/api/v1/auth/logout")
+        self._login(client, username="admin", password="618618")
+        reset = client.post(
+            f"/api/v1/admin/users/{user_id}/reset-password",
+            json={"new_password": "987654"},
+        )
+        old_login = client.post(
+            "/api/v1/auth/login",
+            json={"username": "reset_me", "password": "618618"},
+        )
+        new_login = client.post(
+            "/api/v1/auth/login",
+            json={"username": "reset_me", "password": "987654"},
+        )
+
+        self.assertEqual(200, reset.status_code)
+        self.assertTrue(reset.json()["data"]["password_reset"])
+        self.assertEqual(403, old_login.status_code)
+        self.assertEqual(200, new_login.status_code)
+
+    def test_admin_can_view_audit_logs_and_security_events(self) -> None:
+        client = self._build_client()
+        self._login(client, username="admin", password="618618")
+        created = client.post(
+            "/api/v1/auth/register",
+            json={
+                "username": "audit_target",
+                "contact": "audit@example.com",
+                "password": "618618",
+            },
+        )
+        user_id = created.json()["data"]["user_id"]
+        client.post("/api/v1/auth/logout")
+        client.post(
+            "/api/v1/auth/login",
+            json={"username": "audit_target", "password": "wrong-pass"},
+        )
+        self._login(client, username="admin", password="618618")
+        client.put(
+            f"/api/v1/admin/users/{user_id}/status",
+            json={"status": "suspended", "reason": "security check"},
+        )
+
+        audit_logs = client.get("/api/v1/admin/audit-logs")
+        security_events = client.get("/api/v1/admin/security-events")
+
+        self.assertEqual(200, audit_logs.status_code)
+        self.assertEqual(200, security_events.status_code)
+        self.assertTrue(
+            any(
+                item["action"] == "user.status_updated"
+                for item in audit_logs.json()["data"]["items"]
+            )
+        )
+        self.assertTrue(
+            any(
+                item["event_type"] == "login" and item["outcome"] == "failed"
+                for item in security_events.json()["data"]["items"]
+            )
+        )
 
     def test_register_logs_in_new_user_and_logout_clears_session(self) -> None:
         client = self._build_client()

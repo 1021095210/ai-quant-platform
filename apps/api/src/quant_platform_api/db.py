@@ -72,9 +72,17 @@ def create_schema(session_factory: sessionmaker) -> None:
                     )
                 )
     user_columns = {column["name"] for column in inspector.get_columns("users")}
-    if "role" not in user_columns:
-        with engine.begin() as connection:
-            connection.execute(text("ALTER TABLE users ADD COLUMN role VARCHAR(32) DEFAULT 'user'"))
+    user_column_definitions = {
+        "role": "VARCHAR(32) DEFAULT 'user'",
+        "status": "VARCHAR(32) DEFAULT 'active'",
+        "status_reason": "TEXT",
+    }
+    for column_name, column_definition in user_column_definitions.items():
+        if column_name not in user_columns:
+            with engine.begin() as connection:
+                connection.execute(
+                    text(f"ALTER TABLE users ADD COLUMN {column_name} {column_definition}")
+                )
     trade_upload_columns = {column["name"] for column in inspector.get_columns("trade_uploads")}
     trade_upload_column_definitions = {
         "user_id": "VARCHAR(64) DEFAULT ''",
