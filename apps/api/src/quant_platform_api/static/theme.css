@@ -589,7 +589,19 @@ button:disabled:hover {
 
 .history-actions {
   display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
   justify-content: flex-end;
+}
+
+.history-delete-btn {
+  color: var(--danger);
+  border-color: rgba(204, 67, 89, 0.22);
+  background: rgba(255, 244, 246, 0.88);
+}
+
+.history-delete-btn:hover {
+  background: rgba(255, 235, 239, 0.98);
 }
 
 .compact-item {
@@ -708,9 +720,7 @@ th {
 }
 
 .scroll-list {
-  flex: 1;
   min-height: 0;
-  max-height: 360px;
   overflow-y: auto;
   padding-right: 6px;
 }
