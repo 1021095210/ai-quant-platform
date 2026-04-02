@@ -178,11 +178,43 @@ async function refreshHistory() {
     .map(
       (item) => `
         <div class="list-item history-card">
-          <button class="history-primary" data-backtest-id="${item.backtest_run_id}" style="text-align:left">
-            <strong>${item.strategy_title || item.market}</strong>
-            <div class="muted-note">${item.market} · ${formatDateTime(item.created_at)}</div>
-            <div class="muted-note">收益 ${item.metrics.total_return_pct ?? 0}% · 交易 ${item.metrics.trade_count ?? 0} 次</div>
-            <div class="muted-note">快照 ${item.data_snapshot_summary?.dataset_snapshot_ref || "未标记"} · 来源 ${item.data_source.provider || "未知"}</div>
+          <button class="history-primary" data-backtest-id="${item.backtest_run_id}" type="button">
+            <div class="history-head">
+              <div>
+                <strong class="history-title">${item.strategy_title || item.market}</strong>
+                <div class="muted-note">${formatHistoryMarketLabel(item)} · ${formatDateTime(item.created_at)}</div>
+              </div>
+              <div class="history-return ${Number(item.metrics.total_return_pct ?? 0) >= 0 ? "positive" : "negative"}">
+                ${formatHistoryReturn(item.metrics.total_return_pct)}
+              </div>
+            </div>
+            <div class="history-meta-grid">
+              <div class="history-meta-card">
+                <span class="mini-label">交易概况</span>
+                <strong>${item.metrics.trade_count ?? 0} 笔</strong>
+                <div class="muted-note">胜率 ${formatPercentText(item.metrics.win_rate_pct)}</div>
+              </div>
+              <div class="history-meta-card">
+                <span class="mini-label">结算与卖出</span>
+                <strong>${formatSettlementPolicyLabel(item.backtest_config?.settlement_policy)}</strong>
+                <div class="muted-note">${formatSameDayExitLabel(item.backtest_config)}</div>
+              </div>
+              <div class="history-meta-card">
+                <span class="mini-label">价格口径</span>
+                <strong>${formatAdjustmentModeLabel(item.backtest_config?.adjustment_mode)}</strong>
+                <div class="muted-note">${formatFillPriceRuleLabel(item.backtest_config?.fill_price_rule)}</div>
+              </div>
+              <div class="history-meta-card">
+                <span class="mini-label">数据快照</span>
+                <strong>${item.data_snapshot_summary?.dataset_snapshot_ref || "未标记"}</strong>
+                <div class="muted-note">${item.data_source?.provider || "未知来源"}</div>
+              </div>
+            </div>
+            <div class="history-footnotes">
+              <span class="history-badge">${formatCalendarLabel(item.backtest_config?.calendar)}</span>
+              <span class="history-badge">${formatTimezoneLabel(item.backtest_config?.timezone)}</span>
+              <span class="history-badge">${item.config_revision || "未记录版本"}</span>
+            </div>
           </button>
           <div class="history-actions">
             <button
@@ -251,14 +283,14 @@ function renderConfigList(config) {
   const position = execution.position_sizing || {};
   const risk = execution.risk_controls || {};
   const items = [
-    ["成交方式", execution.fill_price_rule || "未知"],
-    ["盘中撮合", execution.intrabar_match_policy || "未知"],
-    ["结算规则", execution.settlement_policy || "未知"],
-    ["复权模式", execution.adjustment_mode || "未知"],
-    ["日历 / 时区", `${execution.calendar || "未知"} / ${execution.timezone || "未知"}`],
+    ["成交方式", formatFillPriceRuleLabel(execution.fill_price_rule)],
+    ["盘中撮合", formatIntrabarPolicyLabel(execution.intrabar_match_policy)],
+    ["结算规则", formatSettlementPolicyLabel(execution.settlement_policy)],
+    ["复权模式", formatAdjustmentModeLabel(execution.adjustment_mode)],
+    ["日历 / 时区", `${formatCalendarLabel(execution.calendar)} / ${formatTimezoneLabel(execution.timezone)}`],
     ["费用 / 滑点", `${execution.fee_bps ?? 0}bps / ${execution.slippage_bps ?? 0}bps`],
     ["市场约束", execution.market_constraint_text || "未记录"],
-    ["仓位模式", `${position.mode || "未知"} / ${position.value ?? "-"}`],
+    ["仓位模式", `${formatPositionModeLabel(position.mode)} / ${position.value ?? "-"}`],
     ["单笔上限", `${position.max_position_pct ?? "-"} / 最小单位 ${position.min_trade_unit ?? "-"}`],
     ["风控", `止盈 ${risk.take_profit_pct ?? "-"} / 止损 ${risk.stop_loss_pct ?? "-"} / 回撤 ${risk.max_drawdown_pct ?? "-"}`],
     ["预热 / 持有上限", `${execution.warmup_bars ?? "-"} bars / ${risk.max_holding_bars ?? "-"} bars`],
@@ -314,14 +346,14 @@ function renderAssumptionList(config, summary) {
     [
       "结算与可卖规则",
       execution.same_day_exit_allowed
-        ? `当前按 ${execution.settlement_policy || "t_plus_zero"} 语义处理，同日买入后的后续同日时段允许退出。`
-        : `当前按 ${execution.settlement_policy || "t_plus_one"} 语义处理，同日买入后的后续同日时段不允许退出。`,
+        ? `${formatSettlementPolicyLabel(execution.settlement_policy)}。同日买入后的后续同日时段允许退出。`
+        : `${formatSettlementPolicyLabel(execution.settlement_policy)}。同日买入后的后续同日时段不允许退出。`,
     ],
     [
       "价格序列口径",
-      execution.adjustment_mode === "raw"
+      normalizeDisplayToken(execution.adjustment_mode) === "raw"
         ? "当前使用不复权价格序列，回测结果对分红送配更敏感。"
-        : `当前使用 ${execution.adjustment_mode} 价格口径，需与策略研究口径保持一致。`,
+        : `当前使用${formatAdjustmentModeLabel(execution.adjustment_mode)}价格序列，需与策略研究口径保持一致。`,
     ],
     [
       "数据边界",
@@ -485,7 +517,7 @@ function renderEmptyComparison() {
 }
 
 function formatCompareValue(value) {
-  if (value === null || value === undefined || value === "") {
+  if (value === null || value === undefined || value === "" || value === "undefined" || value === "null") {
     return "未记录";
   }
   if (typeof value === "number") {
@@ -497,6 +529,128 @@ function formatCompareValue(value) {
 function formatCompareDelta(value) {
   const sign = value > 0 ? "+" : "";
   return `${sign}${formatCompareValue(value)}`;
+}
+
+function normalizeDisplayToken(value) {
+  if (value === null || value === undefined || value === "" || value === "undefined" || value === "null") {
+    return "";
+  }
+  return `${value}`;
+}
+
+function formatSettlementPolicyLabel(value) {
+  const normalized = normalizeDisplayToken(value);
+  if (normalized === "t_plus_one") {
+    return "T+1，当日买入后需次日才能卖出";
+  }
+  if (normalized === "t_plus_zero") {
+    return "T+0，当日买入后同日可卖出";
+  }
+  return "未设置结算规则";
+}
+
+function formatSameDayExitLabel(config) {
+  if (!config) {
+    return "未记录当日可卖规则";
+  }
+  return config.same_day_exit_allowed ? "当日后续时段可卖出" : "当日后续时段不可卖出";
+}
+
+function formatAdjustmentModeLabel(value) {
+  const normalized = normalizeDisplayToken(value);
+  if (normalized === "qfq") {
+    return "前复权";
+  }
+  if (normalized === "hfq") {
+    return "后复权";
+  }
+  if (normalized === "raw") {
+    return "不复权";
+  }
+  return "未设置价格口径";
+}
+
+function formatFillPriceRuleLabel(value) {
+  const normalized = normalizeDisplayToken(value);
+  if (normalized === "next_bar_open") {
+    return "下一根K线开盘成交";
+  }
+  if (normalized === "same_bar_close") {
+    return "当前K线收盘成交";
+  }
+  return "未设置成交方式";
+}
+
+function formatIntrabarPolicyLabel(value) {
+  const normalized = normalizeDisplayToken(value);
+  if (normalized === "intrabar_touch_fill") {
+    return "盘中触价即成交";
+  }
+  if (normalized === "no_intrabar_fill") {
+    return "不做盘中撮合";
+  }
+  return "未设置盘中撮合";
+}
+
+function formatCalendarLabel(value) {
+  const normalized = normalizeDisplayToken(value);
+  if (normalized === "cn_a_share") {
+    return "A股交易日历";
+  }
+  if (normalized === "us_equity") {
+    return "美股交易日历";
+  }
+  if (normalized === "crypto_24x7") {
+    return "加密货币 7x24";
+  }
+  if (normalized === "london_gold") {
+    return "伦敦金连续时段";
+  }
+  return "未设置交易日历";
+}
+
+function formatTimezoneLabel(value) {
+  const normalized = normalizeDisplayToken(value);
+  if (!normalized) {
+    return "未设置时区";
+  }
+  const labels = {
+    "Asia/Shanghai": "亚洲/上海",
+    "America/New_York": "美东",
+    UTC: "UTC",
+    "Europe/London": "欧洲/伦敦",
+  };
+  return labels[normalized] || normalized;
+}
+
+function formatPositionModeLabel(value) {
+  const normalized = normalizeDisplayToken(value);
+  if (normalized === "fixed_fraction") {
+    return "资金比例";
+  }
+  if (normalized === "fixed_quantity") {
+    return "固定数量";
+  }
+  return "未设置仓位模式";
+}
+
+function formatHistoryMarketLabel(item) {
+  const market = normalizeDisplayToken(item.market) || "未标记标的";
+  const timeframe = normalizeDisplayToken(item.timeframe) || "未标记周期";
+  return `${market} · ${timeframe}`;
+}
+
+function formatHistoryReturn(value) {
+  const numeric = Number(value ?? 0);
+  const sign = numeric > 0 ? "+" : "";
+  return `${sign}${numeric.toFixed(2)}%`;
+}
+
+function formatPercentText(value) {
+  if (value === null || value === undefined || value === "") {
+    return "未记录";
+  }
+  return `${Number(value).toFixed(2)}%`;
 }
 
 nodes.projectSelect.addEventListener("change", applySelectedProjectDefaults);
