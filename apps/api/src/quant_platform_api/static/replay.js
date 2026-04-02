@@ -34,6 +34,7 @@ const nodes = {
   uploadButton: document.querySelector("#upload-trades-btn"),
   uploadScreenshotButton: document.querySelector("#upload-screenshot-btn"),
   uploadManualButton: document.querySelector("#upload-manual-btn"),
+  addManualTradeButton: document.querySelector("#add-manual-trade-btn"),
   replayButton: document.querySelector("#run-replay-btn"),
   sourceModeButtons: document.querySelectorAll(".source-mode-btn"),
   sourcePanels: {
@@ -180,6 +181,7 @@ function renderManualTrades() {
     node.addEventListener("click", () => {
       state.manualTrades.splice(Number(node.dataset.manualIndex), 1);
       renderManualTrades();
+      syncReplayActionState();
     });
   });
 }
@@ -205,6 +207,7 @@ function addManualTrade() {
   nodes.manualPnl.value = "0";
   nodes.manualNotes.value = "";
   renderManualTrades();
+  syncReplayActionState();
   setStatus("手动记录已加入列表，可继续补录或直接提交。");
 }
 
@@ -257,13 +260,41 @@ function applySourceMode(mode) {
 function syncReplayActionState(options = {}) {
   const uploadBusy = Boolean(options.uploadBusy);
   const replayBusy = Boolean(options.replayBusy);
+  const csvReady = Boolean(nodes.file.files[0] || nodes.csvText.value.trim());
+  const screenshotReady = Boolean(
+    nodes.screenshotFile.files[0] &&
+      nodes.screenshotSymbol.value.trim() &&
+      nodes.screenshotEntry.value,
+  );
+  const manualDraftReady = Boolean(nodes.manualSymbol.value.trim() && nodes.manualEntry.value);
+  const manualUploadReady = Boolean(state.manualTrades.length);
 
-  nodes.uploadButton.disabled = uploadBusy;
+  nodes.addManualTradeButton.disabled = !manualDraftReady || uploadBusy;
+  nodes.addManualTradeButton.className =
+    manualDraftReady && !uploadBusy ? "btn primary" : "btn disabled";
+
+  nodes.uploadButton.disabled = uploadBusy || !csvReady;
+  nodes.uploadButton.className = csvReady && !uploadBusy ? "btn primary" : "btn disabled";
   nodes.uploadButton.textContent = uploadBusy ? "正在解析..." : "上传并解析";
-  nodes.uploadScreenshotButton.disabled = uploadBusy;
+  nodes.uploadButton.title = csvReady
+    ? "当前 CSV 内容已准备好，可以上传并解析。"
+    : "请先选择 CSV 文件或粘贴 CSV 文本。";
+
+  nodes.uploadScreenshotButton.disabled = uploadBusy || !screenshotReady;
+  nodes.uploadScreenshotButton.className =
+    screenshotReady && !uploadBusy ? "btn primary" : "btn disabled";
   nodes.uploadScreenshotButton.textContent = uploadBusy ? "正在登记..." : "登记截图并生成记录";
-  nodes.uploadManualButton.disabled = uploadBusy;
+  nodes.uploadScreenshotButton.title = screenshotReady
+    ? "截图和关键字段已齐备，可以登记并生成记录。"
+    : "请先补齐截图、标的代码和买入日期时间。";
+
+  nodes.uploadManualButton.disabled = uploadBusy || !manualUploadReady;
+  nodes.uploadManualButton.className =
+    manualUploadReady && !uploadBusy ? "btn primary" : "btn disabled";
   nodes.uploadManualButton.textContent = uploadBusy ? "正在提交..." : "提交手动记录";
+  nodes.uploadManualButton.title = manualUploadReady
+    ? "当前手动记录已准备好，可以提交并生成解析结果。"
+    : "请先至少加入一笔手动记录。";
 
   const replayReady = state.replayReady && !uploadBusy;
   nodes.replayButton.disabled = !replayReady || replayBusy;
@@ -318,7 +349,27 @@ document.querySelector("#add-manual-trade-btn").addEventListener("click", handle
 nodes.sourceModeButtons.forEach((button) => {
   button.addEventListener("click", () => {
     applySourceMode(button.id.replace("source-mode-", ""));
+    syncReplayActionState();
   });
+});
+
+[
+  nodes.file,
+  nodes.csvText,
+  nodes.screenshotFile,
+  nodes.screenshotSymbol,
+  nodes.screenshotEntry,
+  nodes.screenshotExit,
+  nodes.screenshotPnl,
+  nodes.screenshotNotes,
+  nodes.manualSymbol,
+  nodes.manualEntry,
+  nodes.manualExit,
+  nodes.manualPnl,
+  nodes.manualNotes,
+].forEach((node) => {
+  node.addEventListener("input", () => syncReplayActionState());
+  node.addEventListener("change", () => syncReplayActionState());
 });
 
 document.querySelector("#run-replay-btn").addEventListener(
