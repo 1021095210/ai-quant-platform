@@ -46,7 +46,17 @@ def run_backtest(
     fee_rate = float(execution_contract["fee_bps"]) / 10000.0
     slippage_rate = float(execution_contract["slippage_bps"]) / 10000.0
     fill_price_rule = execution_contract.get("fill_price_rule", "next_bar_open")
+    intrabar_match_policy = execution_contract.get(
+        "intrabar_match_policy",
+        "no_intrabar_fill",
+    )
     warmup_bars = max(int(execution_contract.get("warmup_bars", 20)), 0)
+    same_day_exit_allowed = bool(
+        execution_contract.get(
+            "same_day_exit_allowed",
+            execution_contract.get("settlement_policy", "t_plus_zero") != "t_plus_one",
+        )
+    )
     position_sizing = execution_contract.get("position_sizing", {})
     risk_controls = execution_contract.get("risk_controls", {})
     take_profit = float(
@@ -91,7 +101,7 @@ def run_backtest(
             if quantity > 0 and entry_notional + entry_fee <= cash:
                 cash -= entry_notional + entry_fee
                 current_trade = {
-                    "entry_time": trade_date.strftime("%Y-%m-%d"),
+                    "entry_time": _format_trade_timestamp(trade_date),
                     "entry_signal_time": pending_entry["signal_time"],
                     "entry_price": entry_price,
                     "quantity": quantity,
@@ -99,6 +109,7 @@ def run_backtest(
                     "symbol": strategy_spec.get("market"),
                     "side": strategy_spec.get("position", {}).get("side", "long"),
                     "entry_index": index,
+                    "entry_timestamp": trade_date,
                 }
             pending_entry = None
 
@@ -124,23 +135,42 @@ def run_backtest(
                 force_exit_reason = "max_drawdown_guard"
 
         if current_trade is not None:
+            can_exit_today = _can_exit_on_timestamp(
+                current_timestamp=trade_date,
+                entry_timestamp=current_trade["entry_timestamp"],
+                same_day_exit_allowed=same_day_exit_allowed,
+            )
             gross_return = (
                 (close_price - current_trade["entry_price"]) / current_trade["entry_price"]
             )
             holding_bars = index - current_trade["entry_index"] + 1
-            exit_reason = force_exit_reason
-            if exit_reason is None and gross_return >= take_profit:
+            exit_reason = force_exit_reason if can_exit_today else None
+            exit_price = close_price
+            if exit_reason is None and can_exit_today and intrabar_match_policy == "intrabar_touch_fill":
+                intrabar_exit = _resolve_intrabar_exit(
+                    entry_price=current_trade["entry_price"],
+                    high_price=float(row["high"]),
+                    low_price=float(row["low"]),
+                    take_profit_pct=take_profit,
+                    stop_loss_pct=stop_loss,
+                    slippage_rate=slippage_rate,
+                )
+                if intrabar_exit is not None:
+                    exit_reason = intrabar_exit["exit_reason"]
+                    exit_price = intrabar_exit["exit_price"]
+            if exit_reason is None and can_exit_today and gross_return >= take_profit:
                 exit_reason = "take_profit"
-            if exit_reason is None and gross_return <= stop_loss:
+            if exit_reason is None and can_exit_today and gross_return <= stop_loss:
                 exit_reason = "stop_loss"
-            if exit_reason is None and holding_bars >= max_holding_bars:
+            if exit_reason is None and can_exit_today and holding_bars >= max_holding_bars:
                 exit_reason = "max_holding_bars"
             if exit_reason is not None:
-                exit_price = _apply_slippage(close_price, slippage_rate, side="exit")
+                if exit_reason not in {"take_profit_intrabar", "stop_loss_intrabar"}:
+                    exit_price = _apply_slippage(close_price, slippage_rate, side="exit")
                 trade_result = _close_trade(
                     trade=current_trade,
                     exit_price=exit_price,
-                    exit_time=trade_date.strftime("%Y-%m-%d"),
+                    exit_time=_format_trade_timestamp(trade_date),
                     exit_reason=exit_reason,
                     fee_rate=fee_rate,
                     holding_bars=holding_bars,
@@ -170,24 +200,25 @@ def run_backtest(
                 if quantity > 0 and entry_notional + entry_fee <= cash:
                     cash -= entry_notional + entry_fee
                     current_trade = {
-                        "entry_time": trade_date.strftime("%Y-%m-%d"),
-                        "entry_signal_time": trade_date.strftime("%Y-%m-%d"),
+                        "entry_time": _format_trade_timestamp(trade_date),
+                        "entry_signal_time": _format_trade_timestamp(trade_date),
                         "entry_price": entry_price,
                         "quantity": quantity,
                         "entry_notional": round(entry_notional, 2),
                         "symbol": strategy_spec.get("market"),
                         "side": strategy_spec.get("position", {}).get("side", "long"),
                         "entry_index": index,
+                        "entry_timestamp": trade_date,
                     }
             elif index < len(data_frame.index) - 1:
-                pending_entry = {"signal_time": trade_date.strftime("%Y-%m-%d")}
+                pending_entry = {"signal_time": _format_trade_timestamp(trade_date)}
 
     if current_trade is not None:
         final_row = data_frame.iloc[-1]
         trade_result = _close_trade(
             trade=current_trade,
             exit_price=_apply_slippage(float(final_row["close"]), slippage_rate, side="exit"),
-            exit_time=final_row["trade_date"].strftime("%Y-%m-%d"),
+            exit_time=_format_trade_timestamp(final_row["trade_date"]),
             exit_reason="end_of_range",
             fee_rate=fee_rate,
             holding_bars=len(data_frame.index) - current_trade["entry_index"],
@@ -213,6 +244,49 @@ def _apply_slippage(price: float, slippage_rate: float, *, side: str) -> float:
     if side == "entry":
         return price * (1.0 + slippage_rate)
     return price * (1.0 - slippage_rate)
+
+
+def _can_exit_on_timestamp(
+    *,
+    current_timestamp: pd.Timestamp,
+    entry_timestamp: pd.Timestamp,
+    same_day_exit_allowed: bool,
+) -> bool:
+    if same_day_exit_allowed:
+        return True
+    return current_timestamp.date() > entry_timestamp.date()
+
+
+def _resolve_intrabar_exit(
+    *,
+    entry_price: float,
+    high_price: float,
+    low_price: float,
+    take_profit_pct: float,
+    stop_loss_pct: float,
+    slippage_rate: float,
+) -> dict[str, float | str] | None:
+    take_profit_price = entry_price * (1.0 + take_profit_pct)
+    stop_loss_price = entry_price * (1.0 + stop_loss_pct)
+    stop_hit = low_price <= stop_loss_price
+    take_hit = high_price >= take_profit_price
+    if stop_hit:
+        return {
+            "exit_reason": "stop_loss_intrabar",
+            "exit_price": _apply_slippage(stop_loss_price, slippage_rate, side="exit"),
+        }
+    if take_hit:
+        return {
+            "exit_reason": "take_profit_intrabar",
+            "exit_price": _apply_slippage(take_profit_price, slippage_rate, side="exit"),
+        }
+    return None
+
+
+def _format_trade_timestamp(value: pd.Timestamp) -> str:
+    if value.hour == 0 and value.minute == 0 and value.second == 0:
+        return value.strftime("%Y-%m-%d")
+    return value.strftime("%Y-%m-%dT%H:%M:%S")
 
 
 def _resolve_quantity(

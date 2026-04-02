@@ -1885,7 +1885,33 @@ def _normalize_execution_contract(
     strategy_dsl: dict[str, Any],
 ) -> dict[str, Any]:
     contract = dict(execution_contract)
+    asset_type = strategy_dsl.get("asset_type", "stock")
+    calendar = contract.get("calendar", "unknown")
+    settlement_policy = contract.get("settlement_policy") or _infer_settlement_policy(
+        calendar=calendar,
+        asset_type=asset_type,
+    )
     strategy_position = strategy_dsl.get("position", {})
+    contract["settlement_policy"] = settlement_policy
+    contract["same_day_exit_allowed"] = bool(
+        contract.get(
+            "same_day_exit_allowed",
+            settlement_policy != "t_plus_one",
+        )
+    )
+    contract["market_constraint_text"] = (
+        contract.get("market_constraint_text")
+        or contract.get("market_constraint")
+        or _build_market_constraint_text(
+            calendar=calendar,
+            asset_type=asset_type,
+            min_trade_unit=contract.get("position_sizing", {}).get(
+                "min_trade_unit",
+                100 if asset_type in {"stock", "etf"} else 1,
+            ),
+            same_day_exit_allowed=contract["same_day_exit_allowed"],
+        )
+    )
     contract["position_sizing"] = {
         "mode": contract.get("position_sizing", {}).get("mode", "fixed_fraction"),
         "value": float(contract.get("position_sizing", {}).get("value", 1.0)),
@@ -1927,6 +1953,34 @@ def _normalize_execution_contract(
     }
     contract["warmup_bars"] = int(contract.get("warmup_bars", 20))
     return contract
+
+
+def _infer_settlement_policy(*, calendar: str, asset_type: str) -> str:
+    if calendar == "cn_a_share" and asset_type in {"stock", "etf"}:
+        return "t_plus_one"
+    return "t_plus_zero"
+
+
+def _build_market_constraint_text(
+    *,
+    calendar: str,
+    asset_type: str,
+    min_trade_unit: int,
+    same_day_exit_allowed: bool,
+) -> str:
+    if calendar == "cn_a_share" and asset_type in {"stock", "etf"}:
+        return f"A股按 T+1 卖出，{asset_type.upper()} 最小交易单位 {min_trade_unit} 股"
+    if calendar == "us_equity":
+        return "美股默认按 T+0 语义处理，可同日买入卖出，最小交易单位按券商规则执行"
+    if calendar == "crypto_24x7":
+        return "加密货币默认按 7x24 连续交易处理，可同日反复开平仓"
+    if calendar == "london_gold":
+        return "伦敦金按全球连续报价时段处理，成交规则需结合交易时段理解"
+    return (
+        "当前市场允许同日退出持仓"
+        if same_day_exit_allowed
+        else "当前市场不允许同日退出持仓"
+    )
 
 
 def _build_data_snapshot_summary(

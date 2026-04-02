@@ -131,6 +131,7 @@ async function runBacktest() {
         calendar: nodes.calendar.value,
         timezone: nodes.timezone.value,
         adjustment_mode: nodes.adjustmentMode.value,
+        market_constraint_text: nodes.marketConstraint.value,
         warmup_bars: Number(nodes.warmupBars.value || 20),
         position_sizing: {
           mode: nodes.positionMode.value,
@@ -228,9 +229,11 @@ function renderConfigList(config) {
   const items = [
     ["成交方式", execution.fill_price_rule || "未知"],
     ["盘中撮合", execution.intrabar_match_policy || "未知"],
+    ["结算规则", execution.settlement_policy || "未知"],
     ["复权模式", execution.adjustment_mode || "未知"],
     ["日历 / 时区", `${execution.calendar || "未知"} / ${execution.timezone || "未知"}`],
     ["费用 / 滑点", `${execution.fee_bps ?? 0}bps / ${execution.slippage_bps ?? 0}bps`],
+    ["市场约束", execution.market_constraint_text || "未记录"],
     ["仓位模式", `${position.mode || "未知"} / ${position.value ?? "-"}`],
     ["单笔上限", `${position.max_position_pct ?? "-"} / 最小单位 ${position.min_trade_unit ?? "-"}`],
     ["风控", `止盈 ${risk.take_profit_pct ?? "-"} / 止损 ${risk.stop_loss_pct ?? "-"} / 回撤 ${risk.max_drawdown_pct ?? "-"}`],
@@ -285,6 +288,12 @@ function renderAssumptionList(config, summary) {
         : "当前不做盘中撮合，只在离散 K 线节点成交，结果更保守但可能漏掉盘中触发机会。",
     ],
     [
+      "结算与可卖规则",
+      execution.same_day_exit_allowed
+        ? `当前按 ${execution.settlement_policy || "t_plus_zero"} 语义处理，同日买入后的后续同日时段允许退出。`
+        : `当前按 ${execution.settlement_policy || "t_plus_one"} 语义处理，同日买入后的后续同日时段不允许退出。`,
+    ],
+    [
       "价格序列口径",
       execution.adjustment_mode === "raw"
         ? "当前使用不复权价格序列，回测结果对分红送配更敏感。"
@@ -296,7 +305,7 @@ function renderAssumptionList(config, summary) {
     ],
     [
       "市场约束提醒",
-      nodes.marketConstraint.value || "请结合市场制度、最小交易单位和可卖规则理解本次结果。",
+      execution.market_constraint_text || "请结合市场制度、最小交易单位和可卖规则理解本次结果。",
     ],
   ];
   nodes.assumptionList.innerHTML = assumptions

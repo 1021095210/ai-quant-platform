@@ -78,6 +78,9 @@ class BacktestExecutionContract(BaseModel):
     calendar: str
     timezone: str
     adjustment_mode: str
+    settlement_policy: str | None = None
+    same_day_exit_allowed: bool | None = None
+    market_constraint_text: str | None = None
     warmup_bars: int = 20
     position_sizing: PositionSizingConfig = Field(default_factory=PositionSizingConfig)
     risk_controls: RiskControlConfig = Field(default_factory=RiskControlConfig)
