@@ -1,6 +1,6 @@
 # AI量化交易平台新环境恢复与Agent接力说明
 
-> 最近更新时间：2026-04-02 04:10 UTC  
+> 最近更新时间：2026-04-02 14:22 UTC  
 > 用途：这是一份给“新环境中的新 Agent”使用的单文件交接说明。  
 > 使用方式：在新的开发环境里，**只上传这一个文件给新 Agent**，然后让它按本文件顺序先恢复项目，再继续我们的开发。  
 > 维护规则：以后每次推进开发、更新 GitHub、切换 Agent 之前，都必须同步更新本文件。
@@ -185,6 +185,21 @@
   - 已新增 `infra/docker-compose.external.yml`
   - 已新增 `infra/deploy.env.example`
   - 已新增 `tools/verify_infra_stack.py`
+- 已完成正式部署准备度第二阶段：
+  - 生产环境当前支持关闭默认测试账号注入：`ENABLE_DEFAULT_ACCOUNTS=false`
+  - 生产环境当前支持通过环境变量初始化首个管理员：
+    - `INITIAL_ADMIN_USERNAME`
+    - `INITIAL_ADMIN_CONTACT`
+    - `INITIAL_ADMIN_PASSWORD`
+  - 生产环境当前支持 Cookie 安全配置：
+    - `SESSION_COOKIE_SECURE`
+    - `SESSION_COOKIE_DOMAIN`
+    - `SESSION_COOKIE_SAMESITE`
+  - `healthz` 当前会额外返回：
+    - `default_accounts_enabled`
+    - `session_cookie_secure`
+  - Compose 模板当前已补齐上述生产环境变量透传
+  - 已新增 HTTPS 反向代理模板：`infra/Caddyfile.example`
 - `healthz` 当前会返回部署相关状态：
   - `app_env`
   - `database_backend`
@@ -200,6 +215,23 @@
   - `/healthz` 正常
   - 首页正常
   - 未登录访问工作台会跳转登录
+- 2026-04-02 已完成用户提供基础设施的正式环境联调：
+  - `.venv/bin/python tools/verify_infra_stack.py` 已验证 PostgreSQL / Redis / MinIO 全部可用
+  - 使用生产环境变量启动应用实例后，`/healthz` 返回：
+    - `app_env=production`
+    - `database_backend=postgresql`
+    - `redis_configured=true`
+    - `minio_configured=true`
+    - `default_accounts_enabled=false`
+    - `session_cookie_secure=true`
+  - 生产模式下已验证自定义初始管理员可以成功登录，并返回带 `Secure` 的 Cookie
+- 当前“永久正式外网平台”仍差最后一个基础条件：
+  - 这台环境当前只有内网地址，没有稳定公网入口和正式域名控制
+  - 因此已经完成应用层、配置层、基础设施层和生产模式验证
+  - 但要变成真正长期可访问的正式平台，还需要补其中任一项：
+    - 服务器公网 IP / NAT 入站能力
+    - 域名和 DNS 控制权
+    - Cloudflare / 云平台 / 反向代理账号权限
 - 当前环境没有可用 Docker daemon：
   - Dockerfile 和 Compose 文件已经交付
   - 但本轮没有在这台机器上真正执行 `docker build` / `docker compose up`
@@ -255,6 +287,7 @@
 21. 当前管理员已不只是普通工作台中的角色标识，而是拥有独立管理后台和平台级视图
 22. 规则模块当前已补静态资源语法校验，避免前端脚本语法错误导致页面长时间停留在加载态
 23. 规则模块当前已按分组折叠展示默认规则，回测中心关键专业术语当前已补 hover 提示，适合新手用户理解
+24. 正式部署当前已具备生产环境变量、初始管理员注入、Cookie 安全配置和 HTTPS 反向代理模板，但仍等待稳定公网入口
 
 ### 当前默认开发方向
 
@@ -264,7 +297,7 @@
 2. 为混合周期策略补“信号解释 / 对齐检查”能力，减少未来函数和周期错位风险
 3. 继续推进更真实的多市场执行约束，而不是只在语义层支持多市场
 4. 收敛工作台、回测中心和复盘页的空状态 / 错误态 / 文案体系
-5. 准备更稳定的外部部署，不再长期依赖临时隧道
+5. 在拿到域名 / 公网入口 / 云账号后，完成正式外网部署与 HTTPS 接入，不再长期依赖临时隧道
 
 ---
 
@@ -279,7 +312,7 @@
 - 以 GitHub 仓库 `main` 分支当前 HEAD 为准
 - 如果本文中的提交信息和 GitHub 页面显示不一致，以 GitHub 页面为准
 - 当前远端基线（2026-04-02）：以 GitHub 仓库 `main` 分支当前 HEAD 为准；当前代码已补齐管理员运营能力、规则模块浏览器故障修复、回测可信度说明，以及规则分组折叠和专业术语 hover 提示
-- 当前已同步提交：`c12a9fd42d7c9b2048ee4e0bd683ba4211546935`
+- 当前远端基线（2026-04-02 14:22 UTC）已进一步补齐生产环境安全配置、正式部署模板和外部基础设施联调
 
 如果新环境还没有仓库，请先执行：
 
@@ -438,6 +471,7 @@ uvicorn quant_platform_api.main:create_app --factory --app-dir apps/api/src --ho
 
 优先查看仓库中的：
 
+- `.claude/agents/briefings/2026-04-02_codex_正式部署准备与生产配置收口.md`
 - `.claude/agents/briefings/2026-04-02_codex_规则分组折叠与回测术语提示.md`
 - `.claude/agents/briefings/2026-04-02_codex_规则模块复核与回测可信度说明.md`
 - `.claude/agents/briefings/2026-04-02_codex_管理员运营能力与安全审计.md`

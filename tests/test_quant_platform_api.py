@@ -39,6 +39,13 @@ class QuantPlatformApiTests(unittest.TestCase):
         job_simulation_latency_ms: int = 0,
         database_url: str | None = None,
         market_data_database_path: str | None = None,
+        enable_default_accounts: bool = True,
+        initial_admin_username: str = "",
+        initial_admin_contact: str = "",
+        initial_admin_password: str = "",
+        session_cookie_secure: bool = False,
+        session_cookie_domain: str = "",
+        session_cookie_samesite: str = "lax",
     ) -> TestClient:
         temp_dir = tempfile.TemporaryDirectory()
         self.addCleanup(temp_dir.cleanup)
@@ -53,6 +60,13 @@ class QuantPlatformApiTests(unittest.TestCase):
             market_data_provider="demo",
             job_execution_mode=job_execution_mode,
             job_simulation_latency_ms=job_simulation_latency_ms,
+            enable_default_accounts=enable_default_accounts,
+            initial_admin_username=initial_admin_username,
+            initial_admin_contact=initial_admin_contact,
+            initial_admin_password=initial_admin_password,
+            session_cookie_secure=session_cookie_secure,
+            session_cookie_domain=session_cookie_domain,
+            session_cookie_samesite=session_cookie_samesite,
         )
         return TestClient(create_app(settings))
 
@@ -105,6 +119,61 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertFalse(payload["data"]["redis_configured"])
         self.assertFalse(payload["data"]["minio_configured"])
         self.assertFalse(payload["data"]["llm_configured"])
+        self.assertTrue(payload["data"]["default_accounts_enabled"])
+        self.assertFalse(payload["data"]["session_cookie_secure"])
+
+    def test_production_profile_disables_default_accounts_and_uses_secure_cookie(self) -> None:
+        client = self._build_client(
+            enable_default_accounts=False,
+            initial_admin_username="owner",
+            initial_admin_contact="owner@example.com",
+            initial_admin_password="OwnerPass618",
+            session_cookie_secure=True,
+            session_cookie_domain="quant.example.com",
+            session_cookie_samesite="strict",
+        )
+
+        healthz_response = client.get("/healthz")
+        denied_response = client.post(
+            "/api/v1/auth/login",
+            json={"username": "1111", "password": "618618"},
+        )
+        login_response = client.post(
+            "/api/v1/auth/login",
+            json={"username": "owner", "password": "OwnerPass618"},
+        )
+
+        self.assertEqual(200, healthz_response.status_code)
+        self.assertFalse(healthz_response.json()["data"]["default_accounts_enabled"])
+        self.assertTrue(healthz_response.json()["data"]["session_cookie_secure"])
+        self.assertEqual(403, denied_response.status_code)
+        self.assertEqual("FORBIDDEN", denied_response.json()["error"]["code"])
+        self.assertEqual(200, login_response.status_code)
+        set_cookie = login_response.headers["set-cookie"]
+        self.assertIn("Secure", set_cookie)
+        self.assertIn("Domain=quant.example.com", set_cookie)
+        self.assertIn("SameSite=strict", set_cookie)
+
+    def test_initial_admin_seed_skips_duplicate_contact(self) -> None:
+        client = self._build_client(
+            enable_default_accounts=True,
+            initial_admin_username="platform_admin",
+            initial_admin_contact="admin@example.com",
+            initial_admin_password="ChangeMe_618618",
+        )
+
+        default_admin_login = client.post(
+            "/api/v1/auth/login",
+            json={"username": "admin", "password": "618618"},
+        )
+        custom_admin_login = client.post(
+            "/api/v1/auth/login",
+            json={"username": "platform_admin", "password": "ChangeMe_618618"},
+        )
+
+        self.assertEqual(200, default_admin_login.status_code)
+        self.assertEqual(403, custom_admin_login.status_code)
+        self.assertEqual("FORBIDDEN", custom_admin_login.json()["error"]["code"])
 
     def test_index_page_serves_web_app_shell(self) -> None:
         client = self._build_client()

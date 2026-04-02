@@ -30,14 +30,25 @@ class Settings:
     replay_prompt_version: str = "v1"
     job_execution_mode: str = "background"
     job_simulation_latency_ms: int = 100
+    enable_default_accounts: bool = True
+    initial_admin_username: str = ""
+    initial_admin_contact: str = ""
+    initial_admin_password: str = ""
+    session_cookie_secure: bool = False
+    session_cookie_domain: str = ""
+    session_cookie_samesite: str = "lax"
 
     @classmethod
     def from_env(cls) -> "Settings":
         defaults = cls()
+        app_env = os.getenv("APP_ENV", defaults.app_env)
+        app_public_url = os.getenv("APP_PUBLIC_URL", defaults.app_public_url)
+        default_accounts_enabled = app_env != "production"
+        cookie_secure = app_env == "production" or app_public_url.startswith("https://")
         return cls(
-            app_env=os.getenv("APP_ENV", defaults.app_env),
+            app_env=app_env,
             app_name=os.getenv("APP_NAME", defaults.app_name),
-            app_public_url=os.getenv("APP_PUBLIC_URL", defaults.app_public_url),
+            app_public_url=app_public_url,
             api_prefix=os.getenv("API_PREFIX", defaults.api_prefix),
             database_url=os.getenv("DATABASE_URL", defaults.database_url),
             market_data_database_path=os.getenv(
@@ -87,4 +98,39 @@ class Settings:
                     str(defaults.job_simulation_latency_ms),
                 )
             ),
+            enable_default_accounts=_env_bool(
+                "ENABLE_DEFAULT_ACCOUNTS",
+                default_accounts_enabled,
+            ),
+            initial_admin_username=os.getenv(
+                "INITIAL_ADMIN_USERNAME",
+                defaults.initial_admin_username,
+            ),
+            initial_admin_contact=os.getenv(
+                "INITIAL_ADMIN_CONTACT",
+                defaults.initial_admin_contact,
+            ),
+            initial_admin_password=os.getenv(
+                "INITIAL_ADMIN_PASSWORD",
+                defaults.initial_admin_password,
+            ),
+            session_cookie_secure=_env_bool(
+                "SESSION_COOKIE_SECURE",
+                cookie_secure,
+            ),
+            session_cookie_domain=os.getenv(
+                "SESSION_COOKIE_DOMAIN",
+                defaults.session_cookie_domain,
+            ),
+            session_cookie_samesite=os.getenv(
+                "SESSION_COOKIE_SAMESITE",
+                defaults.session_cookie_samesite,
+            ),
         )
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}

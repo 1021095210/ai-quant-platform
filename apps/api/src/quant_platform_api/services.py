@@ -663,21 +663,47 @@ class AuthService:
         self._session_repository = session_repository
         self._auth_event_repository = auth_event_repository
 
-    def seed_default_accounts(self) -> None:
-        defaults = [
-            ("1111", "1111@example.com", "618618", "user"),
-            ("admin", "admin@example.com", "618618", "admin"),
-        ]
-        for username, contact, password, role in defaults:
-            if self._user_repository.get_by_username(username) is None:
-                self._user_repository.create(
-                    UserRecord(
-                        username=username,
-                        contact=contact,
-                        password_hash=hash_password(password),
-                        role=role,
-                    )
+    def seed_initial_accounts(
+        self,
+        *,
+        enable_default_accounts: bool,
+        initial_admin_username: str = "",
+        initial_admin_contact: str = "",
+        initial_admin_password: str = "",
+    ) -> None:
+        defaults: list[tuple[str, str, str, str]] = []
+        if enable_default_accounts:
+            defaults.extend(
+                [
+                    ("1111", "1111@example.com", "618618", "user"),
+                    ("admin", "admin@example.com", "618618", "admin"),
+                ]
+            )
+        if initial_admin_username and initial_admin_contact and initial_admin_password:
+            defaults.append(
+                (
+                    initial_admin_username.strip(),
+                    initial_admin_contact.strip(),
+                    initial_admin_password,
+                    "admin",
                 )
+            )
+        existing_users = self._user_repository.list()
+        existing_usernames = {item.username for item in existing_users}
+        existing_contacts = {item.contact for item in existing_users}
+        for username, contact, password, role in defaults:
+            if username in existing_usernames or contact in existing_contacts:
+                continue
+            self._user_repository.create(
+                UserRecord(
+                    username=username,
+                    contact=contact,
+                    password_hash=hash_password(password),
+                    role=role,
+                )
+            )
+            existing_usernames.add(username)
+            existing_contacts.add(contact)
 
     def register(self, *, username: str, contact: str, password: str) -> UserProfile:
         normalized_username = username.strip()

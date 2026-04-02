@@ -172,7 +172,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.task_repository = task_repository
     static_dir = Path(__file__).resolve().parent / "static"
     app.mount("/assets", StaticFiles(directory=static_dir), name="assets")
-    services.auth_service.seed_default_accounts()
+    services.auth_service.seed_initial_accounts(
+        enable_default_accounts=app_settings.enable_default_accounts,
+        initial_admin_username=app_settings.initial_admin_username,
+        initial_admin_contact=app_settings.initial_admin_contact,
+        initial_admin_password=app_settings.initial_admin_password,
+    )
 
     @app.middleware("http")
     async def attach_request_id(request: Request, call_next):
@@ -459,7 +464,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 ) from exc
             raise
         response = _success_response(request, data=user.model_dump(mode="json"))
-        _set_session_cookie(response, session_token)
+        _set_session_cookie(response, session_token, app_settings)
         return response
 
     @app.post(f"{app_settings.api_prefix}/auth/login")
@@ -481,7 +486,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 ) from exc
             raise
         response = _success_response(request, data=user.model_dump(mode="json"))
-        _set_session_cookie(response, session_token)
+        _set_session_cookie(response, session_token, app_settings)
         return response
 
     @app.post(f"{app_settings.api_prefix}/auth/logout")
@@ -511,6 +516,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "llm_configured": bool(
                     app_settings.llm_base_url and app_settings.llm_api_key
                 ),
+                "default_accounts_enabled": app_settings.enable_default_accounts,
+                "session_cookie_secure": app_settings.session_cookie_secure,
             },
         )
 
@@ -1246,13 +1253,19 @@ def _require_admin_user(request: Request, auth_service: AuthService):
     return user
 
 
-def _set_session_cookie(response: JSONResponse, session_token: str) -> None:
+def _set_session_cookie(
+    response: JSONResponse,
+    session_token: str,
+    settings: Settings,
+) -> None:
     response.set_cookie(
         key=SESSION_COOKIE_NAME,
         value=session_token,
         httponly=True,
         max_age=14 * 24 * 60 * 60,
-        samesite="lax",
+        samesite=settings.session_cookie_samesite,
+        secure=settings.session_cookie_secure,
+        domain=settings.session_cookie_domain or None,
         path="/",
     )
 

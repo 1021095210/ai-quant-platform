@@ -64,6 +64,7 @@ docker run --rm -p 8000:8000 \
 
 - 本地一体化依赖：`infra/docker-compose.yml`
 - 外部托管依赖：`infra/docker-compose.external.yml`
+- HTTPS 反向代理模板：`infra/Caddyfile.example`
 - 环境模板：`infra/deploy.env.example`
 
 ## 环境差异处理
@@ -72,6 +73,11 @@ docker run --rm -p 8000:8000 \
 - 演示/共享环境建议把 `DATABASE_URL` 切到 PostgreSQL
 - `MARKET_DATA_DATABASE_PATH` 单独放在持久卷，避免市场缓存和业务库混在一起
 - Redis 和 MinIO 目前主要作为部署基线和下一阶段扩展预留，不强制阻塞当前主链路
+- 正式生产环境建议：
+  - `ENABLE_DEFAULT_ACCOUNTS=false`
+  - 配置 `INITIAL_ADMIN_USERNAME / INITIAL_ADMIN_CONTACT / INITIAL_ADMIN_PASSWORD`
+  - 配置 `SESSION_COOKIE_SECURE=true`
+  - 在 HTTPS 域名下运行
 
 ## 联调与验证
 

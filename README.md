@@ -41,6 +41,7 @@
 - 本地/演示环境：Docker 镜像 + `infra/docker-compose.yml`
 - 外部托管依赖环境：Docker 镜像 + `infra/docker-compose.external.yml`
 - 轻量演示：也可以直接本地启动 FastAPI，再通过临时隧道公开访问
+- 正式平台：建议 `域名 + HTTPS 反向代理 + PostgreSQL + Redis + MinIO + 生产环境变量`
 
 ## 数据流转
 
@@ -78,6 +79,7 @@
 
 - 本地一体化部署：`infra/docker-compose.yml`
 - 外部托管依赖部署：`infra/docker-compose.external.yml`
+- HTTPS 反向代理模板：`infra/Caddyfile.example`
 - 环境模板：`.env.example`、`infra/deploy.env.example`
 - 依赖联调脚本：`tools/verify_infra_stack.py`
 
@@ -86,3 +88,7 @@
 - 前端仍是服务端托管静态页面，不是独立 SPA
 - 真实多市场执行约束还在推进中
 - Redis 和 MinIO 已进入部署基线，但业务逻辑对它们的使用仍是下一阶段重点
+- 如果要变成正式长期外网平台，还需要稳定公网入口：
+  - 可解析到服务器的域名
+  - 或云平台 / VPS 访问权限
+  - 或 Cloudflare Tunnel / 反向代理的正式账号与域名控制权
