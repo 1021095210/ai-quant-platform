@@ -22,8 +22,12 @@ const nodes = {
   feeBps: document.querySelector("#backtest-fee-bps"),
   slippageBps: document.querySelector("#backtest-slippage-bps"),
   fillPriceRule: document.querySelector("#backtest-fill-price-rule"),
+  intrabarPolicy: document.querySelector("#backtest-intrabar-policy"),
+  calendar: document.querySelector("#backtest-calendar"),
+  timezone: document.querySelector("#backtest-timezone"),
   adjustmentMode: document.querySelector("#backtest-adjustment-mode"),
   warmupBars: document.querySelector("#backtest-warmup-bars"),
+  marketConstraint: document.querySelector("#backtest-market-constraint"),
   positionMode: document.querySelector("#backtest-position-mode"),
   positionValue: document.querySelector("#backtest-position-value"),
   maxPositionPct: document.querySelector("#backtest-max-position-pct"),
@@ -39,6 +43,7 @@ const nodes = {
   sourcePills: document.querySelector("#backtest-source-pills"),
   configList: document.querySelector("#backtest-config-list"),
   snapshotList: document.querySelector("#backtest-snapshot-list"),
+  assumptionList: document.querySelector("#backtest-assumption-list"),
   sparkline: document.querySelector("#equity-sparkline"),
   strategyPython: document.querySelector("#backtest-strategy-python"),
   tradeTableBody: document.querySelector("#trade-table-body"),
@@ -79,6 +84,25 @@ function applySelectedProjectDefaults() {
   }
   const assetType = option.dataset.asset || "stock";
   nodes.minTradeUnit.value = assetType === "stock" || assetType === "etf" ? "100" : "1";
+  const market = (option.dataset.market || "").toLowerCase();
+  if (assetType === "stock" || assetType === "etf") {
+    if (market.includes(".sh") || market.includes(".sz")) {
+      nodes.calendar.value = "cn_a_share";
+      nodes.timezone.value = "Asia/Shanghai";
+      nodes.marketConstraint.value = "A股按 T+1 卖出，股票 / ETF 最小单位 100 股";
+    } else {
+      nodes.calendar.value = "us_equity";
+      nodes.timezone.value = "America/New_York";
+      nodes.marketConstraint.value = "美股默认按 T+0 语义处理，最小交易单位可按券商模型调整";
+    }
+  } else {
+    nodes.calendar.value = assetType === "crypto" ? "crypto_24x7" : "london_gold";
+    nodes.timezone.value = assetType === "crypto" ? "UTC" : "Europe/London";
+    nodes.marketConstraint.value =
+      assetType === "crypto"
+        ? "加密货币默认按 7x24 连续交易处理"
+        : "伦敦金按全球连续报价时段处理";
+  }
 }
 
 async function runBacktest() {
@@ -103,9 +127,9 @@ async function runBacktest() {
         fee_bps: Number(nodes.feeBps.value || 3),
         slippage_bps: Number(nodes.slippageBps.value || 2),
         fill_price_rule: nodes.fillPriceRule.value,
-        intrabar_match_policy: "no_intrabar_fill",
-        calendar: "cn_a_share",
-        timezone: "Asia/Shanghai",
+        intrabar_match_policy: nodes.intrabarPolicy.value,
+        calendar: nodes.calendar.value,
+        timezone: nodes.timezone.value,
         adjustment_mode: nodes.adjustmentMode.value,
         warmup_bars: Number(nodes.warmupBars.value || 20),
         position_sizing: {
@@ -169,6 +193,7 @@ function renderBacktestDetail(data) {
   nodes.latestProvider.textContent = data.data_source?.provider || "未知";
   renderConfigList(data.backtest_config || {});
   renderSnapshotList(data.data_snapshot_summary || {});
+  renderAssumptionList(data.backtest_config || {}, data.data_snapshot_summary || {});
   nodes.sourcePills.innerHTML = [
     `数据源：${data.data_source?.provider || "未知"}`,
     `缓存命中：${data.data_source?.served_from_cache ? "是" : "否"}`,
@@ -202,7 +227,9 @@ function renderConfigList(config) {
   const risk = execution.risk_controls || {};
   const items = [
     ["成交方式", execution.fill_price_rule || "未知"],
+    ["盘中撮合", execution.intrabar_match_policy || "未知"],
     ["复权模式", execution.adjustment_mode || "未知"],
+    ["日历 / 时区", `${execution.calendar || "未知"} / ${execution.timezone || "未知"}`],
     ["费用 / 滑点", `${execution.fee_bps ?? 0}bps / ${execution.slippage_bps ?? 0}bps`],
     ["仓位模式", `${position.mode || "未知"} / ${position.value ?? "-"}`],
     ["单笔上限", `${position.max_position_pct ?? "-"} / 最小单位 ${position.min_trade_unit ?? "-"}`],
@@ -231,6 +258,48 @@ function renderSnapshotList(summary) {
     ["最近同步", summary.last_synced_at || "未知"],
   ];
   nodes.snapshotList.innerHTML = items
+    .map(
+      ([label, value]) => `
+        <div class="list-item compact-item">
+          <strong>${label}</strong>
+          <div class="muted-note">${value}</div>
+        </div>
+      `,
+    )
+    .join("");
+}
+
+function renderAssumptionList(config, summary) {
+  const execution = config || {};
+  const assumptions = [
+    [
+      "成交假设",
+      execution.fill_price_rule === "same_bar_close"
+        ? "当前按当前K线收盘价成交解释信号，不再等到下一根K线。"
+        : "当前按下一根K线开盘成交解释信号，避免把信号形成后的价格提前成交。",
+    ],
+    [
+      "盘中撮合边界",
+      execution.intrabar_match_policy === "intrabar_touch_fill"
+        ? "允许盘中触价即成交，这会提高成交率，但也会让结果更依赖盘中路径假设。"
+        : "当前不做盘中撮合，只在离散 K 线节点成交，结果更保守但可能漏掉盘中触发机会。",
+    ],
+    [
+      "价格序列口径",
+      execution.adjustment_mode === "raw"
+        ? "当前使用不复权价格序列，回测结果对分红送配更敏感。"
+        : `当前使用 ${execution.adjustment_mode} 价格口径，需与策略研究口径保持一致。`,
+    ],
+    [
+      "数据边界",
+      `当前快照 ${summary.dataset_snapshot_ref || "未标记"} 来自 ${summary.provider || "未知来源"}，覆盖率 ${summary.coverage_pct ?? "-"}%，缺失率 ${summary.missing_rate_pct ?? "-"}%。`,
+    ],
+    [
+      "市场约束提醒",
+      nodes.marketConstraint.value || "请结合市场制度、最小交易单位和可卖规则理解本次结果。",
+    ],
+  ];
+  nodes.assumptionList.innerHTML = assumptions
     .map(
       ([label, value]) => `
         <div class="list-item compact-item">

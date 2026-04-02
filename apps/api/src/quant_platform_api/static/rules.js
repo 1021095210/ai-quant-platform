@@ -77,7 +77,7 @@ function renderRuleItem(sectionId, item, index) {
                       <button type="button" class="btn ghost" data-remove-rule-item>删除这一项</button>
                     </div>
                   </div>
-                `,
+                `;
 }
 
 function renderGlossary(items) {

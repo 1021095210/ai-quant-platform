@@ -213,8 +213,11 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertEqual(200, response.status_code)
         self.assertIn("回测配置摘要", response.text)
         self.assertIn("数据快照摘要", response.text)
+        self.assertIn("执行可信度说明", response.text)
         self.assertIn("仓位模式", response.text)
         self.assertIn("最大回撤保护", response.text)
+        self.assertIn("盘中撮合策略", response.text)
+        self.assertIn("市场成交约束", response.text)
 
     def test_admin_can_login_and_access_workspace(self) -> None:
         client = self._build_client()

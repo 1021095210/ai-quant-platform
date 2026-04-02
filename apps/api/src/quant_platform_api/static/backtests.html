@@ -113,8 +113,41 @@
                 </select>
               </label>
               <label class="field">
+                <span>盘中撮合策略</span>
+                <select id="backtest-intrabar-policy">
+                  <option value="no_intrabar_fill">不做盘中撮合</option>
+                  <option value="intrabar_touch_fill">盘中触价即成交</option>
+                </select>
+              </label>
+            </div>
+            <div class="form-grid two">
+              <label class="field">
+                <span>交易日历</span>
+                <select id="backtest-calendar">
+                  <option value="cn_a_share">A股交易日历</option>
+                  <option value="us_equity">美股交易日历</option>
+                  <option value="crypto_24x7">加密货币 7x24</option>
+                  <option value="london_gold">伦敦金连续时段</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>时区</span>
+                <select id="backtest-timezone">
+                  <option value="Asia/Shanghai">Asia/Shanghai</option>
+                  <option value="America/New_York">America/New_York</option>
+                  <option value="UTC">UTC</option>
+                  <option value="Europe/London">Europe/London</option>
+                </select>
+              </label>
+            </div>
+            <div class="form-grid two">
+              <label class="field">
                 <span>预热 Bar 数</span>
                 <input id="backtest-warmup-bars" type="number" min="0" step="1" value="20" />
+              </label>
+              <label class="field">
+                <span>市场成交约束</span>
+                <input id="backtest-market-constraint" value="A股按 T+1 卖出，股票 / ETF 最小单位 100 股" />
               </label>
             </div>
             <div class="form-grid two">
@@ -196,6 +229,12 @@
             <div id="backtest-snapshot-list" class="list empty-state">等待回测。</div>
           </section>
         </div>
+        <section class="card muted" style="margin-top: 18px">
+          <div class="panel-header">
+            <h4>执行可信度说明</h4>
+          </div>
+          <div id="backtest-assumption-list" class="list empty-state">等待回测。</div>
+        </section>
         <div id="equity-sparkline" class="sparkline" style="margin-top: 18px"></div>
         <div class="grid two" style="margin-top: 18px">
           <section class="card muted">

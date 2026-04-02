@@ -3,6 +3,7 @@
 当前无进行中的任务。
 
 最近完成的接力记录见：
+- `.claude/agents/briefings/2026-04-02_codex_规则模块复核与回测可信度说明.md`
 - `.claude/agents/briefings/2026-04-02_codex_管理员运营能力与安全审计.md`
 - `.claude/agents/briefings/2026-04-01_codex_修复规则模块加载故障.md`
 - `.claude/agents/briefings/2026-04-01_codex_管理员后台与平台治理视图.md`
