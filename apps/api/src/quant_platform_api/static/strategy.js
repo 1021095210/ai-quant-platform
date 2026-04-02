@@ -29,7 +29,6 @@ const nodes = {
   python: document.querySelector("#strategy-python-output"),
   spec: document.querySelector("#strategy-spec-output"),
   currentVersion: document.querySelector("#current-version"),
-  currentTitle: document.querySelector("#current-title"),
   customIndicatorLibrary: document.querySelector("#custom-indicator-library"),
   glossaryPreview: document.querySelector("#glossary-preview"),
 };
@@ -130,7 +129,7 @@ function restoreSelection() {
     nodes.currentVersion.textContent = versionId;
   }
   if (title) {
-    nodes.currentTitle.textContent = title;
+    nodes.title.value = title;
   }
 }
 
