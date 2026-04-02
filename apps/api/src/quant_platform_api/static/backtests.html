@@ -239,11 +239,23 @@
             </div>
             <div class="form-grid two">
               <label class="field">
-                <span>最大回撤保护</span>
+                <span class="label-with-help">
+                  最大回撤保护
+                  <span class="hint-pill" tabindex="0" aria-label="最大回撤保护说明">
+                    !
+                    <span class="hint-pop">表示账户从高点回落到什么程度时要强制收缩或停止策略。数值越小，说明策略更重视先保住本金。</span>
+                  </span>
+                </span>
                 <input id="backtest-max-drawdown" type="number" max="-0.01" step="0.01" value="-0.12" />
               </label>
               <label class="field">
-                <span>最大持有 Bar 数</span>
+                <span class="label-with-help">
+                  最大持有 Bar 数
+                  <span class="hint-pill" tabindex="0" aria-label="最大持有Bar数说明">
+                    !
+                    <span class="hint-pop">表示一笔仓位最多允许持有多少根 K 线。超过这个上限后，即使没有触发止盈止损，也会按规则主动退出。</span>
+                  </span>
+                </span>
                 <input id="backtest-max-holding-bars" type="number" min="1" step="1" value="40" />
               </label>
             </div>
@@ -275,28 +287,32 @@
           <h3>当前回测详情</h3>
         </div>
         <div id="backtest-metrics" class="metric-grid"></div>
+        <section class="card muted" style="margin-top: 18px">
+          <div class="panel-header">
+            <h4>回测曲线</h4>
+          </div>
+          <div class="muted-note">先看时间区间、区间收益和净值波动，再往下看配置摘要和执行说明。</div>
+          <div id="equity-sparkline" class="sparkline" style="margin-top: 18px"></div>
+        </section>
         <div id="backtest-source-pills" class="pill-row" style="margin-top: 18px"></div>
-        <div class="grid two" style="margin-top: 18px">
-          <section class="card muted">
-            <div class="panel-header">
-              <h4>回测配置摘要</h4>
-            </div>
-            <div id="backtest-config-list" class="list empty-state">等待回测。</div>
-          </section>
-          <section class="card muted">
-            <div class="panel-header">
-              <h4>数据快照摘要</h4>
-            </div>
-            <div id="backtest-snapshot-list" class="list empty-state">等待回测。</div>
-          </section>
-        </div>
+        <section class="card muted" style="margin-top: 18px">
+          <div class="panel-header">
+            <h4>回测配置摘要</h4>
+          </div>
+          <div id="backtest-config-list" class="list empty-state">等待回测。</div>
+        </section>
         <section class="card muted" style="margin-top: 18px">
           <div class="panel-header">
             <h4>执行可信度说明</h4>
           </div>
           <div id="backtest-assumption-list" class="list empty-state">等待回测。</div>
         </section>
-        <div id="equity-sparkline" class="sparkline" style="margin-top: 18px"></div>
+        <section class="card muted" style="margin-top: 18px">
+          <div class="panel-header">
+            <h4>数据快照摘要</h4>
+          </div>
+          <div id="backtest-snapshot-list" class="list empty-state">等待回测。</div>
+        </section>
         <div class="grid two" style="margin-top: 18px">
           <section class="card muted">
             <div class="panel-header">
