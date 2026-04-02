@@ -249,6 +249,60 @@ console.log('bootstrapped');
         self.assertIn('id="save-custom-indicator-btn" class="btn disabled" disabled', indicators_html)
         self.assertIn("syncIndicatorActionState", indicators_js)
 
+    def test_replay_and_rules_assets_use_progressive_action_states(self) -> None:
+        replay_html_path = (
+            WORKSPACE_ROOT
+            / "apps"
+            / "api"
+            / "src"
+            / "quant_platform_api"
+            / "static"
+            / "replay.html"
+        )
+        replay_js_path = (
+            WORKSPACE_ROOT
+            / "apps"
+            / "api"
+            / "src"
+            / "quant_platform_api"
+            / "static"
+            / "replay.js"
+        )
+        rules_html_path = (
+            WORKSPACE_ROOT
+            / "apps"
+            / "api"
+            / "src"
+            / "quant_platform_api"
+            / "static"
+            / "rules.html"
+        )
+        rules_js_path = (
+            WORKSPACE_ROOT
+            / "apps"
+            / "api"
+            / "src"
+            / "quant_platform_api"
+            / "static"
+            / "rules.js"
+        )
+
+        replay_html = replay_html_path.read_text(encoding="utf-8")
+        replay_js = replay_js_path.read_text(encoding="utf-8")
+        rules_html = rules_html_path.read_text(encoding="utf-8")
+        rules_js = rules_js_path.read_text(encoding="utf-8")
+
+        self.assertIn('id="upload-trades-btn" class="btn disabled" disabled', replay_html)
+        self.assertIn('id="add-manual-trade-btn" class="btn disabled"', replay_html)
+        self.assertIn("syncReplayActionState", replay_js)
+        self.assertIn("const csvReady =", replay_js)
+        self.assertIn("const screenshotReady =", replay_js)
+        self.assertIn("const manualUploadReady =", replay_js)
+        self.assertIn('id="save-default-rules-btn" class="btn disabled" disabled', rules_html)
+        self.assertIn('id="save-glossary-btn" class="btn disabled" disabled', rules_html)
+        self.assertIn("syncRulesActionState", rules_js)
+        self.assertIn("markDefaultRulesDirty", rules_js)
+
     def test_replay_assets_include_ready_state_and_clear_side_language(self) -> None:
         replay_js_path = (
             WORKSPACE_ROOT
