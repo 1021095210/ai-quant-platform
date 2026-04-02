@@ -139,6 +139,22 @@ console.log('bootstrapped');
         )
         self.assertIn("bootstrapped", completed.stdout)
 
+    def test_rules_js_renders_collapsible_group_markup(self) -> None:
+        rules_path = (
+            WORKSPACE_ROOT
+            / "apps"
+            / "api"
+            / "src"
+            / "quant_platform_api"
+            / "static"
+            / "rules.js"
+        )
+        source = rules_path.read_text(encoding="utf-8")
+
+        self.assertIn('<details class="accordion-item rule-group-card"', source)
+        self.assertIn('class="rule-group-summary"', source)
+        self.assertIn('class="rule-group-title"', source)
+
 
 if __name__ == "__main__":
     unittest.main()

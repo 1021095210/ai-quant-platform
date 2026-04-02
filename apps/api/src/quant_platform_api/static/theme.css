@@ -253,6 +253,54 @@ select {
   font-weight: 700;
 }
 
+.label-with-help {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.hint-pill {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  font-size: 11px;
+  font-weight: 800;
+  cursor: help;
+  outline: none;
+}
+
+.hint-pop {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 10px);
+  transform: translateX(-50%);
+  width: min(280px, 72vw);
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(36, 99, 235, 0.18);
+  background: rgba(15, 30, 56, 0.96);
+  color: #e6efff;
+  font-size: 12px;
+  line-height: 1.6;
+  box-shadow: 0 18px 32px rgba(15, 30, 56, 0.24);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 140ms ease, transform 140ms ease;
+}
+
+.hint-pill:hover .hint-pop,
+.hint-pill:focus .hint-pop,
+.hint-pill:focus-visible .hint-pop {
+  opacity: 1;
+  transform: translateX(-50%) translateY(-2px);
+}
+
 .toggle {
   display: flex;
   align-items: flex-start;
@@ -555,6 +603,59 @@ th {
   display: grid;
   gap: 12px;
   margin-top: 12px;
+}
+
+.rule-group-card {
+  border: 1px solid rgba(191, 212, 255, 0.56);
+  border-radius: 20px;
+  background: linear-gradient(180deg, rgba(236, 244, 255, 0.92), rgba(255, 255, 255, 0.98));
+  overflow: hidden;
+}
+
+.rule-group-summary {
+  position: relative;
+  align-items: center;
+  padding: 18px 20px;
+  background: linear-gradient(135deg, rgba(36, 99, 235, 0.08), rgba(255, 255, 255, 0.78));
+}
+
+.rule-group-summary::after {
+  content: "⌄";
+  color: var(--accent-strong);
+  font-size: 20px;
+  font-weight: 800;
+  line-height: 1;
+  transition: transform 140ms ease;
+}
+
+.rule-group-card[open] .rule-group-summary::after {
+  transform: rotate(180deg);
+}
+
+.rule-group-kicker {
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+
+.rule-group-title {
+  font-size: 20px;
+  font-weight: 800;
+  color: var(--accent-strong);
+}
+
+.rule-group-meta {
+  color: var(--text-soft);
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.rule-group-body {
+  padding-top: 18px;
 }
 
 .rule-item {

@@ -218,6 +218,18 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertIn("最大回撤保护", response.text)
         self.assertIn("盘中撮合策略", response.text)
         self.assertIn("市场成交约束", response.text)
+        self.assertIn("滑点说明", response.text)
+        self.assertIn("盘中撮合策略说明", response.text)
+        self.assertIn("预热Bar数说明", response.text)
+
+    def test_rules_page_uses_collapsible_default_rule_container(self) -> None:
+        client = self._build_client()
+        self._login(client)
+
+        response = client.get("/rules")
+
+        self.assertEqual(200, response.status_code)
+        self.assertIn('id="default-rules" class="accordion-list empty-state"', response.text)
 
     def test_admin_can_login_and_access_workspace(self) -> None:
         client = self._build_client()

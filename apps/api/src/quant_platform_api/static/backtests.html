@@ -86,7 +86,13 @@
                 <input id="backtest-capital" type="number" min="1000" step="1000" value="100000" />
               </label>
               <label class="field">
-                <span>复权模式</span>
+                <span class="label-with-help">
+                  复权模式
+                  <span class="hint-pill" tabindex="0" aria-label="复权模式说明">
+                    !
+                    <span class="hint-pop">决定价格序列是否按分红送配等历史事件做调整。研究口径和回测口径需要一致，否则结果会失真。</span>
+                  </span>
+                </span>
                 <select id="backtest-adjustment-mode">
                   <option value="qfq">前复权</option>
                   <option value="hfq">后复权</option>
@@ -96,24 +102,48 @@
             </div>
             <div class="form-grid two">
               <label class="field">
-                <span>手续费（bps）</span>
+                <span class="label-with-help">
+                  手续费（bps）
+                  <span class="hint-pill" tabindex="0" aria-label="手续费说明">
+                    !
+                    <span class="hint-pop">表示单次成交要扣除的交易成本。bps 是万分之一百的计量单位，10 bps 等于 0.1%。</span>
+                  </span>
+                </span>
                 <input id="backtest-fee-bps" type="number" min="0" step="1" value="3" />
               </label>
               <label class="field">
-                <span>滑点（bps）</span>
+                <span class="label-with-help">
+                  滑点（bps）
+                  <span class="hint-pill" tabindex="0" aria-label="滑点说明">
+                    !
+                    <span class="hint-pop">表示理想成交价和真实可成交价格之间的偏差。数值越大，说明实盘成交更容易比信号价差一些。</span>
+                  </span>
+                </span>
                 <input id="backtest-slippage-bps" type="number" min="0" step="1" value="2" />
               </label>
             </div>
             <div class="form-grid two">
               <label class="field">
-                <span>成交方式</span>
+                <span class="label-with-help">
+                  成交方式
+                  <span class="hint-pill" tabindex="0" aria-label="成交方式说明">
+                    !
+                    <span class="hint-pop">决定信号出现后按哪一个价格节点成交。常见是下一根 K 线开盘成交，或当前 K 线收盘成交。</span>
+                  </span>
+                </span>
                 <select id="backtest-fill-price-rule">
                   <option value="next_bar_open">下一根K线开盘成交</option>
                   <option value="same_bar_close">当前K线收盘成交</option>
                 </select>
               </label>
               <label class="field">
-                <span>盘中撮合策略</span>
+                <span class="label-with-help">
+                  盘中撮合策略
+                  <span class="hint-pill" tabindex="0" aria-label="盘中撮合策略说明">
+                    !
+                    <span class="hint-pop">决定是否允许在一根 K 线内部按高低价触发成交。开启后结果更接近盘中触价模型，但对路径假设更敏感。</span>
+                  </span>
+                </span>
                 <select id="backtest-intrabar-policy">
                   <option value="no_intrabar_fill">不做盘中撮合</option>
                   <option value="intrabar_touch_fill">盘中触价即成交</option>
@@ -122,7 +152,13 @@
             </div>
             <div class="form-grid two">
               <label class="field">
-                <span>交易日历</span>
+                <span class="label-with-help">
+                  交易日历
+                  <span class="hint-pill" tabindex="0" aria-label="交易日历说明">
+                    !
+                    <span class="hint-pop">决定哪些日期和时段算有效交易时间。不同市场的休市日、节假日和连续交易规则都不一样。</span>
+                  </span>
+                </span>
                 <select id="backtest-calendar">
                   <option value="cn_a_share">A股交易日历</option>
                   <option value="us_equity">美股交易日历</option>
@@ -131,7 +167,13 @@
                 </select>
               </label>
               <label class="field">
-                <span>时区</span>
+                <span class="label-with-help">
+                  时区
+                  <span class="hint-pill" tabindex="0" aria-label="时区说明">
+                    !
+                    <span class="hint-pop">决定时间戳按哪个市场时区解释。如果时区错了，信号触发时间和交易日归属都可能偏掉。</span>
+                  </span>
+                </span>
                 <select id="backtest-timezone">
                   <option value="Asia/Shanghai">Asia/Shanghai</option>
                   <option value="America/New_York">America/New_York</option>
@@ -142,11 +184,23 @@
             </div>
             <div class="form-grid two">
               <label class="field">
-                <span>预热 Bar 数</span>
+                <span class="label-with-help">
+                  预热 Bar 数
+                  <span class="hint-pill" tabindex="0" aria-label="预热Bar数说明">
+                    !
+                    <span class="hint-pop">表示正式开始回测前，先读取多少根历史 K 线给均线、KDJ 等指标热启动，避免一开始指标值失真。</span>
+                  </span>
+                </span>
                 <input id="backtest-warmup-bars" type="number" min="0" step="1" value="20" />
               </label>
               <label class="field">
-                <span>市场成交约束</span>
+                <span class="label-with-help">
+                  市场成交约束
+                  <span class="hint-pill" tabindex="0" aria-label="市场成交约束说明">
+                    !
+                    <span class="hint-pop">用于提醒当前市场的制度边界，比如 A股 T+1、最小交易单位 100 股，或加密货币 7x24 连续交易等。</span>
+                  </span>
+                </span>
                 <input id="backtest-market-constraint" value="A股按 T+1 卖出，股票 / ETF 最小单位 100 股" />
               </label>
             </div>

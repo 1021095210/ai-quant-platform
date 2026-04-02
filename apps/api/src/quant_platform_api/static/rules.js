@@ -29,21 +29,30 @@ function renderRules(items) {
   }
   nodes.defaultRules.innerHTML = items
     .map(
-      (section) => `
-        <div class="list-item" data-rule-section="${section.section_id}">
-          <label class="field">
-            <span>分组名称</span>
-            <input data-section-name value="${section.section}" />
-          </label>
-          <div class="rule-list" data-rule-items>
-            ${(section.items || [])
-              .map((item, index) => renderRuleItem(section.section_id, item, index))
-              .join("")}
+      (section, index) => `
+        <details class="accordion-item rule-group-card" data-rule-section="${section.section_id}" ${index === 0 ? "open" : ""}>
+          <summary class="rule-group-summary">
+            <div>
+              <div class="rule-group-kicker">默认规则分组</div>
+              <div class="rule-group-title">${section.section}</div>
+            </div>
+            <div class="rule-group-meta">共 ${(section.items || []).length} 项</div>
+          </summary>
+          <div class="accordion-content rule-group-body">
+            <label class="field">
+              <span>分组名称</span>
+              <input data-section-name value="${section.section}" />
+            </label>
+            <div class="rule-list" data-rule-items>
+              ${(section.items || [])
+                .map((item, indexRule) => renderRuleItem(section.section_id, item, indexRule))
+                .join("")}
+            </div>
+            <div class="inline-actions" style="margin-top: 12px">
+              <button type="button" class="btn ghost" data-add-rule-item="${section.section_id}">新增规则项</button>
+            </div>
           </div>
-          <div class="inline-actions" style="margin-top: 12px">
-            <button type="button" class="btn ghost" data-add-rule-item="${section.section_id}">新增规则项</button>
-          </div>
-        </div>
+        </details>
       `,
     )
     .join("");
