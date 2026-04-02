@@ -49,20 +49,122 @@
             <h3>上传交割单</h3>
           </div>
           <div class="form-grid">
-            <label class="field">
-              <span>CSV 文件</span>
-              <input id="trade-file" type="file" accept=".csv,text/csv" />
-            </label>
-            <label class="field">
-              <span>或直接粘贴 CSV</span>
-              <textarea id="trade-csv-text">symbol,side,entry_time,exit_time,pnl
+            <div class="choice-pill-grid">
+              <button id="source-mode-csv" class="btn secondary source-mode-btn" type="button">CSV 导入</button>
+              <button id="source-mode-screenshot" class="btn ghost source-mode-btn" type="button">成交截图</button>
+              <button id="source-mode-manual" class="btn ghost source-mode-btn" type="button">手动录入</button>
+            </div>
+
+            <div id="source-panel-csv" class="source-panel">
+              <label class="field">
+                <span>CSV 文件</span>
+                <input id="trade-file" type="file" accept=".csv,text/csv" />
+              </label>
+              <label class="field">
+                <span>或直接粘贴 CSV</span>
+                <textarea id="trade-csv-text">symbol,side,entry_time,exit_time,pnl
 600519.SH,long,2024-03-01T09:30:00Z,2024-03-12T15:00:00Z,8200
 600519.SH,long,2024-04-08T09:30:00Z,2024-04-15T15:00:00Z,-3600
 510300.SH,long,2024-05-06T09:30:00Z,2024-05-14T15:00:00Z,1300
 510300.SH,long,2024-06-03T09:30:00Z,2024-06-11T15:00:00Z,-900</textarea>
-            </label>
+              </label>
+            </div>
+
+            <div id="source-panel-screenshot" class="source-panel" hidden>
+              <div class="muted-note">适合只拿到券商成交截图、聊天记录截图或软件成交明细截图时使用。当前需要你同时补齐关键字段，平台先按结构化记录复盘。</div>
+              <label class="field">
+                <span>成交截图</span>
+                <input id="trade-screenshot-file" type="file" accept="image/*" />
+              </label>
+              <div class="form-grid two">
+                <label class="field">
+                  <span>市场</span>
+                  <select id="trade-screenshot-market">
+                    <option value="cn_equity">A股</option>
+                    <option value="us_equity">美股</option>
+                    <option value="crypto">加密货币</option>
+                    <option value="london_gold">伦敦金</option>
+                  </select>
+                </label>
+                <label class="field">
+                  <span>标的代码</span>
+                  <input id="trade-screenshot-symbol" placeholder="如 600519.SH / BTCUSDT" />
+                </label>
+              </div>
+              <div class="form-grid two">
+                <label class="field">
+                  <span>方向</span>
+                  <select id="trade-screenshot-side">
+                    <option value="long">买入后卖出 / 做多</option>
+                    <option value="short">反向 / 做空</option>
+                  </select>
+                </label>
+                <label class="field">
+                  <span>盈亏</span>
+                  <input id="trade-screenshot-pnl" type="number" step="0.01" value="0" />
+                </label>
+              </div>
+              <div class="form-grid two">
+                <label class="field">
+                  <span>买入日期时间</span>
+                  <input id="trade-screenshot-entry" type="datetime-local" />
+                </label>
+                <label class="field">
+                  <span>卖出日期时间</span>
+                  <input id="trade-screenshot-exit" type="datetime-local" />
+                </label>
+              </div>
+              <label class="field">
+                <span>补充说明</span>
+                <textarea id="trade-screenshot-notes" placeholder="如：来自某券商当日成交截图、手续费已含在盈亏里等"></textarea>
+              </label>
+            </div>
+
+            <div id="source-panel-manual" class="source-panel" hidden>
+              <div class="muted-note">适合没有交割单文件时，直接补录股票代码、买卖日期、方向和盈亏。可以连续录入多笔再一起复盘。</div>
+              <div class="form-grid two">
+                <label class="field">
+                  <span>标的代码</span>
+                  <input id="trade-manual-symbol" placeholder="如 600519.SH / 510300.SH" />
+                </label>
+                <label class="field">
+                  <span>方向</span>
+                  <select id="trade-manual-side">
+                    <option value="long">买入后卖出 / 做多</option>
+                    <option value="short">反向 / 做空</option>
+                  </select>
+                </label>
+              </div>
+              <div class="form-grid two">
+                <label class="field">
+                  <span>买入日期时间</span>
+                  <input id="trade-manual-entry" type="datetime-local" />
+                </label>
+                <label class="field">
+                  <span>卖出日期时间</span>
+                  <input id="trade-manual-exit" type="datetime-local" />
+                </label>
+              </div>
+              <div class="form-grid two">
+                <label class="field">
+                  <span>盈亏</span>
+                  <input id="trade-manual-pnl" type="number" step="0.01" value="0" />
+                </label>
+                <label class="field">
+                  <span>来源说明</span>
+                  <input id="trade-manual-notes" placeholder="如：手动补录、券商账单摘录" />
+                </label>
+              </div>
+              <div class="actions">
+                <button id="add-manual-trade-btn" class="btn secondary" type="button">加入手动记录</button>
+              </div>
+              <div id="manual-trade-list" class="list empty-state">尚未加入手动记录。</div>
+            </div>
+
             <div class="actions">
               <button id="upload-trades-btn">上传并解析</button>
+              <button id="upload-screenshot-btn" class="btn ghost" type="button" hidden>登记截图并生成记录</button>
+              <button id="upload-manual-btn" class="btn ghost" type="button" hidden>提交手动记录</button>
               <button id="run-replay-btn" class="btn secondary disabled" disabled>运行 AI 复盘</button>
             </div>
           </div>
