@@ -624,6 +624,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             user_id=current_user.user_id,
             workspace_id=current_user.workspace_id,
             title=payload.title,
+            version_label=payload.version_label,
             natural_language_prompt=payload.natural_language_prompt,
             strategy_dsl=payload.strategy_dsl,
             strategy_python=payload.strategy_python,
@@ -633,6 +634,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             data={
                 "project_id": version.project_id,
                 "version_id": version.version_id,
+                "version_label": version.version_label,
                 "workspace_id": version.workspace_id,
                 "user_id": version.user_id,
             }
@@ -652,6 +654,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     {
                         "project_id": item.project_id,
                         "version_id": item.version_id,
+                        "version_label": item.version_label,
                         "workspace_id": item.workspace_id,
                         "user_id": item.user_id,
                         "title": item.title,
@@ -686,6 +689,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             data={
                 "project_id": item.project_id,
                 "version_id": item.version_id,
+                "version_label": item.version_label,
                 "workspace_id": item.workspace_id,
                 "user_id": item.user_id,
                 "title": item.title,
