@@ -794,6 +794,98 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             }
         )
 
+    @app.get(f"{app_settings.api_prefix}/backtests/compare")
+    def compare_backtest_runs(request: Request) -> JSONResponse:
+        current_user = _require_current_user(request, services.auth_service)
+        run_ids = [item for item in request.query_params.getlist("run_ids") if item]
+        if len(run_ids) < 2:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=ErrorPayload(
+                    code="INVALID_ARGUMENT",
+                    message="at least two backtest runs are required for comparison",
+                ).model_dump(),
+            )
+        if len(run_ids) > 4:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=ErrorPayload(
+                    code="INVALID_ARGUMENT",
+                    message="at most four backtest runs can be compared at once",
+                ).model_dump(),
+            )
+        records = [
+            _require_task(
+                services.backtest_service.get(
+                    run_id,
+                    user_id=current_user.user_id,
+                    workspace_id=current_user.workspace_id,
+                )
+            )
+            for run_id in run_ids
+        ]
+        items = [_build_backtest_compare_item(record) for record in records]
+        return _success_response(
+            request,
+            data={
+                "baseline_run_id": records[0].id,
+                "items": items,
+                "metric_rows": _build_backtest_compare_rows(
+                    items,
+                    "metrics",
+                    (
+                        ("total_return_pct", "总收益率"),
+                        ("max_drawdown_pct", "最大回撤"),
+                        ("win_rate_pct", "胜率"),
+                        ("profit_factor", "盈亏比"),
+                        ("trade_count", "交易次数"),
+                        ("final_equity", "期末权益"),
+                    ),
+                    only_changed=False,
+                ),
+                "config_diffs": _build_backtest_compare_rows(
+                    items,
+                    "backtest_config",
+                    (
+                        ("fill_price_rule", "成交方式"),
+                        ("intrabar_match_policy", "盘中撮合"),
+                        ("settlement_policy", "结算规则"),
+                        ("adjustment_mode", "复权模式"),
+                        ("calendar", "交易日历"),
+                        ("timezone", "时区"),
+                        ("fee_bps", "手续费(bps)"),
+                        ("slippage_bps", "滑点(bps)"),
+                        ("warmup_bars", "预热 Bar 数"),
+                        ("market_constraint_text", "市场成交约束"),
+                        ("position_sizing.mode", "仓位模式"),
+                        ("position_sizing.value", "仓位值"),
+                        ("position_sizing.max_position_pct", "单笔最大资金占比"),
+                        ("position_sizing.min_trade_unit", "最小交易单位"),
+                        ("risk_controls.take_profit_pct", "止盈比例"),
+                        ("risk_controls.stop_loss_pct", "止损比例"),
+                        ("risk_controls.max_drawdown_pct", "最大回撤保护"),
+                        ("risk_controls.max_holding_bars", "最大持有 Bar 数"),
+                    ),
+                ),
+                "snapshot_diffs": _build_backtest_compare_rows(
+                    items,
+                    "data_snapshot_summary",
+                    (
+                        ("dataset_snapshot_ref", "快照引用"),
+                        ("provider", "数据来源"),
+                        ("coverage_pct", "覆盖率"),
+                        ("missing_rate_pct", "缺失率"),
+                        ("calendar", "交易日历"),
+                        ("timezone", "时区"),
+                        ("bar_count", "Bar 数"),
+                        ("warmup_bars", "预热 Bar 数"),
+                        ("last_synced_at", "最近同步"),
+                    ),
+                ),
+                "highlights": _build_backtest_compare_highlights(items),
+            },
+        )
+
     @app.get(f"{app_settings.api_prefix}/backtests/runs/{{backtest_run_id}}")
     def get_backtest_run(request: Request, backtest_run_id: str) -> JSONResponse:
         current_user = _require_current_user(request, services.auth_service)
@@ -1126,6 +1218,131 @@ def _serialize_task(record: Any, identifier_key: str) -> dict[str, Any]:
             "details": {},
         }
     return payload
+
+
+def _build_backtest_compare_item(record: Any) -> dict[str, Any]:
+    strategy_title = record.result.get("strategy_title") or record.payload.get(
+        "strategy_version_id",
+        "未命名策略",
+    )
+    return {
+        "backtest_run_id": record.id,
+        "display_title": strategy_title,
+        "created_at": record.created_at.isoformat(),
+        "market": record.payload.get("dataset", {}).get("market"),
+        "timeframe": record.payload.get("dataset", {}).get("timeframe"),
+        "metrics": record.result.get("metrics", {}),
+        "backtest_config": record.result.get("backtest_config", {}),
+        "data_snapshot_summary": record.result.get("data_snapshot_summary", {}),
+    }
+
+
+def _build_backtest_compare_rows(
+    items: list[dict[str, Any]],
+    source_key: str,
+    field_specs: tuple[tuple[str, str], ...],
+    *,
+    only_changed: bool = True,
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for field_path, label in field_specs:
+        values = [
+            _build_compare_value_cell(
+                item,
+                source_key=source_key,
+                field_path=field_path,
+                baseline=item is items[0],
+                baseline_value=_get_nested_value(items[0].get(source_key, {}), field_path),
+            )
+            for item in items
+        ]
+        normalized_values = [
+            jsonable_encoder(cell["value"]) if cell["value"] is not None else None
+            for cell in values
+        ]
+        if all(value is None for value in normalized_values):
+            continue
+        changed = len({repr(value) for value in normalized_values}) > 1
+        if only_changed and not changed:
+            continue
+        rows.append(
+            {
+                "field": field_path,
+                "label": label,
+                "changed": changed,
+                "values": values,
+            }
+        )
+    return rows
+
+
+def _build_compare_value_cell(
+    item: dict[str, Any],
+    *,
+    source_key: str,
+    field_path: str,
+    baseline: bool,
+    baseline_value: Any,
+) -> dict[str, Any]:
+    value = _get_nested_value(item.get(source_key, {}), field_path)
+    cell = {
+        "backtest_run_id": item["backtest_run_id"],
+        "display_title": item["display_title"],
+        "value": value,
+        "delta_vs_baseline": None,
+    }
+    if (
+        not baseline
+        and isinstance(value, (int, float))
+        and isinstance(baseline_value, (int, float))
+    ):
+        cell["delta_vs_baseline"] = round(value - baseline_value, 2)
+    return cell
+
+
+def _build_backtest_compare_highlights(items: list[dict[str, Any]]) -> list[str]:
+    highlights: list[str] = []
+    by_return = [
+        item for item in items if isinstance(item.get("metrics", {}).get("total_return_pct"), (int, float))
+    ]
+    if by_return:
+        best_return = max(
+            by_return,
+            key=lambda item: item["metrics"]["total_return_pct"],
+        )
+        highlights.append(
+            f"收益最高的是 {best_return['display_title']}，总收益 {best_return['metrics']['total_return_pct']}%。"
+        )
+    by_drawdown = [
+        item for item in items if isinstance(item.get("metrics", {}).get("max_drawdown_pct"), (int, float))
+    ]
+    if by_drawdown:
+        best_drawdown = max(
+            by_drawdown,
+            key=lambda item: item["metrics"]["max_drawdown_pct"],
+        )
+        highlights.append(
+            f"回撤控制最好的是 {best_drawdown['display_title']}，最大回撤 {best_drawdown['metrics']['max_drawdown_pct']}%。"
+        )
+    snapshot_refs = {
+        item.get("data_snapshot_summary", {}).get("dataset_snapshot_ref")
+        for item in items
+        if item.get("data_snapshot_summary", {}).get("dataset_snapshot_ref")
+    }
+    if snapshot_refs:
+        highlights.append(f"本次对比涉及 {len(snapshot_refs)} 个数据快照。")
+    return highlights
+
+
+def _get_nested_value(payload: dict[str, Any], field_path: str) -> Any:
+    current: Any = payload
+    for part in field_path.split("."):
+        if not isinstance(current, dict):
+            return None
+        current = current.get(part)
+        if current is None:
+            return None
+    return current
 
 
 def _ensure_dataset_snapshot(repository: Any, payload: Any) -> None:
