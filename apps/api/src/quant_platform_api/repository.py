@@ -354,6 +354,7 @@ class SQLAlchemyStrategyRepository:
         with self._session_factory() as session:
             orm = StrategyVersionORM(
                 version_id=record.version_id,
+                version_label=record.version_label,
                 project_id=record.project_id,
                 user_id=record.user_id,
                 workspace_id=record.workspace_id,
@@ -389,6 +390,7 @@ class SQLAlchemyStrategyRepository:
                 StrategyVersionRecord(
                     project_id=item.project_id,
                     version_id=item.version_id,
+                    version_label=item.version_label or item.version_id,
                     user_id=item.user_id,
                     workspace_id=item.workspace_id,
                     title=item.title,
@@ -419,6 +421,7 @@ class SQLAlchemyStrategyRepository:
             return StrategyVersionRecord(
                 project_id=item.project_id,
                 version_id=item.version_id,
+                version_label=item.version_label or item.version_id,
                 user_id=item.user_id,
                 workspace_id=item.workspace_id,
                 title=item.title,
