@@ -22,6 +22,7 @@ const nodes = {
   assetType: document.querySelector("#strategy-asset-type"),
   timeframe: document.querySelector("#strategy-timeframe"),
   timeframeOptions: document.querySelectorAll('input[name="strategy-timeframes"]'),
+  versionLabel: document.querySelector("#project-version-label"),
   title: document.querySelector("#project-title"),
   teachingMode: document.querySelector("#teaching-mode-toggle"),
   summary: document.querySelector("#strategy-summary"),
@@ -29,6 +30,8 @@ const nodes = {
   python: document.querySelector("#strategy-python-output"),
   spec: document.querySelector("#strategy-spec-output"),
   currentVersion: document.querySelector("#current-version"),
+  saveProjectButton: document.querySelector("#save-project-btn"),
+  goBacktestsLink: document.querySelector("#go-backtests-link"),
   customIndicatorLibrary: document.querySelector("#custom-indicator-library"),
   glossaryPreview: document.querySelector("#glossary-preview"),
 };
@@ -67,6 +70,14 @@ function applyMarketPreset() {
   nodes.assetType.value = preset.assetType;
 }
 
+function syncStrategyActionState() {
+  const canProceed = Boolean(state.strategySpec && state.strategyPython);
+  nodes.saveProjectButton.disabled = !canProceed;
+  nodes.saveProjectButton.className = canProceed ? "btn primary" : "btn disabled";
+  nodes.goBacktestsLink.className = canProceed ? "btn primary" : "btn disabled";
+  nodes.goBacktestsLink.setAttribute("aria-disabled", canProceed ? "false" : "true");
+}
+
 async function generateStrategy() {
   setStatus("正在生成 Python 策略...");
   const payload = await api("/api/v1/strategies/generate", {
@@ -100,6 +111,7 @@ async function generateStrategy() {
       .map((item) => `<span class="pill">术语已识别：${item.term}</span>`)
       .join("");
   }
+  syncStrategyActionState();
   setStatus("策略生成完成。");
 }
 
@@ -112,24 +124,33 @@ async function saveProject() {
     method: "POST",
     body: JSON.stringify({
       title: nodes.title.value,
+      version_label: nodes.versionLabel.value,
       natural_language_prompt: nodes.prompt.value,
       strategy_dsl: state.strategySpec,
       strategy_python: state.strategyPython,
     }),
   });
-  setSelectedVersion(payload.data.version_id, nodes.title.value);
-  nodes.currentVersion.textContent = payload.data.version_id;
-  nodes.currentTitle.textContent = nodes.title.value;
-  setStatus("项目已保存，现在可以去回测中心运行回测。");
+  setSelectedVersion(
+    payload.data.version_id,
+    nodes.title.value,
+    payload.data.version_label || nodes.versionLabel.value,
+  );
+  nodes.versionLabel.value = payload.data.version_label || nodes.versionLabel.value;
+  nodes.currentVersion.textContent = `系统版本ID：${payload.data.version_id}`;
+  syncStrategyActionState();
+  setStatus("项目已保存，当前可以去回测中心继续回测。");
 }
 
 function restoreSelection() {
-  const { versionId, title } = getSelectedVersion();
+  const { versionId, versionLabel, title } = getSelectedVersion();
   if (versionId) {
-    nodes.currentVersion.textContent = versionId;
+    nodes.currentVersion.textContent = `系统版本ID：${versionId}`;
   }
   if (title) {
     nodes.title.value = title;
+  }
+  if (versionLabel) {
+    nodes.versionLabel.value = versionLabel;
   }
 }
 
@@ -170,9 +191,15 @@ document
 document
   .querySelector("#save-project-btn")
   .addEventListener("click", handle(saveProject));
+nodes.goBacktestsLink.addEventListener("click", (event) => {
+  if (nodes.goBacktestsLink.getAttribute("aria-disabled") === "true") {
+    event.preventDefault();
+  }
+});
 nodes.timeframe.addEventListener("change", syncTimeframeSelection);
 nodes.marketScope.addEventListener("change", applyMarketPreset);
 
 restoreSelection();
 syncTimeframeSelection();
+syncStrategyActionState();
 loadKnowledgePreview().catch((error) => setStatus(error.message));
