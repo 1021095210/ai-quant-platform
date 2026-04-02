@@ -164,6 +164,7 @@ class TradeUploadCreateResult(BaseModel):
     upload_id: str
     status: str
     detected_columns: list[str]
+    upload_kind: str = "csv"
 
 
 class UserRegisterRequest(BaseModel):
@@ -214,15 +215,33 @@ class TradeRecordItem(BaseModel):
     pnl: float
 
 
+class ManualTradeRecordInput(BaseModel):
+    symbol: str
+    side: str = "long"
+    entry_time: datetime
+    exit_time: datetime | None = None
+    pnl: float = 0.0
+
+
+class TradeUploadManualCreateRequest(BaseModel):
+    source_type: str = "manual"
+    source_file_name: str | None = None
+    source_notes: str | None = None
+    market: str | None = None
+    records: list[ManualTradeRecordInput] = Field(default_factory=list)
+
+
 class TradeUploadRecord(BaseModel):
     upload_id: str = Field(default_factory=lambda: f"upload_{uuid4().hex[:8]}")
     user_id: str
     workspace_id: str
     source_file_name: str
     raw_text: str
+    upload_kind: str = "csv"
     status: str = "uploaded"
     detected_columns: list[str] = Field(default_factory=list)
     column_mapping: dict[str, str] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
     records: list[TradeRecordItem] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=utcnow)
 
