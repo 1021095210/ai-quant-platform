@@ -274,10 +274,22 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertIn("加密货币", response.text)
         self.assertIn("伦敦金", response.text)
         self.assertIn("策略名称", response.text)
+        self.assertIn("版本标签", response.text)
+        self.assertIn('id="project-version-label"', response.text)
         self.assertIn('id="project-title"', response.text)
-        self.assertIn("保存版本", response.text)
-        self.assertNotIn("当前标题", response.text)
-        self.assertNotIn("未命名", response.text)
+        self.assertIn("系统版本ID将在保存后生成", response.text)
+        self.assertIn('id="save-project-btn" class="btn disabled" disabled', response.text)
+        self.assertIn('id="go-backtests-link" class="btn disabled"', response.text)
+
+    def test_indicators_page_uses_progressive_save_button_state(self) -> None:
+        client = self._build_client()
+        self._login(client)
+
+        response = client.get("/indicators")
+
+        self.assertEqual(200, response.status_code)
+        self.assertIn("生成自定义指标", response.text)
+        self.assertIn('id="save-custom-indicator-btn" class="btn disabled" disabled', response.text)
 
     def test_backtests_page_shows_config_and_snapshot_sections(self) -> None:
         client = self._build_client()
@@ -848,6 +860,7 @@ class QuantPlatformApiTests(unittest.TestCase):
             "/api/v1/strategies/projects",
             json={
                 "title": "放量均线突破策略",
+                "version_label": "日线验证版",
                 "natural_language_prompt": "当 5 日均线上穿 20 日均线时做多",
                 "strategy_dsl": {"market": "600519.SH", "timeframe": "1d", "asset_type": "stock"},
                 "strategy_python": "def build_strategy():\n    return {}",
@@ -858,6 +871,7 @@ class QuantPlatformApiTests(unittest.TestCase):
         data = response.json()["data"]
         self.assertIn("project_id", data)
         self.assertIn("version_id", data)
+        self.assertEqual("日线验证版", data["version_label"])
         self.assertTrue(data["workspace_id"].startswith("ws_"))
         self.assertTrue(data["user_id"].startswith("user_"))
 
@@ -869,6 +883,7 @@ class QuantPlatformApiTests(unittest.TestCase):
             "/api/v1/strategies/projects",
             json={
                 "title": "趋势策略",
+                "version_label": "第一轮筛选版",
                 "natural_language_prompt": "价格突破前高且量能放大时做多",
                 "strategy_dsl": {"market": "600519.SH", "timeframe": "1d", "asset_type": "stock"},
                 "strategy_python": "def build_strategy():\n    return {}",
@@ -881,6 +896,7 @@ class QuantPlatformApiTests(unittest.TestCase):
         items = response.json()["data"]["items"]
         self.assertEqual(1, len(items))
         self.assertEqual("趋势策略", items[0]["title"])
+        self.assertEqual("第一轮筛选版", items[0]["version_label"])
         self.assertEqual("600519.SH", items[0]["strategy_dsl"]["market"])
         self.assertIn("def build_strategy()", items[0]["strategy_python"])
         self.assertTrue(items[0]["workspace_id"].startswith("ws_"))
@@ -892,6 +908,7 @@ class QuantPlatformApiTests(unittest.TestCase):
             "/api/v1/strategies/projects",
             json={
                 "title": "ETF 趋势策略",
+                "version_label": "ETF趋势初版",
                 "natural_language_prompt": "ETF 放量突破买入",
                 "strategy_dsl": {"market": "510300.SH", "timeframe": "1d", "asset_type": "etf"},
                 "strategy_python": "def build_strategy():\n    return {'asset_type': 'etf'}",
@@ -904,6 +921,7 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertEqual(200, response.status_code)
         payload = response.json()["data"]
         self.assertEqual("ETF 趋势策略", payload["title"])
+        self.assertEqual("ETF趋势初版", payload["version_label"])
         self.assertIn("asset_type", payload["strategy_python"])
         self.assertTrue(payload["workspace_id"].startswith("ws_"))
 
