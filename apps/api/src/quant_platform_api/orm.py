@@ -120,9 +120,11 @@ class TradeUploadORM(Base):
     workspace_id: Mapped[str] = mapped_column(String(64), index=True, default="ws_default")
     source_file_name: Mapped[str] = mapped_column(String(255))
     raw_text: Mapped[str] = mapped_column(Text())
+    upload_kind: Mapped[str] = mapped_column(String(32), index=True, default="csv")
     status: Mapped[str] = mapped_column(String(32), index=True)
     detected_columns_json: Mapped[str] = mapped_column(Text(), default="[]")
     column_mapping_json: Mapped[str] = mapped_column(Text(), default="{}")
+    metadata_json: Mapped[str] = mapped_column(Text(), default="{}")
     records_json: Mapped[str] = mapped_column(Text(), default="[]")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
 
