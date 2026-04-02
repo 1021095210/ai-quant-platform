@@ -294,10 +294,13 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertIn("最大回撤保护说明", response.text)
         self.assertIn("最大持有Bar数说明", response.text)
         self.assertIn("回测曲线", response.text)
+        self.assertIn("成交明细", response.text)
         self.assertIn("实验 / 回测对比", response.text)
         self.assertIn("对比已选回测", response.text)
         self.assertIn("执行配置差异", response.text)
         self.assertIn("数据快照差异", response.text)
+        self.assertLess(response.text.index("回测曲线"), response.text.index("成交明细"))
+        self.assertLess(response.text.index("成交明细"), response.text.index("回测配置摘要"))
 
     def test_rules_page_uses_collapsible_default_rule_container(self) -> None:
         client = self._build_client()
