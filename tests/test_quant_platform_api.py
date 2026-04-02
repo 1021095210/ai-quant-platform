@@ -290,6 +290,10 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertIn("滑点说明", response.text)
         self.assertIn("盘中撮合策略说明", response.text)
         self.assertIn("预热Bar数说明", response.text)
+        self.assertIn("实验 / 回测对比", response.text)
+        self.assertIn("对比已选回测", response.text)
+        self.assertIn("执行配置差异", response.text)
+        self.assertIn("数据快照差异", response.text)
 
     def test_rules_page_uses_collapsible_default_rule_container(self) -> None:
         client = self._build_client()
@@ -1035,6 +1039,100 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertIn("backtest_config", items[0])
         self.assertIn("data_snapshot_summary", items[0])
 
+    def test_compare_backtest_runs_returns_metrics_and_diffs(self) -> None:
+        client = self._build_client()
+        self._login(client)
+        version_id = client.post(
+            "/api/v1/strategies/projects",
+            json={
+                "title": "回测对比策略",
+                "natural_language_prompt": "均线上穿时买入",
+                "strategy_dsl": {
+                    "market": "600519.SH",
+                    "timeframe": "1d",
+                    "asset_type": "stock",
+                },
+                "strategy_python": "def build_strategy():\n    return {}",
+            },
+        ).json()["data"]["version_id"]
+
+        first = client.post(
+            "/api/v1/backtests/runs",
+            json={
+                "strategy_version_id": version_id,
+                "dataset": {
+                    "market": "600519.SH",
+                    "timeframe": "1d",
+                    "asset_type": "stock",
+                    "from": "2024-01-01T00:00:00Z",
+                    "to": "2024-06-30T23:59:59Z",
+                },
+                "execution_contract": {
+                    "initial_capital": 100000,
+                    "fee_bps": 3,
+                    "slippage_bps": 2,
+                    "fill_price_rule": "next_bar_open",
+                    "intrabar_match_policy": "no_intrabar_fill",
+                    "calendar": "cn_a_share",
+                    "timezone": "Asia/Shanghai",
+                    "adjustment_mode": "qfq",
+                },
+                "data_snapshot": {"dataset_snapshot_ref": "compare_snapshot_a"},
+            },
+        ).json()["data"]["backtest_run_id"]
+        second = client.post(
+            "/api/v1/backtests/runs",
+            json={
+                "strategy_version_id": version_id,
+                "dataset": {
+                    "market": "600519.SH",
+                    "timeframe": "1d",
+                    "asset_type": "stock",
+                    "from": "2024-01-01T00:00:00Z",
+                    "to": "2024-06-30T23:59:59Z",
+                },
+                "execution_contract": {
+                    "initial_capital": 100000,
+                    "fee_bps": 6,
+                    "slippage_bps": 5,
+                    "fill_price_rule": "same_bar_close",
+                    "intrabar_match_policy": "intrabar_touch_fill",
+                    "calendar": "cn_a_share",
+                    "timezone": "Asia/Shanghai",
+                    "adjustment_mode": "raw",
+                    "warmup_bars": 5,
+                },
+                "data_snapshot": {"dataset_snapshot_ref": "compare_snapshot_b"},
+            },
+        ).json()["data"]["backtest_run_id"]
+
+        response = client.get(
+            "/api/v1/backtests/compare",
+            params=[("run_ids", first), ("run_ids", second)],
+        )
+
+        self.assertEqual(200, response.status_code)
+        data = response.json()["data"]
+        self.assertEqual(first, data["baseline_run_id"])
+        self.assertEqual(2, len(data["items"]))
+        self.assertTrue(data["metric_rows"])
+        self.assertTrue(data["config_diffs"])
+        self.assertTrue(data["snapshot_diffs"])
+        self.assertTrue(data["highlights"])
+        config_fields = {item["field"] for item in data["config_diffs"]}
+        snapshot_fields = {item["field"] for item in data["snapshot_diffs"]}
+        self.assertIn("fill_price_rule", config_fields)
+        self.assertIn("dataset_snapshot_ref", snapshot_fields)
+
+    def test_compare_backtest_runs_requires_at_least_two_items(self) -> None:
+        client = self._build_client()
+        self._login(client)
+
+        response = client.get("/api/v1/backtests/compare", params={"run_ids": "only_one"})
+
+        self.assertEqual(400, response.status_code)
+        self.assertEqual("INVALID_ARGUMENT", response.json()["error"]["code"])
+
     def test_backtest_custom_position_and_risk_config_are_persisted(self) -> None:
         client = self._build_client()
         self._login(client)
@@ -1585,6 +1683,86 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertEqual([], backtests_response.json()["data"]["items"])
         self.assertEqual(404, project_get_response.status_code)
         self.assertEqual(404, records_response.status_code)
+
+    def test_user_cannot_compare_other_users_backtests(self) -> None:
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        database_url = f"sqlite+pysqlite:///{Path(temp_dir.name) / 'quant_platform.db'}"
+
+        owner_client = self._build_client(database_url=database_url)
+        self._login(owner_client)
+        version_id = owner_client.post(
+            "/api/v1/strategies/projects",
+            json={
+                "title": "私有回测策略",
+                "natural_language_prompt": "均线上穿时买入",
+                "strategy_dsl": {"market": "600519.SH", "timeframe": "1d", "asset_type": "stock"},
+                "strategy_python": "def build_strategy():\n    return {}",
+            },
+        ).json()["data"]["version_id"]
+        first = owner_client.post(
+            "/api/v1/backtests/runs",
+            json={
+                "strategy_version_id": version_id,
+                "dataset": {
+                    "market": "600519.SH",
+                    "timeframe": "1d",
+                    "asset_type": "stock",
+                    "from": "2024-01-01T00:00:00Z",
+                    "to": "2024-12-31T23:59:59Z",
+                },
+                "execution_contract": {
+                    "initial_capital": 100000,
+                    "fee_bps": 3,
+                    "slippage_bps": 2,
+                    "fill_price_rule": "next_bar_open",
+                    "intrabar_match_policy": "no_intrabar_fill",
+                    "calendar": "cn_a_share",
+                    "timezone": "Asia/Shanghai",
+                    "adjustment_mode": "qfq",
+                },
+                "data_snapshot": {"dataset_snapshot_ref": "private_compare_a"},
+            },
+        ).json()["data"]["backtest_run_id"]
+        second = owner_client.post(
+            "/api/v1/backtests/runs",
+            json={
+                "strategy_version_id": version_id,
+                "dataset": {
+                    "market": "600519.SH",
+                    "timeframe": "1d",
+                    "asset_type": "stock",
+                    "from": "2024-01-01T00:00:00Z",
+                    "to": "2024-12-31T23:59:59Z",
+                },
+                "execution_contract": {
+                    "initial_capital": 100000,
+                    "fee_bps": 5,
+                    "slippage_bps": 3,
+                    "fill_price_rule": "same_bar_close",
+                    "intrabar_match_policy": "intrabar_touch_fill",
+                    "calendar": "cn_a_share",
+                    "timezone": "Asia/Shanghai",
+                    "adjustment_mode": "raw",
+                },
+                "data_snapshot": {"dataset_snapshot_ref": "private_compare_b"},
+            },
+        ).json()["data"]["backtest_run_id"]
+
+        other_client = self._build_client(database_url=database_url)
+        self._register_and_login(
+            other_client,
+            username="compare_other",
+            contact="compare_other@example.com",
+        )
+
+        response = other_client.get(
+            "/api/v1/backtests/compare",
+            params=[("run_ids", first), ("run_ids", second)],
+        )
+
+        self.assertEqual(404, response.status_code)
+        self.assertEqual("NOT_FOUND", response.json()["error"]["code"])
 
 
 if __name__ == "__main__":
