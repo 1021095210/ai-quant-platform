@@ -108,10 +108,10 @@ export function renderMetricCards(container, metrics) {
     ["累计收益", `${metrics.total_return_pct ?? 0}%`],
     ["最大回撤", `${metrics.max_drawdown_pct ?? 0}%`],
     ["胜率", `${metrics.win_rate_pct ?? 0}%`],
-    ["Profit Factor", `${metrics.profit_factor ?? 0}`],
+    ["盈亏比", `${metrics.profit_factor ?? 0}`],
     ["交易次数", `${metrics.trade_count ?? 0}`],
     ["期末净值", `${metrics.final_equity ?? 0}`],
-    ["平均单笔", `${metrics.avg_trade_return_pct ?? 0}%`],
+    ["平均单笔收益", `${metrics.avg_trade_return_pct ?? 0}%`],
   ];
   container.innerHTML = items
     .map(
@@ -137,6 +137,11 @@ export function renderSparkline(container, points) {
   const min = Math.min(...values);
   const max = Math.max(...values);
   const gap = max - min || 1;
+  const firstPoint = points[0];
+  const lastPoint = points[points.length - 1];
+  const firstEquity = Number(firstPoint.equity || 0);
+  const lastEquity = Number(lastPoint.equity || 0);
+  const returnPct = firstEquity ? (((lastEquity - firstEquity) / firstEquity) * 100).toFixed(2) : "0.00";
   const coordinates = points
     .map((item, index) => {
       const x = (index / Math.max(points.length - 1, 1)) * width;
@@ -146,15 +151,40 @@ export function renderSparkline(container, points) {
     .join(" ");
 
   container.innerHTML = `
-    <svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" width="100%" height="${height}">
-      <defs>
-        <linearGradient id="equity-fill" x1="0" x2="0" y1="0" y2="1">
-          <stop offset="0%" stop-color="rgba(36,99,235,0.34)" />
-          <stop offset="100%" stop-color="rgba(36,99,235,0.02)" />
-        </linearGradient>
-      </defs>
-      <polyline fill="none" stroke="#2463eb" stroke-width="4" points="${coordinates}" />
-    </svg>
+    <div class="sparkline-summary">
+      <div>
+        <span class="mini-label">曲线区间</span>
+        <strong>${firstPoint.ts} → ${lastPoint.ts}</strong>
+      </div>
+      <div>
+        <span class="mini-label">区间收益</span>
+        <strong class="${Number(returnPct) >= 0 ? "positive" : "negative"}">${Number(returnPct) >= 0 ? "+" : ""}${returnPct}%</strong>
+      </div>
+      <div>
+        <span class="mini-label">净值范围</span>
+        <strong>${min.toFixed(2)} ~ ${max.toFixed(2)}</strong>
+      </div>
+    </div>
+    <div class="sparkline-frame">
+      <div class="sparkline-y-axis">
+        <span>${max.toFixed(2)}</span>
+        <span>${((max + min) / 2).toFixed(2)}</span>
+        <span>${min.toFixed(2)}</span>
+      </div>
+      <svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" width="100%" height="${height}">
+        <defs>
+          <linearGradient id="equity-fill" x1="0" x2="0" y1="0" y2="1">
+            <stop offset="0%" stop-color="rgba(36,99,235,0.34)" />
+            <stop offset="100%" stop-color="rgba(36,99,235,0.02)" />
+          </linearGradient>
+        </defs>
+        <polyline fill="none" stroke="#2463eb" stroke-width="4" points="${coordinates}" />
+      </svg>
+    </div>
+    <div class="sparkline-x-axis">
+      <span>${firstPoint.ts}</span>
+      <span>${lastPoint.ts}</span>
+    </div>
   `;
 }
 
