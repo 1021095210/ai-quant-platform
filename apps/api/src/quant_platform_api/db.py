@@ -87,6 +87,8 @@ def create_schema(session_factory: sessionmaker) -> None:
     trade_upload_column_definitions = {
         "user_id": "VARCHAR(64) DEFAULT ''",
         "workspace_id": "VARCHAR(64) DEFAULT 'ws_default'",
+        "upload_kind": "VARCHAR(32) DEFAULT 'csv'",
+        "metadata_json": "TEXT DEFAULT '{}'",
     }
     for column_name, column_definition in trade_upload_column_definitions.items():
         if column_name not in trade_upload_columns:
