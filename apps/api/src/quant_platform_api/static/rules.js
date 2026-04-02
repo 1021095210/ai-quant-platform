@@ -10,7 +10,27 @@ const nodes = {
   term: document.querySelector("#glossary-term"),
   meaning: document.querySelector("#glossary-meaning"),
   example: document.querySelector("#glossary-example"),
+  saveGlossaryBtn: document.querySelector("#save-glossary-btn"),
 };
+
+const state = {
+  defaultRulesDirty: false,
+};
+
+function syncRulesActionState() {
+  const glossaryReady = Boolean(nodes.term.value.trim() && nodes.meaning.value.trim());
+  nodes.saveGlossaryBtn.disabled = !glossaryReady;
+  nodes.saveGlossaryBtn.className = glossaryReady ? "btn primary" : "btn disabled";
+
+  nodes.saveDefaultRulesBtn.disabled = !state.defaultRulesDirty;
+  nodes.saveDefaultRulesBtn.className = state.defaultRulesDirty ? "btn primary" : "btn disabled";
+  nodes.resetDefaultRulesBtn.className = state.defaultRulesDirty ? "btn secondary" : "btn ghost";
+}
+
+function markDefaultRulesDirty() {
+  state.defaultRulesDirty = true;
+  syncRulesActionState();
+}
 
 async function loadPage() {
   const [rulesPayload, glossaryPayload] = await Promise.all([
@@ -19,6 +39,8 @@ async function loadPage() {
   ]);
   renderRules(rulesPayload.data.items);
   renderGlossary(glossaryPayload.data.items);
+  state.defaultRulesDirty = false;
+  syncRulesActionState();
   setStatus("规则模块已加载。");
 }
 
@@ -67,8 +89,11 @@ function renderRules(items) {
         renderRuleItem(button.dataset.addRuleItem, { title: "", description: "" }, nextIndex),
       );
       bindRuleItemRemoveActions();
+      bindRuleEditActions();
+      markDefaultRulesDirty();
     });
   });
+  bindRuleEditActions();
 }
 
 function renderRuleItem(sectionId, item, index) {
@@ -120,6 +145,10 @@ async function saveGlossaryTerm() {
   });
   const glossaryPayload = await api("/api/v1/rules/glossary");
   renderGlossary(glossaryPayload.data.items);
+  nodes.term.value = "";
+  nodes.meaning.value = "";
+  nodes.example.value = "";
+  syncRulesActionState();
   setStatus("术语解释已保存，策略工坊现在会把它当成 AI 的补充语义。");
 }
 
@@ -144,6 +173,8 @@ async function saveDefaultRules() {
   });
   renderRules(payload.data.items);
   bindRuleItemRemoveActions();
+  state.defaultRulesDirty = false;
+  syncRulesActionState();
   setStatus(`默认规则已保存，更新人：${payload.data.updated_by}。`);
 }
 
@@ -154,6 +185,8 @@ async function resetDefaultRules() {
   });
   renderRules(payload.data.items);
   bindRuleItemRemoveActions();
+  state.defaultRulesDirty = false;
+  syncRulesActionState();
   setStatus(`平台默认规则已恢复，更新人：${payload.data.updated_by}。`);
 }
 
@@ -161,13 +194,23 @@ function bindRuleItemRemoveActions() {
   nodes.defaultRules.querySelectorAll("[data-remove-rule-item]").forEach((button) => {
     button.addEventListener("click", () => {
       button.closest("[data-rule-item]").remove();
+      markDefaultRulesDirty();
     });
+  });
+}
+
+function bindRuleEditActions() {
+  nodes.defaultRules.querySelectorAll("[data-section-name], [data-rule-title], [data-rule-description]").forEach((node) => {
+    node.addEventListener("input", markDefaultRulesDirty);
   });
 }
 
 document.querySelector("#save-glossary-btn").addEventListener("click", handle(saveGlossaryTerm));
 nodes.resetDefaultRulesBtn.addEventListener("click", handle(resetDefaultRules));
 nodes.saveDefaultRulesBtn.addEventListener("click", handle(saveDefaultRules));
+nodes.term.addEventListener("input", syncRulesActionState);
+nodes.meaning.addEventListener("input", syncRulesActionState);
+nodes.example.addEventListener("input", syncRulesActionState);
 
 loadPage()
   .then(() => bindRuleItemRemoveActions())
