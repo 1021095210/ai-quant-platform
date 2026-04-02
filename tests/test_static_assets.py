@@ -187,6 +187,10 @@ console.log('bootstrapped');
         self.assertIn("数据快照", source)
         self.assertIn("T+1，当日买入后需次日才能卖出", source)
         self.assertIn("未设置价格口径", source)
+        self.assertIn("syncHistoryViewportHeight", source)
+        self.assertIn('data-delete-id="${item.backtest_run_id}"', source)
+        self.assertIn('method: "DELETE"', source)
+        self.assertIn("删除记录", source)
 
     def test_replay_assets_include_ready_state_and_clear_side_language(self) -> None:
         replay_js_path = (
