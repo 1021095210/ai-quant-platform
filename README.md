@@ -82,6 +82,8 @@
 - HTTPS 反向代理模板：`infra/Caddyfile.example`
 - 环境模板：`.env.example`、`infra/deploy.env.example`
 - 依赖联调脚本：`tools/verify_infra_stack.py`
+- 发布前预检脚本：`tools/release_preflight.py`
+- 测试与发布流程文档：`产品设计/AI量化交易平台_完整测试流程与发布前步骤_2026-04-02.md`
 
 ## 当前边界
 
