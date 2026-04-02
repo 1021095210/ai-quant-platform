@@ -922,6 +922,50 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             }
         )
 
+    @app.delete(f"{app_settings.api_prefix}/backtests/runs/{{backtest_run_id}}")
+    def delete_backtest_run(request: Request, backtest_run_id: str) -> JSONResponse:
+        current_user = _require_current_user(request, services.auth_service)
+        record = _require_task(
+            services.backtest_service.get(
+                backtest_run_id,
+                user_id=current_user.user_id,
+                workspace_id=current_user.workspace_id,
+            )
+        )
+        if record.status in {
+            TaskStatus.PENDING,
+            TaskStatus.QUEUED,
+            TaskStatus.RUNNING,
+            TaskStatus.CANCELING,
+        }:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=ErrorPayload(
+                    code="STATE_CONFLICT",
+                    message="running backtest cannot be deleted",
+                ).model_dump(),
+            )
+        deleted = task_repository.delete(
+            backtest_run_id,
+            user_id=current_user.user_id,
+            workspace_id=current_user.workspace_id,
+        )
+        if not deleted:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=ErrorPayload(
+                    code="NOT_FOUND",
+                    message="task not found",
+                ).model_dump(),
+            )
+        return _success_response(
+            request,
+            data={
+                "backtest_run_id": backtest_run_id,
+                "deleted": True,
+            },
+        )
+
     @app.post(f"{app_settings.api_prefix}/optimization-jobs")
     def create_optimization_job(
         request: Request,
