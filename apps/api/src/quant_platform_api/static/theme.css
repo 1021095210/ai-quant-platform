@@ -390,13 +390,15 @@ button {
 }
 
 .btn.disabled,
-button:disabled {
+button:disabled,
+a[aria-disabled="true"] {
   color: var(--text-soft);
   background: linear-gradient(180deg, #e7eefb 0%, #dce6f8 100%);
   box-shadow: none;
   cursor: not-allowed;
   transform: none;
   opacity: 0.88;
+  pointer-events: none;
 }
 
 .btn.ghost {
