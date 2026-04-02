@@ -279,6 +279,7 @@
 - 以 GitHub 仓库 `main` 分支当前 HEAD 为准
 - 如果本文中的提交信息和 GitHub 页面显示不一致，以 GitHub 页面为准
 - 当前远端基线（2026-04-02）：以 GitHub 仓库 `main` 分支当前 HEAD 为准；当前代码已补齐管理员运营能力、规则模块浏览器故障修复、回测可信度说明，以及规则分组折叠和专业术语 hover 提示
+- 当前已同步提交：`c12a9fd42d7c9b2048ee4e0bd683ba4211546935`
 
 如果新环境还没有仓库，请先执行：
 
@@ -437,6 +438,9 @@ uvicorn quant_platform_api.main:create_app --factory --app-dir apps/api/src --ho
 
 优先查看仓库中的：
 
+- `.claude/agents/briefings/2026-04-02_codex_规则分组折叠与回测术语提示.md`
+- `.claude/agents/briefings/2026-04-02_codex_规则模块复核与回测可信度说明.md`
+- `.claude/agents/briefings/2026-04-02_codex_管理员运营能力与安全审计.md`
 - `.claude/agents/briefings/2026-04-01_codex_品牌收敛与规则模块多市场化.md`
 - `.claude/agents/briefings/2026-04-01_codex_策略工坊多市场与混合周期.md`
 - `.claude/agents/briefings/2026-04-01_codex_平台契约认证与工作台改造.md`
