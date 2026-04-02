@@ -1,5 +1,6 @@
 const STORAGE_KEYS = {
   selectedVersionId: "quant.selectedVersionId",
+  selectedVersionLabel: "quant.selectedVersionLabel",
   selectedProjectTitle: "quant.selectedProjectTitle",
 };
 
@@ -74,14 +75,16 @@ export async function pollTask(url) {
   throw new Error("任务轮询超时");
 }
 
-export function setSelectedVersion(versionId, title = "") {
+export function setSelectedVersion(versionId, title = "", versionLabel = "") {
   localStorage.setItem(STORAGE_KEYS.selectedVersionId, versionId || "");
+  localStorage.setItem(STORAGE_KEYS.selectedVersionLabel, versionLabel || "");
   localStorage.setItem(STORAGE_KEYS.selectedProjectTitle, title || "");
 }
 
 export function getSelectedVersion() {
   return {
     versionId: localStorage.getItem(STORAGE_KEYS.selectedVersionId) || "",
+    versionLabel: localStorage.getItem(STORAGE_KEYS.selectedVersionLabel) || "",
     title: localStorage.getItem(STORAGE_KEYS.selectedProjectTitle) || "",
   };
 }
