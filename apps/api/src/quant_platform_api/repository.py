@@ -61,6 +61,14 @@ class TaskRepository(Protocol):
 
     def cancel(self, task_id: str) -> TaskRecord | None: ...
 
+    def delete(
+        self,
+        task_id: str,
+        *,
+        user_id: str | None = None,
+        workspace_id: str | None = None,
+    ) -> bool: ...
+
     def list(
         self,
         kind: str | None = None,
@@ -254,6 +262,24 @@ class InMemoryTaskRepository:
             record.status = TaskStatus.CANCELED
             record.finished_at = utcnow()
             return deepcopy(record)
+
+    def delete(
+        self,
+        task_id: str,
+        *,
+        user_id: str | None = None,
+        workspace_id: str | None = None,
+    ) -> bool:
+        with self._lock:
+            record = self._items.get(task_id)
+            if record is None:
+                return False
+            if user_id is not None and record.user_id != user_id:
+                return False
+            if workspace_id is not None and record.workspace_id != workspace_id:
+                return False
+            del self._items[task_id]
+            return True
 
     def list(
         self,
@@ -814,6 +840,26 @@ class SQLAlchemyTaskRepository:
             session.commit()
             session.refresh(orm)
             return self._from_orm(orm)
+
+    def delete(
+        self,
+        task_id: str,
+        *,
+        user_id: str | None = None,
+        workspace_id: str | None = None,
+    ) -> bool:
+        with self._session_factory() as session:
+            statement = select(TaskORM).where(TaskORM.id == task_id)
+            if user_id is not None:
+                statement = statement.where(TaskORM.user_id == user_id)
+            if workspace_id is not None:
+                statement = statement.where(TaskORM.workspace_id == workspace_id)
+            orm = session.scalar(statement)
+            if orm is None:
+                return False
+            session.delete(orm)
+            session.commit()
+            return True
 
     def list_ids(self, kind: str | None = None) -> list[str]:
         with self._session_factory() as session:
