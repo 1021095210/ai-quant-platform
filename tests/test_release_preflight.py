@@ -11,6 +11,7 @@ if str(WORKSPACE_ROOT) not in sys.path:
     sys.path.insert(0, str(WORKSPACE_ROOT))
 
 from tools.release_preflight import CheckResult, build_check_specs, format_report  # noqa: E402
+from tools.validate_product_design_docs import REQUIRED_SECTIONS, collect_missing_sections  # noqa: E402
 
 
 class ReleasePreflightTests(unittest.TestCase):
@@ -54,6 +55,14 @@ class ReleasePreflightTests(unittest.TestCase):
 
         self.assertFalse(report["success"])
         self.assertEqual(2, len(report["results"]))
+
+    def test_common_issues_doc_is_required_and_present(self) -> None:
+        self.assertIn(
+            "产品设计/AI量化交易平台_常见问题与避免规则.md",
+            REQUIRED_SECTIONS,
+        )
+        missing = collect_missing_sections(WORKSPACE_ROOT)
+        self.assertNotIn("产品设计/AI量化交易平台_常见问题与避免规则.md", missing)
 
 
 if __name__ == "__main__":
