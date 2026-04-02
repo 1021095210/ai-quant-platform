@@ -3,6 +3,7 @@
 当前无进行中的任务。
 
 最近完成的接力记录见：
+- `.claude/agents/briefings/2026-04-02_codex_回测对比层与测试发布流程收口.md`
 - `.claude/agents/briefings/2026-04-02_codex_回测结算规则与盘中撮合落引擎.md`
 - `.claude/agents/briefings/2026-04-02_codex_正式部署准备与生产配置收口.md`
 - `.claude/agents/briefings/2026-04-02_codex_规则分组折叠与回测术语提示.md`
