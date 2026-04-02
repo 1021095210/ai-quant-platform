@@ -12,6 +12,7 @@ class StrategyVersionORM(Base):
     __tablename__ = "strategy_versions"
 
     version_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    version_label: Mapped[str] = mapped_column(String(128), default="")
     project_id: Mapped[str] = mapped_column(String(64), index=True)
     user_id: Mapped[str] = mapped_column(String(64), index=True, default="")
     workspace_id: Mapped[str] = mapped_column(String(64), index=True, default="ws_default")
