@@ -44,6 +44,9 @@ class StaticAssetTests(unittest.TestCase):
     def test_admin_js_has_valid_module_syntax(self) -> None:
         self._assert_asset_has_valid_module_syntax("admin.js")
 
+    def test_backtests_js_has_valid_module_syntax(self) -> None:
+        self._assert_asset_has_valid_module_syntax("backtests.js")
+
     def test_rules_js_can_bootstrap_with_stubbed_dom(self) -> None:
         node = shutil.which("node")
         if node is None:
@@ -154,6 +157,22 @@ console.log('bootstrapped');
         self.assertIn('<details class="accordion-item rule-group-card"', source)
         self.assertIn('class="rule-group-summary"', source)
         self.assertIn('class="rule-group-title"', source)
+
+    def test_backtests_js_contains_compare_workflow(self) -> None:
+        backtests_path = (
+            WORKSPACE_ROOT
+            / "apps"
+            / "api"
+            / "src"
+            / "quant_platform_api"
+            / "static"
+            / "backtests.js"
+        )
+        source = backtests_path.read_text(encoding="utf-8")
+
+        self.assertIn('const compareSelection = new Set();', source)
+        self.assertIn("/api/v1/backtests/compare?", source)
+        self.assertIn("renderCompareTable", source)
 
 
 if __name__ == "__main__":
