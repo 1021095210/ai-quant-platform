@@ -13,6 +13,8 @@ import {
 activateNav("/backtests");
 
 const nodes = {
+  runPanel: document.querySelector("#run-backtest-panel"),
+  historyPanel: document.querySelector("#backtest-history-panel"),
   projectSelect: document.querySelector("#project-version-select"),
   market: document.querySelector("#backtest-market"),
   assetType: document.querySelector("#backtest-asset-type"),
@@ -56,6 +58,7 @@ const nodes = {
 };
 
 const compareSelection = new Set();
+let currentBacktestRunId = "";
 
 async function loadProjects() {
   const payload = await api("/api/v1/strategies/projects");
@@ -171,9 +174,12 @@ async function refreshHistory() {
   const items = payload.data.items;
   if (!items.length) {
     nodes.history.textContent = "暂无回测记录。";
+    nodes.history.classList.add("empty-state");
+    syncHistoryViewportHeight();
     renderEmptyComparison();
     return;
   }
+  nodes.history.classList.remove("empty-state");
   nodes.history.innerHTML = items
     .map(
       (item) => `
@@ -224,6 +230,13 @@ async function refreshHistory() {
             >
               ${compareSelection.has(item.backtest_run_id) ? "已加入对比" : "加入对比"}
             </button>
+            <button
+              class="btn ghost danger history-delete-btn"
+              data-delete-id="${item.backtest_run_id}"
+              type="button"
+            >
+              删除记录
+            </button>
           </div>
         </div>
       `,
@@ -241,10 +254,20 @@ async function refreshHistory() {
   nodes.history.querySelectorAll("[data-compare-id]").forEach((node) => {
     node.addEventListener("click", () => toggleCompareSelection(node.dataset.compareId));
   });
+  nodes.history.querySelectorAll("[data-delete-id]").forEach((node) => {
+    node.addEventListener(
+      "click",
+      handle(async () => {
+        await deleteBacktestRun(node.dataset.deleteId);
+      }),
+    );
+  });
   syncCompareStatus();
+  syncHistoryViewportHeight();
 }
 
 function renderBacktestDetail(data) {
+  currentBacktestRunId = data.backtest_run_id || "";
   renderMetricCards(nodes.metrics, data.metrics || {});
   renderSparkline(nodes.sparkline, data.equity_curve || []);
   nodes.latestProvider.textContent = data.data_source?.provider || "未知";
@@ -276,6 +299,20 @@ function renderBacktestDetail(data) {
         )
         .join("")
     : '<tr><td colspan="5" class="empty-state">当前没有成交记录。</td></tr>';
+}
+
+function renderEmptyBacktestDetail() {
+  currentBacktestRunId = "";
+  renderMetricCards(nodes.metrics, {});
+  renderSparkline(nodes.sparkline, []);
+  nodes.latestProvider.textContent = "未知";
+  nodes.sourcePills.innerHTML = '<span class="pill">等待选择回测记录。</span>';
+  nodes.strategyPython.textContent = "# 等待选择回测记录";
+  nodes.tradeTableBody.innerHTML =
+    '<tr><td colspan="5" class="empty-state">等待选择回测记录。</td></tr>';
+  nodes.configList.textContent = "等待回测。";
+  nodes.snapshotList.textContent = "等待回测。";
+  nodes.assumptionList.textContent = "等待回测。";
 }
 
 function renderConfigList(config) {
@@ -417,6 +454,28 @@ function clearComparisonSelection() {
   compareSelection.clear();
   renderEmptyComparison();
   refreshHistory().catch((error) => setStatus(error.message));
+}
+
+async function deleteBacktestRun(runId) {
+  if (!runId) {
+    return;
+  }
+  if (typeof window !== "undefined" && typeof window.confirm === "function") {
+    const confirmed = window.confirm("删除后这条回测历史将不再出现在列表和对比中，确认继续吗？");
+    if (!confirmed) {
+      return;
+    }
+  }
+  await api(`/api/v1/backtests/runs/${runId}`, { method: "DELETE" });
+  compareSelection.delete(runId);
+  if (currentBacktestRunId === runId) {
+    renderEmptyBacktestDetail();
+  }
+  if (compareSelection.size < 2) {
+    renderEmptyComparison();
+  }
+  await refreshHistory();
+  setStatus("回测历史已删除。");
 }
 
 function renderComparison(data) {
@@ -653,6 +712,35 @@ function formatPercentText(value) {
   return `${Number(value).toFixed(2)}%`;
 }
 
+function syncHistoryViewportHeight() {
+  if (
+    !nodes.runPanel ||
+    !nodes.historyPanel ||
+    !nodes.history ||
+    typeof window === "undefined" ||
+    window.matchMedia("(max-width: 1100px)").matches
+  ) {
+    if (nodes.history) {
+      nodes.history.style.maxHeight = "";
+    }
+    return;
+  }
+  const panelHeight = nodes.runPanel.getBoundingClientRect().height;
+  const historyPanelStyles = window.getComputedStyle(nodes.historyPanel);
+  const header = nodes.historyPanel.querySelector(".panel-header");
+  const compareStatus = nodes.compareStatus;
+  const occupiedHeight =
+    (header?.getBoundingClientRect().height || 0) +
+    parseFloat(window.getComputedStyle(header || nodes.historyPanel).marginBottom || "0") +
+    (compareStatus?.getBoundingClientRect().height || 0) +
+    parseFloat(window.getComputedStyle(compareStatus || nodes.historyPanel).marginBottom || "0");
+  const paddingHeight =
+    parseFloat(historyPanelStyles.paddingTop || "0") +
+    parseFloat(historyPanelStyles.paddingBottom || "0");
+  const maxHeight = Math.max(panelHeight - occupiedHeight - paddingHeight, 220);
+  nodes.history.style.maxHeight = `${maxHeight}px`;
+}
+
 nodes.projectSelect.addEventListener("change", applySelectedProjectDefaults);
 document.querySelector("#run-backtest-btn").addEventListener("click", handle(runBacktest));
 document
@@ -664,5 +752,13 @@ document
 document
   .querySelector("#clear-backtest-compare-btn")
   .addEventListener("click", handle(async () => clearComparisonSelection()));
+
+if (typeof window !== "undefined") {
+  window.addEventListener("resize", syncHistoryViewportHeight);
+  if (typeof ResizeObserver !== "undefined" && nodes.runPanel) {
+    const resizeObserver = new ResizeObserver(() => syncHistoryViewportHeight());
+    resizeObserver.observe(nodes.runPanel);
+  }
+}
 
 Promise.all([loadProjects(), refreshHistory()]).catch((error) => setStatus(error.message));
