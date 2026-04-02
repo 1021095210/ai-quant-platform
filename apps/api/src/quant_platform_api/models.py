@@ -136,6 +136,7 @@ class ReplayCreateRequest(BaseModel):
 
 class ProjectCreateRequest(BaseModel):
     title: str
+    version_label: str | None = None
     natural_language_prompt: str
     strategy_dsl: dict[str, Any]
     strategy_python: str | None = None
@@ -335,6 +336,7 @@ class TaskRecord(BaseModel):
 class StrategyVersionRecord(BaseModel):
     project_id: str = Field(default_factory=lambda: f"proj_{uuid4().hex[:8]}")
     version_id: str = Field(default_factory=lambda: f"ver_{uuid4().hex[:8]}")
+    version_label: str = ""
     user_id: str
     workspace_id: str
     title: str
