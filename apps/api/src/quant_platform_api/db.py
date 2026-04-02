@@ -36,6 +36,7 @@ def create_schema(session_factory: sessionmaker) -> None:
                 text("ALTER TABLE strategy_versions ADD COLUMN strategy_python_text TEXT")
             )
     strategy_column_definitions = {
+        "version_label": "VARCHAR(128) DEFAULT ''",
         "user_id": "VARCHAR(64) DEFAULT ''",
         "workspace_id": "VARCHAR(64) DEFAULT 'ws_default'",
     }
