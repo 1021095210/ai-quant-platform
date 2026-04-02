@@ -942,6 +942,7 @@ class SQLAlchemyTradeUploadRepository:
                 orm.user_id = record.user_id
                 orm.workspace_id = record.workspace_id
                 orm.raw_text = record.raw_text
+                orm.upload_kind = record.upload_kind
                 orm.status = record.status
                 orm.detected_columns_json = json.dumps(
                     record.detected_columns, ensure_ascii=False
@@ -949,6 +950,7 @@ class SQLAlchemyTradeUploadRepository:
                 orm.column_mapping_json = json.dumps(
                     record.column_mapping, ensure_ascii=False
                 )
+                orm.metadata_json = json.dumps(record.metadata, ensure_ascii=False)
                 orm.records_json = json.dumps(
                     [item.model_dump(mode="json") for item in record.records],
                     ensure_ascii=False,
@@ -963,9 +965,11 @@ class SQLAlchemyTradeUploadRepository:
             workspace_id=record.workspace_id,
             source_file_name=record.source_file_name,
             raw_text=record.raw_text,
+            upload_kind=record.upload_kind,
             status=record.status,
             detected_columns_json=json.dumps(record.detected_columns, ensure_ascii=False),
             column_mapping_json=json.dumps(record.column_mapping, ensure_ascii=False),
+            metadata_json=json.dumps(record.metadata, ensure_ascii=False),
             records_json=json.dumps(
                 [item.model_dump(mode="json") for item in record.records],
                 ensure_ascii=False,
@@ -980,9 +984,11 @@ class SQLAlchemyTradeUploadRepository:
             workspace_id=orm.workspace_id,
             source_file_name=orm.source_file_name,
             raw_text=orm.raw_text,
+            upload_kind=orm.upload_kind,
             status=orm.status,
             detected_columns=json.loads(orm.detected_columns_json),
             column_mapping=json.loads(orm.column_mapping_json),
+            metadata=json.loads(orm.metadata_json),
             records=[
                 TradeRecordItem.model_validate(item)
                 for item in json.loads(orm.records_json)
