@@ -47,6 +47,9 @@ class StaticAssetTests(unittest.TestCase):
     def test_backtests_js_has_valid_module_syntax(self) -> None:
         self._assert_asset_has_valid_module_syntax("backtests.js")
 
+    def test_replay_js_has_valid_module_syntax(self) -> None:
+        self._assert_asset_has_valid_module_syntax("replay.js")
+
     def test_rules_js_can_bootstrap_with_stubbed_dom(self) -> None:
         node = shutil.which("node")
         if node is None:
@@ -173,6 +176,44 @@ console.log('bootstrapped');
         self.assertIn('const compareSelection = new Set();', source)
         self.assertIn("/api/v1/backtests/compare?", source)
         self.assertIn("renderCompareTable", source)
+
+    def test_replay_assets_include_ready_state_and_clear_side_language(self) -> None:
+        replay_js_path = (
+            WORKSPACE_ROOT
+            / "apps"
+            / "api"
+            / "src"
+            / "quant_platform_api"
+            / "static"
+            / "replay.js"
+        )
+        replay_html_path = (
+            WORKSPACE_ROOT
+            / "apps"
+            / "api"
+            / "src"
+            / "quant_platform_api"
+            / "static"
+            / "replay.html"
+        )
+        services_path = (
+            WORKSPACE_ROOT
+            / "apps"
+            / "api"
+            / "src"
+            / "quant_platform_api"
+            / "services.py"
+        )
+
+        replay_js_source = replay_js_path.read_text(encoding="utf-8")
+        replay_html_source = replay_html_path.read_text(encoding="utf-8")
+        services_source = services_path.read_text(encoding="utf-8")
+
+        self.assertIn("syncReplayActionState", replay_js_source)
+        self.assertIn('classList.toggle("primary"', replay_js_source)
+        self.assertIn('disabled>运行 AI 复盘</button>', replay_html_source)
+        self.assertIn('return "做空交易" if side == "short" else "做多交易"', services_source)
+        self.assertIn('f"{best_side_label}的累计盈亏和整体表现当前更优"', services_source)
 
 
 if __name__ == "__main__":
