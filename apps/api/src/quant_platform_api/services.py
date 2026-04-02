@@ -2155,17 +2155,74 @@ def build_replay_result(
             else 0.0
         )
 
+        replay_market = _infer_replay_market(records)
+        best_side_label = _describe_trade_side(best_side[0], replay_market)
+        worst_side_label = _describe_trade_side(worst_side[0], replay_market)
+        replay_supports_short = _market_supports_short(replay_market)
+        has_side_comparison = len(side_breakdown) > 1
+
         suggestion_rules: list[dict[str, Any]] = []
-        if worst_side[1]["count"] > 0 and worst_side[1]["pnl_sum"] < 0:
+        if not replay_supports_short and any(item.side == "short" for item in records):
+            suggestion_rules.append(
+                {
+                    "title": "先核对反向记录来源",
+                    "description": (
+                        "当前交割单更接近 A 股普通买卖场景，平台默认不按做空规则解释。"
+                        "如果记录里出现了反向卖出方向，请先确认是不是方向映射错误，"
+                        "或者把它单独归类到融资融券 / 衍生品策略后再复盘。"
+                    ),
+                    "dsl_patch": {
+                        "validation": {
+                            "market_supports_short": False,
+                            "action": "verify_side_mapping_or_split_strategy",
+                        }
+                    },
+                }
+            )
+        if has_side_comparison and worst_side[1]["count"] > 0 and worst_side[1]["pnl_sum"] < 0:
             suggestion_rules.append(
                 {
                     "title": "收缩弱势方向",
-                    "description": f"{worst_side[0]} 方向累计表现更弱，建议先降低该方向仓位或增加过滤条件。",
+                    "description": _build_side_optimization_description(
+                        side=worst_side[0],
+                        side_label=worst_side_label,
+                        stats=worst_side[1],
+                        market=replay_market,
+                    ),
+                    "dsl_patch": _build_side_optimization_patch(
+                        best_side=best_side[0],
+                        worst_side=worst_side[0],
+                        market=replay_market,
+                    ),
+                }
+            )
+        if not has_side_comparison:
+            suggestion_rules.append(
+                {
+                    "title": "优化单一方向入场过滤",
+                    "description": (
+                        f"当前样本全部为{best_side_label}，暂时不能做方向对比。"
+                        "建议优先检查入场过滤、止损阈值和最长持有时间，"
+                        "例如加入成交量放大、均线同向或前一交易日强弱确认后再进场。"
+                    ),
                     "dsl_patch": {
-                        "position": {
-                            "preferred_side": best_side[0],
-                            "reduced_side": worst_side[0],
-                        }
+                        "filters": {
+                            "volume_confirmation": {
+                                "enabled": True,
+                                "indicator": "volume_ratio",
+                                "operator": ">=",
+                                "value": 1.2,
+                            },
+                            "trend_confirmation": {
+                                "enabled": True,
+                                "timeframe": "1d",
+                                "rule": "only_trade_with_primary_trend",
+                            },
+                        },
+                        "risk": {
+                            "stop_loss_pct": -0.02,
+                            "max_holding_bars": 8,
+                        },
                     },
                 }
             )
@@ -2173,23 +2230,46 @@ def build_replay_result(
             suggestion_rules.append(
                 {
                     "title": "收紧止损阈值",
-                    "description": "平均亏损显著大于平均盈利，建议把止损收紧到 2% 左右并继续验证。",
-                    "dsl_patch": {"risk": {"stop_loss_pct": -0.02}},
+                    "description": (
+                        f"当前平均单笔亏损 {avg_loss:.2f}，已经明显大于平均盈利 {avg_win:.2f}。"
+                        "建议把止损收紧到 2% 左右，同时把单笔最长持有时间限制在 8 根 K 线内，"
+                        "避免亏损拖延放大。"
+                    ),
+                    "dsl_patch": {
+                        "risk": {
+                            "stop_loss_pct": -0.02,
+                            "max_holding_bars": 8,
+                        }
+                    },
                 }
             )
         if not suggestion_rules:
             suggestion_rules.append(
                 {
                     "title": "扩大样本继续验证",
-                    "description": "当前样本没有明显失衡，可保留规则并继续积累更多交易样本。",
+                    "description": (
+                        "当前样本没有出现明显失衡，建议保留现有规则，继续按相同市场和周期"
+                        "积累至少 20 笔同类交易后，再评估是否需要调整开仓过滤条件。"
+                    ),
                     "dsl_patch": {"note": "keep_current_rules"},
                 }
             )
 
-        summary = (
-            f"本次复盘共分析 {total_count} 笔交易，胜率 {win_rate:.1%}，总盈亏 {total_pnl:.2f}。"
-            f"{best_side[0]} 方向当前表现更优，{worst_side[0]} 方向需要重点优化。"
-        )
+        if has_side_comparison:
+            summary = (
+                f"本次复盘共分析 {total_count} 笔交易，胜率 {win_rate:.1%}，总盈亏 {total_pnl:.2f}。"
+                f"当前表现更优的是{best_side_label}，共 {int(best_side[1]['count'])} 笔，累计盈亏 "
+                f"{best_side[1]['pnl_sum']:.2f}，平均持有 {best_side[1]['avg_holding_minutes']:.2f} 分钟；"
+                f"需要重点优化的是{worst_side_label}，共 {int(worst_side[1]['count'])} 笔，累计盈亏 "
+                f"{worst_side[1]['pnl_sum']:.2f}，平均持有 {worst_side[1]['avg_holding_minutes']:.2f} 分钟。"
+            )
+        else:
+            summary = (
+                f"本次复盘共分析 {total_count} 笔交易，胜率 {win_rate:.1%}，总盈亏 {total_pnl:.2f}。"
+                f"当前样本全部为{best_side_label}，共 {int(best_side[1]['count'])} 笔，累计盈亏 "
+                f"{best_side[1]['pnl_sum']:.2f}，平均持有 {best_side[1]['avg_holding_minutes']:.2f} 分钟。"
+                "下一步建议优先优化入场过滤、止损阈值和持有周期，而不是做方向优劣比较。"
+            )
         return {
             "analysis_id": task_id,
             "dataset_snapshot_ref": payload["data_snapshot"]["dataset_snapshot_ref"],
@@ -2200,7 +2280,7 @@ def build_replay_result(
             "winning_patterns": [
                 {
                     "dimension": "side_performance",
-                    "pattern": f"{best_side[0]} side performed better",
+                    "pattern": f"{best_side_label}的累计盈亏和整体表现当前更优",
                     "support": round(best_side[1]["count"] / total_count, 2)
                     if total_count
                     else 0.0,
@@ -2211,7 +2291,11 @@ def build_replay_result(
             "losing_patterns": [
                 {
                     "dimension": "side_performance",
-                    "pattern": f"{worst_side[0]} side underperformed",
+                    "pattern": (
+                        f"{worst_side_label}当前是主要拖累方向"
+                        if has_side_comparison
+                        else "当前样本尚未形成可比较的方向差异"
+                    ),
                     "support": round(worst_side[1]["count"] / total_count, 2)
                     if total_count
                     else 0.0,
@@ -2229,6 +2313,81 @@ def _holding_minutes(entry_time: datetime, exit_time: datetime | None) -> float:
     if exit_time is None:
         return 0.0
     return max((exit_time - entry_time).total_seconds() / 60.0, 0.0)
+
+
+def _infer_replay_market(records: list[TradeRecordItem]) -> str:
+    normalized_symbols = [item.symbol.upper() for item in records]
+    if any(symbol.endswith((".SH", ".SZ", ".BJ")) for symbol in normalized_symbols):
+        return "cn_a_share"
+    if any(symbol.endswith("USDT") or symbol.endswith("PERP") for symbol in normalized_symbols):
+        return "crypto"
+    if any("XAU" in symbol or "GOLD" in symbol for symbol in normalized_symbols):
+        return "london_gold"
+    return "global"
+
+
+def _market_supports_short(market: str) -> bool:
+    return market != "cn_a_share"
+
+
+def _describe_trade_side(side: str, market: str) -> str:
+    if market == "cn_a_share":
+        return "反向卖出记录" if side == "short" else "买入后卖出交易"
+    return "做空交易" if side == "short" else "做多交易"
+
+
+def _build_side_optimization_description(
+    *,
+    side: str,
+    side_label: str,
+    stats: dict[str, float],
+    market: str,
+) -> str:
+    if market == "cn_a_share" and side == "short":
+        return (
+            f"{side_label}当前共 {int(stats['count'])} 笔，累计盈亏 {stats['pnl_sum']:.2f}。"
+            "当前市场默认不支持普通股票做空，建议先核对交割单方向映射，"
+            "确认这部分记录是否应单独归入融资融券或衍生品策略。"
+        )
+    return (
+        f"{side_label}当前共 {int(stats['count'])} 笔，累计盈亏 {stats['pnl_sum']:.2f}。"
+        "建议先把该方向仓位降到优势方向的一半，并增加趋势一致性过滤，"
+        "例如只在更大周期均线同向时允许入场。"
+    )
+
+
+def _build_side_optimization_patch(
+    *,
+    best_side: str,
+    worst_side: str,
+    market: str,
+) -> dict[str, Any]:
+    if market == "cn_a_share" and worst_side == "short":
+        return {
+            "validation": {
+                "market_supports_short": False,
+                "action": "verify_side_mapping_or_split_strategy",
+            }
+        }
+    return {
+        "position": {
+            "preferred_side": best_side,
+            "reduced_side": worst_side,
+            "reduced_side_size_ratio": 0.5,
+        },
+        "filters": {
+            "trend_confirmation": {
+                "enabled": True,
+                "timeframe": "30m",
+                "rule": "only_trade_with_higher_timeframe_trend",
+            }
+        },
+        "risk": {
+            "max_consecutive_losses_by_side": {
+                worst_side: 2,
+            }
+        },
+    }
 
 
 def _render_strategy_python(
