@@ -423,6 +423,7 @@ class StrategyService:
         user_id: str,
         workspace_id: str,
         title: str,
+        version_label: str | None,
         natural_language_prompt: str,
         strategy_dsl: dict[str, Any],
         strategy_python: str | None = None,
@@ -430,11 +431,14 @@ class StrategyService:
         record = StrategyVersionRecord(
             user_id=user_id,
             workspace_id=workspace_id,
+            version_label=(version_label or "").strip(),
             title=title,
             natural_language_prompt=natural_language_prompt,
             strategy_dsl=strategy_dsl,
             strategy_python=strategy_python,
         )
+        if not record.version_label:
+            record.version_label = record.version_id
         return self._repository.create(record)
 
     def list_projects(
@@ -1184,6 +1188,7 @@ class WorkspaceService:
                 {
                     "project_id": item.project_id,
                     "version_id": item.version_id,
+                    "version_label": item.version_label,
                     "title": item.title,
                     "market": item.strategy_dsl.get("market"),
                     "timeframes": item.strategy_dsl.get(
