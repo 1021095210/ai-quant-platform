@@ -21,7 +21,7 @@ function renderProjects(items) {
       (item) => `
         <div class="list-item">
           <strong>${item.title}</strong>
-          <div class="muted-note">${item.version_id}</div>
+          <div class="muted-note">${item.version_label || item.version_id}</div>
           <div class="muted-note">${item.market} / ${(item.timeframes || []).join(" / ")}</div>
           <div class="muted-note">${item.analysis_mode === "multi_timeframe" ? "混合周期策略" : "单周期策略"} · ${formatDateTime(item.created_at)}</div>
         </div>
