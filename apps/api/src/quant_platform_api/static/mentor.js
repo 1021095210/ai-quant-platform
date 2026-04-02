@@ -2,7 +2,7 @@ import {
   activateNav,
   api,
   setStatus,
-} from "/assets/shared.js";
+} from "/assets/shared.js?v=20260402c";
 
 activateNav("/mentor");
 
@@ -150,7 +150,8 @@ async function loadTopics() {
   renderTopics(payload.data.items || []);
 }
 
-async function askMentor(question, *, isFollowUp = false) {
+async function askMentor(question, options = {}) {
+  const { isFollowUp = false } = options;
   setStatus(isFollowUp ? "金融导师正在补充解释..." : "金融导师正在整理建议...");
   const payload = await api("/api/v1/mentor/ask", {
     method: "POST",

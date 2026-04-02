@@ -157,6 +157,114 @@ console.log('bootstrapped');
         )
         self.assertIn("bootstrapped", completed.stdout)
 
+    def test_mentor_js_can_bootstrap_with_stubbed_dom_and_load_topics(self) -> None:
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("node is unavailable")
+
+        asset_path = (
+            WORKSPACE_ROOT
+            / "apps"
+            / "api"
+            / "src"
+            / "quant_platform_api"
+            / "static"
+            / "mentor.js"
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_dir_path = Path(temp_dir)
+            mentor_copy = temp_dir_path / "mentor.js"
+            mentor_copy.write_text(
+                asset_path
+                .read_text(encoding="utf-8")
+                .replace('from "/assets/shared.js?v=20260402b"', 'from "./shared.js"')
+                .replace('from "/assets/shared.js?v=20260402c"', 'from "./shared.js"'),
+                encoding="utf-8",
+            )
+            (temp_dir_path / "shared.js").write_text(
+                """
+export function activateNav() {}
+export async function api(url) {
+  if (String(url).includes('/api/v1/mentor/topics')) {
+    return {
+      data: {
+        items: [
+          {
+            title: '先理解回测结果',
+            prompt: '回测结果里我应该先看什么？',
+            summary: '先看净值、回撤和成交假设。',
+          },
+        ],
+      },
+    };
+  }
+  return { data: {} };
+}
+export function setStatus() {}
+                """,
+                encoding="utf-8",
+            )
+            script_path = temp_dir_path / "bootstrap-mentor.mjs"
+            script_path.write_text(
+                f"""
+import {{ pathToFileURL }} from 'node:url';
+
+const nodes = new Map();
+
+function createNode(selector = '') {{
+  return {{
+    selector,
+    value: '',
+    innerHTML: '',
+    textContent: '',
+    className: '',
+    disabled: false,
+    dataset: {{}},
+    addEventListener() {{}},
+    focus() {{}},
+    querySelectorAll() {{ return []; }},
+  }};
+}}
+
+globalThis.document = {{
+  querySelector(selector) {{
+    if (!nodes.has(selector)) {{
+      nodes.set(selector, createNode(selector));
+    }}
+    return nodes.get(selector);
+  }},
+  querySelectorAll() {{ return []; }},
+}};
+globalThis.window = {{
+  location: {{ href: '' }},
+  addEventListener() {{}},
+}};
+
+await import(pathToFileURL({str(mentor_copy)!r}).href);
+await new Promise((resolve) => setTimeout(resolve, 0));
+
+const topicNode = nodes.get('#mentor-topic-list');
+if (!topicNode || !String(topicNode.innerHTML).includes('先理解回测结果')) {{
+  throw new Error('mentor topics did not render');
+}}
+console.log('mentor-bootstrapped');
+                """,
+                encoding="utf-8",
+            )
+            completed = subprocess.run(
+                [node, str(script_path)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+        self.assertEqual(
+            0,
+            completed.returncode,
+            msg=completed.stderr or completed.stdout or "mentor.js bootstrap failed",
+        )
+        self.assertIn("mentor-bootstrapped", completed.stdout)
+
     def test_rules_js_renders_collapsible_group_markup(self) -> None:
         rules_path = (
             WORKSPACE_ROOT
@@ -384,6 +492,8 @@ console.log('bootstrapped');
         self.assertIn("导师判断", mentor_html)
         self.assertIn("建议下一步", mentor_html)
         self.assertIn("继续追问导师", mentor_html)
+        self.assertIn('/assets/mentor.js?v=', mentor_html)
+        self.assertIn('from "/assets/shared.js?v=', mentor_js)
 
     def test_admin_and_shared_assets_include_error_logging_hooks(self) -> None:
         admin_html_path = (

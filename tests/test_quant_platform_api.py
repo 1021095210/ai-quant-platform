@@ -438,6 +438,82 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertTrue(any(item["username"] == "operator" for item in listed_users))
         self.assertTrue(any(item["role"] == "admin" for item in listed_users))
 
+    def test_admin_summary_handles_legacy_task_status_and_naive_event_timestamps(self) -> None:
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        database_path = Path(temp_dir.name) / "quant_platform.db"
+        market_data_path = Path(temp_dir.name) / "market_data.db"
+        database_url = f"sqlite+pysqlite:///{database_path}"
+        client = self._build_client(
+            database_url=database_url,
+            market_data_database_path=str(market_data_path),
+        )
+
+        self._login(client, username="admin", password="618618")
+        version_id = client.post(
+            "/api/v1/strategies/projects",
+            json={
+                "title": "旧任务兼容策略",
+                "version_label": "旧状态验证版",
+                "natural_language_prompt": "5日均线上穿20日均线时买入",
+                "strategy_dsl": {"market": "600519.SH", "timeframe": "1d", "asset_type": "stock"},
+                "strategy_python": "def build_strategy():\n    return {}",
+            },
+        ).json()["data"]["version_id"]
+        run_response = client.post(
+            "/api/v1/backtests/runs",
+            json={
+                "strategy_version_id": version_id,
+                "dataset": {
+                    "market": "600519.SH",
+                    "timeframe": "1d",
+                    "asset_type": "stock",
+                    "from": "2024-01-01T00:00:00Z",
+                    "to": "2024-06-30T00:00:00Z",
+                },
+                "execution_contract": {
+                    "initial_capital": 100000,
+                    "fee_bps": 3,
+                    "slippage_bps": 2,
+                    "fill_price_rule": "next_bar_open",
+                    "intrabar_match_policy": "no_intrabar_fill",
+                    "calendar": "cn_a_share",
+                    "timezone": "Asia/Shanghai",
+                    "adjustment_mode": "qfq",
+                },
+                "data_snapshot": {"dataset_snapshot_ref": "legacy_snapshot"},
+            },
+        )
+        self.assertIn(run_response.status_code, {200, 202})
+        client.post(
+            "/api/v1/client-errors",
+            json={
+                "message": "旧时间格式兼容验证",
+                "category": "client_runtime_error",
+                "request_path": "/mentor",
+                "details": {"scenario": "legacy_timestamp"},
+            },
+        )
+
+        with sqlite3.connect(database_path) as connection:
+            connection.execute("update tasks set status = 'completed' where kind = 'backtest'")
+            connection.execute(
+                "update auth_events set created_at = '2026-04-02 12:00:00.000000' where event_type = 'login'"
+            )
+            connection.execute(
+                "update application_logs set created_at = '2026-04-02 12:00:00.000000' where message = ?",
+                ("旧时间格式兼容验证",),
+            )
+            connection.commit()
+
+        summary = client.get("/api/v1/admin/summary")
+
+        self.assertEqual(200, summary.status_code)
+        payload = summary.json()["data"]
+        self.assertGreaterEqual(payload["counts"]["backtests"], 1)
+        self.assertGreaterEqual(payload["counts"]["app_errors_24h"], 1)
+        self.assertTrue(payload["recent_tasks"])
+
     def test_admin_can_update_user_role_but_cannot_demote_self(self) -> None:
         client = self._build_client()
         self._login(client, username="admin", password="618618")

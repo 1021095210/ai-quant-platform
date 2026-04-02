@@ -17,10 +17,12 @@ class TaskStatus(str, Enum):
     QUEUED = "queued"
     RUNNING = "running"
     SUCCEEDED = "succeeded"
+    LEGACY_COMPLETED = "completed"
     COMPLETED = "succeeded"
     FAILED = "failed"
     CANCELING = "canceling"
     CANCELED = "canceled"
+    LEGACY_CANCELLED = "cancelled"
     CANCELLED = "canceled"
 
 

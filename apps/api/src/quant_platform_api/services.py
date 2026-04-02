@@ -1658,14 +1658,15 @@ class AdminService:
                 for item in security_events
                 if item.event_type == "login"
                 and item.outcome in {"failed", "blocked"}
-                and item.created_at >= cutoff_24h
+                and self._comparable_datetime(item.created_at) >= self._comparable_datetime(cutoff_24h)
             ]
         )
         app_errors_24h = len(
             [
                 item
                 for item in app_logs
-                if item.level == "error" and item.created_at >= cutoff_24h
+                if item.level == "error"
+                and self._comparable_datetime(item.created_at) >= self._comparable_datetime(cutoff_24h)
             ]
         )
 
@@ -1966,7 +1967,7 @@ class AdminService:
                     last_failed_login_by_user.get(item.user_id, item.created_at),
                     item.created_at,
                 )
-                if item.created_at >= cutoff_24h:
+                if self._comparable_datetime(item.created_at) >= self._comparable_datetime(cutoff_24h):
                     failed_login_count_24h_by_user[item.user_id] = (
                         failed_login_count_24h_by_user.get(item.user_id, 0) + 1
                     )
@@ -2129,6 +2130,10 @@ class AdminService:
                 details=details,
             )
         )
+
+    @staticmethod
+    def _comparable_datetime(value: datetime) -> datetime:
+        return value.replace(tzinfo=None) if value.tzinfo is not None else value
 
 
 class AsyncTaskService:
