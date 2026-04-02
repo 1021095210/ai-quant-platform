@@ -4,6 +4,7 @@ activateNav("/replay");
 
 const state = {
   uploadId: "",
+  replayReady: false,
 };
 
 const nodes = {
@@ -13,9 +14,14 @@ const nodes = {
   recordsBody: document.querySelector("#replay-records-body"),
   summary: document.querySelector("#replay-summary"),
   rules: document.querySelector("#replay-rules"),
+  uploadButton: document.querySelector("#upload-trades-btn"),
+  replayButton: document.querySelector("#run-replay-btn"),
 };
 
+syncReplayActionState();
+
 async function uploadTrades() {
+  syncReplayActionState({ uploadBusy: true });
   setStatus("正在上传并解析交割单...");
   const file = nodes.file.files[0];
   const formData = new FormData();
@@ -46,6 +52,8 @@ async function uploadTrades() {
 
   const recordsPayload = await api(`/api/v1/trades/uploads/${state.uploadId}/records`);
   renderRecords(recordsPayload.data.items);
+  state.replayReady = true;
+  syncReplayActionState();
   setStatus("交割单解析完成。");
 }
 
@@ -71,6 +79,7 @@ async function runReplay() {
   if (!state.uploadId) {
     throw new Error("请先上传并解析交割单。");
   }
+  syncReplayActionState({ replayBusy: true });
   setStatus("正在运行 AI 复盘...");
   const created = await api("/api/v1/replays/analyses", {
     method: "POST",
@@ -93,8 +102,46 @@ async function runReplay() {
       `,
     )
     .join("");
+  syncReplayActionState();
   setStatus("AI 复盘完成。");
 }
 
-document.querySelector("#upload-trades-btn").addEventListener("click", handle(uploadTrades));
-document.querySelector("#run-replay-btn").addEventListener("click", handle(runReplay));
+function syncReplayActionState(options = {}) {
+  const uploadBusy = Boolean(options.uploadBusy);
+  const replayBusy = Boolean(options.replayBusy);
+
+  nodes.uploadButton.disabled = uploadBusy;
+  nodes.uploadButton.textContent = uploadBusy ? "正在解析..." : "上传并解析";
+
+  const replayReady = state.replayReady && !uploadBusy;
+  nodes.replayButton.disabled = !replayReady || replayBusy;
+  nodes.replayButton.classList.toggle("primary", replayReady && !replayBusy);
+  nodes.replayButton.classList.toggle("secondary", !replayReady && !replayBusy);
+  nodes.replayButton.classList.toggle("disabled", !replayReady || replayBusy);
+  nodes.replayButton.textContent = replayBusy ? "正在复盘..." : "运行 AI 复盘";
+  nodes.replayButton.title = replayReady
+    ? "交割单已解析完成，可以开始运行 AI 复盘。"
+    : "请先上传并解析交割单，再运行 AI 复盘。";
+}
+
+document.querySelector("#upload-trades-btn").addEventListener(
+  "click",
+  handle(async () => {
+    try {
+      await uploadTrades();
+    } finally {
+      syncReplayActionState();
+    }
+  }),
+);
+
+document.querySelector("#run-replay-btn").addEventListener(
+  "click",
+  handle(async () => {
+    try {
+      await runReplay();
+    } finally {
+      syncReplayActionState();
+    }
+  }),
+);
