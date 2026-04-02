@@ -329,6 +329,21 @@ class QuantPlatformApiTests(unittest.TestCase):
 
         self.assertEqual(200, response.status_code)
         self.assertIn('id="default-rules" class="accordion-list empty-state"', response.text)
+        self.assertIn('id="save-default-rules-btn" class="btn disabled" disabled', response.text)
+        self.assertIn('id="save-glossary-btn" class="btn disabled" disabled', response.text)
+
+    def test_replay_page_uses_progressive_action_buttons(self) -> None:
+        client = self._build_client()
+        self._login(client)
+
+        response = client.get("/replay")
+
+        self.assertEqual(200, response.status_code)
+        self.assertIn('id="add-manual-trade-btn" class="btn disabled"', response.text)
+        self.assertIn('id="upload-trades-btn" class="btn disabled" disabled', response.text)
+        self.assertIn('id="upload-screenshot-btn" class="btn disabled"', response.text)
+        self.assertIn('id="upload-manual-btn" class="btn disabled"', response.text)
+        self.assertIn('id="run-replay-btn" class="btn secondary disabled" disabled', response.text)
 
     def test_admin_can_login_and_access_workspace(self) -> None:
         client = self._build_client()
