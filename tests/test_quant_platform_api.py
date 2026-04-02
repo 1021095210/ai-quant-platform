@@ -273,6 +273,11 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertIn("混合周期观察层", response.text)
         self.assertIn("加密货币", response.text)
         self.assertIn("伦敦金", response.text)
+        self.assertIn("策略名称", response.text)
+        self.assertIn('id="project-title"', response.text)
+        self.assertIn("保存版本", response.text)
+        self.assertNotIn("当前标题", response.text)
+        self.assertNotIn("未命名", response.text)
 
     def test_backtests_page_shows_config_and_snapshot_sections(self) -> None:
         client = self._build_client()
@@ -299,6 +304,8 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertIn("对比已选回测", response.text)
         self.assertIn("执行配置差异", response.text)
         self.assertIn("数据快照差异", response.text)
+        self.assertIn('id="run-backtest-panel"', response.text)
+        self.assertIn('id="backtest-history-panel"', response.text)
         self.assertLess(response.text.index("回测曲线"), response.text.index("成交明细"))
         self.assertLess(response.text.index("成交明细"), response.text.index("回测配置摘要"))
 
@@ -1045,6 +1052,98 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertTrue(items[0]["workspace_id"].startswith("ws_"))
         self.assertIn("backtest_config", items[0])
         self.assertIn("data_snapshot_summary", items[0])
+
+    def test_completed_backtest_run_can_be_deleted(self) -> None:
+        client = self._build_client()
+        self._login(client)
+        version_id = client.post(
+            "/api/v1/strategies/projects",
+            json={
+                "title": "删除回测策略",
+                "natural_language_prompt": "突破前高买入",
+                "strategy_dsl": {"market": "510300.SH", "timeframe": "1d", "asset_type": "etf"},
+                "strategy_python": "def build_strategy():\n    return {}",
+            },
+        ).json()["data"]["version_id"]
+        run_id = client.post(
+            "/api/v1/backtests/runs",
+            json={
+                "strategy_version_id": version_id,
+                "dataset": {
+                    "market": "510300.SH",
+                    "timeframe": "1d",
+                    "asset_type": "etf",
+                    "from": "2024-01-01T00:00:00Z",
+                    "to": "2024-06-30T23:59:59Z",
+                },
+                "execution_contract": {
+                    "initial_capital": 100000,
+                    "fee_bps": 3,
+                    "slippage_bps": 2,
+                    "fill_price_rule": "next_bar_open",
+                    "intrabar_match_policy": "no_intrabar_fill",
+                    "calendar": "cn_a_share",
+                    "timezone": "Asia/Shanghai",
+                    "adjustment_mode": "qfq",
+                },
+                "data_snapshot": {"dataset_snapshot_ref": "delete_snapshot_etf"},
+            },
+        ).json()["data"]["backtest_run_id"]
+
+        deleted = client.delete(f"/api/v1/backtests/runs/{run_id}")
+        listing = client.get("/api/v1/backtests/runs")
+        detail = client.get(f"/api/v1/backtests/runs/{run_id}")
+
+        self.assertEqual(200, deleted.status_code)
+        self.assertTrue(deleted.json()["data"]["deleted"])
+        self.assertEqual(run_id, deleted.json()["data"]["backtest_run_id"])
+        self.assertEqual([], listing.json()["data"]["items"])
+        self.assertEqual(404, detail.status_code)
+
+    def test_running_backtest_run_cannot_be_deleted(self) -> None:
+        client = self._build_client(
+            job_execution_mode="background",
+            job_simulation_latency_ms=400,
+        )
+        self._login(client)
+        version_id = client.post(
+            "/api/v1/strategies/projects",
+            json={
+                "title": "运行中回测策略",
+                "natural_language_prompt": "均线上穿买入",
+                "strategy_dsl": {"market": "600519.SH", "timeframe": "1d", "asset_type": "stock"},
+                "strategy_python": "def build_strategy():\n    return {}",
+            },
+        ).json()["data"]["version_id"]
+        run_id = client.post(
+            "/api/v1/backtests/runs",
+            json={
+                "strategy_version_id": version_id,
+                "dataset": {
+                    "market": "600519.SH",
+                    "timeframe": "1d",
+                    "asset_type": "stock",
+                    "from": "2024-01-01T00:00:00Z",
+                    "to": "2024-12-31T23:59:59Z",
+                },
+                "execution_contract": {
+                    "initial_capital": 100000,
+                    "fee_bps": 3,
+                    "slippage_bps": 2,
+                    "fill_price_rule": "next_bar_open",
+                    "intrabar_match_policy": "no_intrabar_fill",
+                    "calendar": "cn_a_share",
+                    "timezone": "Asia/Shanghai",
+                    "adjustment_mode": "qfq",
+                },
+                "data_snapshot": {"dataset_snapshot_ref": "running_delete_snapshot"},
+            },
+        ).json()["data"]["backtest_run_id"]
+
+        deleted = client.delete(f"/api/v1/backtests/runs/{run_id}")
+
+        self.assertEqual(409, deleted.status_code)
+        self.assertEqual("STATE_CONFLICT", deleted.json()["error"]["code"])
 
     def test_compare_backtest_runs_returns_metrics_and_diffs(self) -> None:
         client = self._build_client()
