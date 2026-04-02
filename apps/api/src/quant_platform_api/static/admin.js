@@ -240,6 +240,26 @@ function renderSecurityEvents(items) {
     .join("");
 }
 
+function renderAppLogs(items) {
+  const node = document.querySelector("#admin-app-logs");
+  if (!items.length) {
+    node.textContent = "暂无应用报错记录。";
+    return;
+  }
+  node.innerHTML = items
+    .map(
+      (item) => `
+        <div class="list-item">
+          <strong>${item.message}</strong>
+          <div class="muted-note">${item.source} / ${item.category} / ${item.level}</div>
+          <div class="muted-note">${item.request_path || "无请求路径"} · ${item.username || "匿名用户"}${item.workspace_id ? ` · ${item.workspace_id}` : ""}</div>
+          <div class="muted-note">${formatDateTime(item.created_at)}</div>
+        </div>
+      `,
+    )
+    .join("");
+}
+
 function bindUserActions(loadAll, currentUserId) {
   document.querySelectorAll("[data-role-save]").forEach((button) => {
     button.addEventListener("click", async () => {
@@ -327,6 +347,7 @@ async function loadAdminConsole() {
     const users = (await api("/api/v1/admin/users")).data.items || [];
     const auditLogs = (await api("/api/v1/admin/audit-logs")).data.items || [];
     const securityEvents = (await api("/api/v1/admin/security-events")).data.items || [];
+    const appLogs = (await api("/api/v1/admin/app-logs")).data.items || [];
 
     document.querySelector("#metric-users").textContent = `${summary.counts.users}`;
     document.querySelector("#metric-admins").textContent = `${summary.counts.admins}`;
@@ -336,9 +357,10 @@ async function loadAdminConsole() {
     document.querySelector("#metric-backtests").textContent = `${summary.counts.backtests}`;
     document.querySelector("#metric-running").textContent = `${summary.counts.running_tasks}`;
     document.querySelector("#metric-failed-logins").textContent = `${summary.counts.failed_logins_24h}`;
+    document.querySelector("#metric-app-errors").textContent = `${summary.counts.app_errors_24h}`;
     document.querySelector("#admin-headline").textContent =
-      summary.counts.failed_tasks || summary.counts.failed_logins_24h || summary.counts.suspended_users
-        ? "关注账户安全、失败任务与数据风险"
+      summary.counts.failed_tasks || summary.counts.failed_logins_24h || summary.counts.suspended_users || summary.counts.app_errors_24h
+        ? "关注账户安全、失败任务与真实用户报错"
         : "平台运行平稳";
 
     renderDistributionPanels(summary);
@@ -348,6 +370,7 @@ async function loadAdminConsole() {
     renderUsers(users, user.user_id);
     renderAuditLogs(auditLogs);
     renderSecurityEvents(securityEvents);
+    renderAppLogs(appLogs);
     bindUserActions(loadAll, user.user_id);
   };
 

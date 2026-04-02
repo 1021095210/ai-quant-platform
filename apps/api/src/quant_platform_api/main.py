@@ -26,6 +26,7 @@ from quant_platform_api.models import (
     AdminUserRoleUpdateRequest,
     AdminUserStatusUpdateRequest,
     BacktestCreateRequest,
+    ClientErrorReportRequest,
     CustomIndicatorCreateRequest,
     CustomIndicatorGenerateRequest,
     DataSnapshotConfig,
@@ -33,6 +34,7 @@ from quant_platform_api.models import (
     DatasetSnapshotRecord,
     ErrorEnvelope,
     ErrorPayload,
+    MentorAskRequest,
     GlossaryTermCreateRequest,
     TradeUploadManualCreateRequest,
     OptimizationCreateRequest,
@@ -48,6 +50,7 @@ from quant_platform_api.models import (
 )
 from quant_platform_api.repository import (
     SQLAlchemyAdminAuditLogRepository,
+    SQLAlchemyApplicationLogRepository,
     SQLAlchemyAuthEventRepository,
     SQLAlchemyCustomIndicatorRepository,
     SQLAlchemyDefaultRuleRepository,
@@ -63,7 +66,9 @@ from quant_platform_api.services import (
     AsyncTaskService,
     AuthService,
     AdminService,
+    AppLogService,
     IndicatorService,
+    MentorService,
     RuleService,
     StrategyService,
     TradeUploadService,
@@ -81,10 +86,12 @@ SESSION_COOKIE_NAME = "quant_session"
 class AppServices:
     settings: Settings
     auth_service: AuthService
+    app_log_service: AppLogService
     admin_service: AdminService
     strategy_service: StrategyService
     indicator_service: IndicatorService
     rule_service: RuleService
+    mentor_service: MentorService
     trade_upload_service: TradeUploadService
     workspace_service: WorkspaceService
     market_data_service: MarketDataService
@@ -108,6 +115,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     user_session_repository = SQLAlchemyUserSessionRepository(session_factory)
     auth_event_repository = SQLAlchemyAuthEventRepository(session_factory)
     admin_audit_log_repository = SQLAlchemyAdminAuditLogRepository(session_factory)
+    application_log_repository = SQLAlchemyApplicationLogRepository(session_factory)
     primary_market_provider = None
     if app_settings.market_data_provider in {"auto", "tushare"}:
         primary_market_provider = TushareMarketDataProvider(app_settings.tushare_token)
@@ -136,17 +144,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             session_repository=user_session_repository,
             auth_event_repository=auth_event_repository,
         ),
+        app_log_service=AppLogService(application_log_repository),
         admin_service=AdminService(
             user_repository=user_repository,
             session_repository=user_session_repository,
             auth_event_repository=auth_event_repository,
             audit_log_repository=admin_audit_log_repository,
+            app_log_repository=application_log_repository,
             strategy_repository=strategy_repository,
             task_repository=task_repository,
         ),
         strategy_service=strategy_service,
         indicator_service=IndicatorService(indicator_repository),
         rule_service=RuleService(glossary_repository, default_rule_repository),
+        mentor_service=MentorService(),
         trade_upload_service=TradeUploadService(trade_upload_repository),
         workspace_service=WorkspaceService(
             strategy_service=strategy_service,
@@ -194,6 +205,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         detail = exc.detail if isinstance(exc.detail, dict) else {}
         code = detail.get("code") or _default_error_code(exc.status_code)
         message = detail.get("message") or _default_error_message(code)
+        if exc.status_code >= status.HTTP_500_INTERNAL_SERVER_ERROR:
+            services.app_log_service.record(
+                message=message,
+                source="server",
+                category="http_exception",
+                request_path=str(request.url.path),
+                user=_get_current_user(request, services.auth_service),
+                details={
+                    "status_code": exc.status_code,
+                    "code": code,
+                    "details": detail.get("details", {}),
+                },
+            )
         return _error_response(
             request,
             status_code=exc.status_code,
@@ -207,6 +231,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         request: Request,
         exc: RequestValidationError,
     ) -> JSONResponse:
+        services.app_log_service.record(
+            message="request validation failed",
+            source="server",
+            category="validation_error",
+            level="warning",
+            request_path=str(request.url.path),
+            user=_get_current_user(request, services.auth_service),
+            details={"errors": exc.errors()},
+        )
         return _error_response(
             request,
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -220,6 +253,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         request: Request,
         exc: Exception,
     ) -> JSONResponse:
+        services.app_log_service.record(
+            message=str(exc) or "internal error",
+            source="server",
+            category="unhandled_exception",
+            request_path=str(request.url.path),
+            user=_get_current_user(request, services.auth_service),
+            details={"type": exc.__class__.__name__},
+        )
         return _error_response(
             request,
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -287,6 +328,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if _get_current_user(request, services.auth_service) is None:
             return _login_redirect("/rules")
         return FileResponse(static_dir / "rules.html")
+
+    @app.get("/mentor")
+    def mentor_page(request: Request):
+        if _get_current_user(request, services.auth_service) is None:
+            return _login_redirect("/mentor")
+        return FileResponse(static_dir / "mentor.html")
 
     @app.get(f"{app_settings.api_prefix}/auth/me")
     def get_current_user(request: Request) -> JSONResponse:
@@ -439,6 +486,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             data={"items": services.admin_service.list_security_events()},
         )
 
+    @app.get(f"{app_settings.api_prefix}/admin/app-logs")
+    def list_admin_app_logs(request: Request) -> JSONResponse:
+        _require_admin_user(request, services.auth_service)
+        return _success_response(
+            request,
+            data={"items": services.admin_service.list_app_logs()},
+        )
+
     @app.post(f"{app_settings.api_prefix}/auth/register")
     def register_user(
         request: Request,
@@ -499,6 +554,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         response = _success_response(request, data={"logged_out": True})
         response.delete_cookie(SESSION_COOKIE_NAME, path="/")
         return response
+
+    @app.post(f"{app_settings.api_prefix}/client-errors")
+    def report_client_error(
+        request: Request,
+        payload: ClientErrorReportRequest,
+    ) -> JSONResponse:
+        services.app_log_service.record(
+            message=payload.message,
+            source=payload.source,
+            category=payload.category,
+            request_path=payload.request_path,
+            user=_get_current_user(request, services.auth_service),
+            details=payload.details,
+        )
+        return _success_response(request, data={"recorded": True})
 
     @app.get("/healthz")
     def healthz(request: Request) -> JSONResponse:
@@ -613,6 +683,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     ) -> JSONResponse:
         record = services.rule_service.create_glossary_term(payload)
         return _success_response(request, data=record.model_dump(mode="json"))
+
+    @app.get(f"{app_settings.api_prefix}/mentor/topics")
+    def list_mentor_topics(request: Request) -> JSONResponse:
+        _require_current_user(request, services.auth_service)
+        return _success_response(
+            request,
+            data={"items": services.mentor_service.list_topics()},
+        )
+
+    @app.post(f"{app_settings.api_prefix}/mentor/ask")
+    def ask_mentor(
+        request: Request,
+        payload: MentorAskRequest,
+    ) -> JSONResponse:
+        _require_current_user(request, services.auth_service)
+        answer = services.mentor_service.answer(payload)
+        return _success_response(request, data=answer)
 
     @app.post(f"{app_settings.api_prefix}/strategies/projects")
     def create_strategy_project(

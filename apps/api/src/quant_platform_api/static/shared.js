@@ -18,21 +18,47 @@ export function setStatus(message) {
 }
 
 export async function api(path, options = {}) {
-  const response = await fetch(path, {
-    headers: {
-      Accept: "application/json",
-      ...(options.body instanceof FormData ? {} : { "Content-Type": "application/json" }),
-      ...(options.headers || {}),
-    },
-    ...options,
-  });
+  try {
+    const response = await fetch(path, {
+      headers: {
+        Accept: "application/json",
+        ...(options.body instanceof FormData ? {} : { "Content-Type": "application/json" }),
+        ...(options.headers || {}),
+      },
+      ...options,
+    });
 
-  if (!response.ok) {
-    const payload = await response.json().catch(() => ({}));
-    throw new Error(payload?.detail?.message || payload?.error?.message || "请求失败");
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      const message = payload?.detail?.message || payload?.error?.message || "请求失败";
+      if (!String(path).includes("/api/v1/client-errors")) {
+        reportClientError({
+          message,
+          category: "api_error",
+          requestPath: typeof path === "string" ? path : window.location.pathname,
+          details: {
+            status: response.status,
+            method: options.method || "GET",
+          },
+        });
+      }
+      throw new Error(message);
+    }
+
+    return response.json();
+  } catch (error) {
+    if (!String(path).includes("/api/v1/client-errors")) {
+      reportClientError({
+        message: error.message || "网络请求失败",
+        category: "network_error",
+        requestPath: typeof path === "string" ? path : window.location.pathname,
+        details: {
+          method: options.method || "GET",
+        },
+      });
+    }
+    throw error;
   }
-
-  return response.json();
 }
 
 export async function fetchCurrentUser() {
@@ -199,4 +225,61 @@ export function handle(action) {
       setStatus(error.message);
     }
   };
+}
+
+export function reportClientError({
+  message,
+  category = "client_error",
+  requestPath = window.location.pathname,
+  details = {},
+}) {
+  if (!message || requestPath === "/api/v1/client-errors") {
+    return;
+  }
+  fetch("/api/v1/client-errors", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    },
+    keepalive: true,
+    body: JSON.stringify({
+      message,
+      source: "web",
+      category,
+      request_path: requestPath,
+      details: {
+        ...details,
+        user_agent: typeof navigator !== "undefined" ? navigator.userAgent : "unknown",
+      },
+    }),
+  }).catch(() => {});
+}
+
+if (
+  typeof window !== "undefined"
+  && typeof window.addEventListener === "function"
+  && !window.__quantClientErrorReporterInstalled
+) {
+  window.__quantClientErrorReporterInstalled = true;
+  window.addEventListener("error", (event) => {
+    reportClientError({
+      message: event.message || "页面脚本异常",
+      category: "client_runtime_error",
+      requestPath: window.location.pathname,
+      details: {
+        filename: event.filename,
+        lineno: event.lineno,
+        colno: event.colno,
+      },
+    });
+  });
+  window.addEventListener("unhandledrejection", (event) => {
+    const reason = event.reason?.message || String(event.reason || "promise rejected");
+    reportClientError({
+      message: reason,
+      category: "client_promise_rejection",
+      requestPath: window.location.pathname,
+    });
+  });
 }

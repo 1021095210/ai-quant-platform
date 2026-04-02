@@ -179,6 +179,21 @@ class UserLoginRequest(BaseModel):
     password: str
 
 
+class MentorAskRequest(BaseModel):
+    question: str
+    experience_level: str = "beginner"
+    market_scope: str | None = None
+    current_module: str | None = None
+
+
+class ClientErrorReportRequest(BaseModel):
+    message: str
+    source: str = "web"
+    category: str = "client_error"
+    request_path: str | None = None
+    details: dict[str, Any] = Field(default_factory=dict)
+
+
 class AdminUserRoleUpdateRequest(BaseModel):
     role: str
 
@@ -437,5 +452,19 @@ class AdminAuditLogRecord(BaseModel):
     target_user_id: str | None = None
     action: str
     summary: str
+    details: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+class AppLogRecord(BaseModel):
+    log_id: str = Field(default_factory=lambda: f"applog_{uuid4().hex[:10]}")
+    level: str = "error"
+    source: str = "server"
+    category: str = "runtime"
+    message: str
+    request_path: str | None = None
+    user_id: str | None = None
+    username: str | None = None
+    workspace_id: str | None = None
     details: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=utcnow)

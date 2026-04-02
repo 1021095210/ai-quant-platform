@@ -10,6 +10,7 @@ from sqlalchemy.orm import sessionmaker
 
 from quant_platform_api.models import (
     AdminAuditLogRecord,
+    AppLogRecord,
     AuthEventRecord,
     CustomIndicatorRecord,
     DefaultRuleSection,
@@ -27,6 +28,7 @@ from quant_platform_api.models import (
 )
 from quant_platform_api.orm import (
     AdminAuditLogORM,
+    ApplicationLogORM,
     AuthEventORM,
     CustomIndicatorORM,
     DefaultRuleSectionORM,
@@ -149,6 +151,12 @@ class AdminAuditLogRepository(Protocol):
     def create(self, record: AdminAuditLogRecord) -> AdminAuditLogRecord: ...
 
     def list_recent(self, *, limit: int = 50) -> list[AdminAuditLogRecord]: ...
+
+
+class ApplicationLogRepository(Protocol):
+    def create(self, record: AppLogRecord) -> AppLogRecord: ...
+
+    def list_recent(self, *, limit: int = 50) -> list[AppLogRecord]: ...
 
 
 class TradeUploadRepository(Protocol):
@@ -747,6 +755,55 @@ class SQLAlchemyAdminAuditLogRepository:
                     target_user_id=item.target_user_id,
                     action=item.action,
                     summary=item.summary,
+                    details=json.loads(item.details_json or "{}"),
+                    created_at=item.created_at,
+                )
+                for item in items
+            ]
+
+
+class SQLAlchemyApplicationLogRepository:
+    def __init__(self, session_factory: sessionmaker) -> None:
+        self._session_factory = session_factory
+
+    def create(self, record: AppLogRecord) -> AppLogRecord:
+        with self._session_factory() as session:
+            session.add(
+                ApplicationLogORM(
+                    log_id=record.log_id,
+                    level=record.level,
+                    source=record.source,
+                    category=record.category,
+                    message=record.message,
+                    request_path=record.request_path,
+                    user_id=record.user_id,
+                    username=record.username,
+                    workspace_id=record.workspace_id,
+                    details_json=json.dumps(record.details, ensure_ascii=False),
+                    created_at=record.created_at,
+                )
+            )
+            session.commit()
+        return record
+
+    def list_recent(self, *, limit: int = 50) -> list[AppLogRecord]:
+        with self._session_factory() as session:
+            items = session.scalars(
+                select(ApplicationLogORM)
+                .order_by(ApplicationLogORM.created_at.desc())
+                .limit(limit)
+            ).all()
+            return [
+                AppLogRecord(
+                    log_id=item.log_id,
+                    level=item.level,
+                    source=item.source,
+                    category=item.category,
+                    message=item.message,
+                    request_path=item.request_path,
+                    user_id=item.user_id,
+                    username=item.username,
+                    workspace_id=item.workspace_id,
                     details=json.loads(item.details_json or "{}"),
                     created_at=item.created_at,
                 )

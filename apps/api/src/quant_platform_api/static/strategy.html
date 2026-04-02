@@ -22,6 +22,7 @@
           <a class="nav-link" data-nav href="/strategy">策略工坊</a>
           <a class="nav-link" data-nav href="/indicators">指标设置</a>
           <a class="nav-link" data-nav href="/rules">规则模块</a>
+          <a class="nav-link" data-nav href="/mentor">金融导师</a>
           <a class="nav-link" data-nav href="/backtests">回测中心</a>
           <a class="nav-link" data-nav href="/replay">交易复盘</a>
         </nav>
@@ -32,8 +33,8 @@
       <section class="hero">
         <div>
           <p class="eyebrow">Python Strategy Generator</p>
-          <h2>把主观交易想法翻译成更接近真实量化平台的 Python 策略骨架。</h2>
-          <p>策略工坊现在支持 A股、美股、加密货币、伦敦金等市场语义，也支持把日线和分钟线混合写进同一套规则。当前回测兼容层仍按主回测周期执行，其余周期会先作为上下文沉淀在 DSL 中。</p>
+          <h2>先把交易想法讲清楚，再生成可保存、可回测的策略版本。</h2>
+          <p>这里适合把你的市场、周期、入场、出场和风控逻辑整理成结构化策略。多市场和混合周期条件都会先沉淀到 DSL，便于后续继续验证和迭代。</p>
         </div>
         <div class="hero-panel">
           <div class="card muted">
@@ -135,6 +136,7 @@
             <div class="actions">
               <button id="generate-strategy-btn">生成 Python 策略</button>
               <button id="save-project-btn" class="btn disabled" disabled>保存项目</button>
+              <a class="btn secondary" href="/mentor">先问金融导师</a>
               <a class="btn secondary" href="/indicators">去指标设置</a>
               <a class="btn secondary" href="/rules">去规则模块</a>
               <a id="go-backtests-link" class="btn disabled" href="/backtests" aria-disabled="true">去回测中心</a>

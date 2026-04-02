@@ -146,20 +146,21 @@ select {
   color: var(--accent);
   text-transform: uppercase;
   letter-spacing: 0.18em;
-  font-size: 11px;
+  font-size: 9px;
   font-weight: 800;
 }
 
 .hero h2 {
   margin: 0;
-  font-size: clamp(30px, 4vw, 48px);
-  line-height: 1.05;
+  font-size: clamp(20px, 2.7vw, 32px);
+  line-height: 1.15;
 }
 
 .hero p {
   margin: 14px 0 0;
   color: var(--text-soft);
-  line-height: 1.7;
+  line-height: 1.6;
+  font-size: 14px;
   max-width: 62ch;
 }
 
@@ -973,7 +974,7 @@ th {
 .quick-grid {
   display: grid;
   gap: 18px;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
 }
 
 .quick-card {
@@ -1023,7 +1024,7 @@ th {
 }
 
 .admin-quick-grid {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
 }
 
 .distribution-list {
@@ -1052,6 +1053,109 @@ th {
 
 .role-select {
   min-width: 132px;
+}
+
+.mentor-hero {
+  background:
+    linear-gradient(135deg, rgba(15, 155, 109, 0.11), rgba(255, 255, 255, 0.95)),
+    var(--surface);
+}
+
+.mentor-topic-list {
+  display: grid;
+  gap: 14px;
+}
+
+.mentor-topic-card {
+  width: 100%;
+  display: grid;
+  gap: 8px;
+  padding: 18px;
+  text-align: left;
+  border-radius: 18px;
+  border: 1px solid rgba(191, 212, 255, 0.58);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(241, 248, 255, 0.94));
+  box-shadow: none;
+  color: var(--text);
+}
+
+.mentor-topic-card:hover {
+  transform: translateY(-1px);
+}
+
+.mentor-topic-kicker {
+  color: var(--success);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.mentor-topic-card strong {
+  font-size: 16px;
+}
+
+.mentor-topic-card span:last-child {
+  color: var(--text-soft);
+  line-height: 1.6;
+}
+
+.mentor-answer-card {
+  gap: 10px;
+}
+
+.mentor-step-list {
+  margin: 0;
+  padding-left: 20px;
+  color: var(--text-soft);
+  line-height: 1.7;
+}
+
+.mentor-step-list li + li {
+  margin-top: 6px;
+}
+
+.mentor-glossary {
+  display: grid;
+  gap: 10px;
+}
+
+.mentor-glossary-item {
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: white;
+  border: 1px solid rgba(191, 212, 255, 0.52);
+}
+
+.mentor-glossary-item span {
+  font-weight: 700;
+}
+
+.mentor-glossary-item small,
+.mentor-module-link small {
+  color: var(--text-soft);
+  line-height: 1.6;
+}
+
+.mentor-module-links {
+  display: grid;
+  gap: 10px;
+}
+
+.mentor-module-link {
+  display: grid;
+  gap: 4px;
+  padding: 14px 16px;
+  border-radius: 14px;
+  background: white;
+  border: 1px solid rgba(191, 212, 255, 0.52);
+}
+
+.mentor-module-link span {
+  font-weight: 700;
+  color: var(--accent-strong);
 }
 
 @media (max-width: 960px) {

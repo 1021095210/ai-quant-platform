@@ -70,6 +70,22 @@ class AdminAuditLogORM(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
 
 
+class ApplicationLogORM(Base):
+    __tablename__ = "application_logs"
+
+    log_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    level: Mapped[str] = mapped_column(String(32), index=True, default="error")
+    source: Mapped[str] = mapped_column(String(32), index=True, default="server")
+    category: Mapped[str] = mapped_column(String(64), index=True, default="runtime")
+    message: Mapped[str] = mapped_column(Text())
+    request_path: Mapped[str | None] = mapped_column(String(255), index=True, nullable=True)
+    user_id: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
+    username: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
+    workspace_id: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
+    details_json: Mapped[str] = mapped_column(Text(), default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+
 class DatasetSnapshotORM(Base):
     __tablename__ = "dataset_snapshots"
 

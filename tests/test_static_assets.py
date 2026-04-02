@@ -59,6 +59,9 @@ class StaticAssetTests(unittest.TestCase):
     def test_indicators_js_has_valid_module_syntax(self) -> None:
         self._assert_asset_has_valid_module_syntax("indicators.js")
 
+    def test_mentor_js_has_valid_module_syntax(self) -> None:
+        self._assert_asset_has_valid_module_syntax("mentor.js")
+
     def test_rules_js_can_bootstrap_with_stubbed_dom(self) -> None:
         node = shutil.which("node")
         if node is None:
@@ -345,6 +348,78 @@ console.log('bootstrapped');
         self.assertIn('return "做空交易" if side == "short" else "做多交易"', services_source)
         self.assertIn('f"{best_side_label}的累计盈亏和整体表现当前更优"', services_source)
         self.assertIn("def _build_single_side_suggestions(", services_source)
+
+    def test_mentor_assets_expose_topic_cards_and_structured_answer_sections(self) -> None:
+        mentor_html_path = (
+            WORKSPACE_ROOT
+            / "apps"
+            / "api"
+            / "src"
+            / "quant_platform_api"
+            / "static"
+            / "mentor.html"
+        )
+        mentor_js_path = (
+            WORKSPACE_ROOT
+            / "apps"
+            / "api"
+            / "src"
+            / "quant_platform_api"
+            / "static"
+            / "mentor.js"
+        )
+
+        mentor_html = mentor_html_path.read_text(encoding="utf-8")
+        mentor_js = mentor_js_path.read_text(encoding="utf-8")
+
+        self.assertIn("金融导师", mentor_html)
+        self.assertIn('id="mentor-topic-list"', mentor_html)
+        self.assertIn('id="mentor-ask-btn" class="btn disabled" disabled', mentor_html)
+        self.assertIn("/api/v1/mentor/topics", mentor_js)
+        self.assertIn("/api/v1/mentor/ask", mentor_js)
+        self.assertIn("renderTopics", mentor_js)
+        self.assertIn("导师判断", mentor_html)
+        self.assertIn("建议下一步", mentor_html)
+
+    def test_admin_and_shared_assets_include_error_logging_hooks(self) -> None:
+        admin_html_path = (
+            WORKSPACE_ROOT
+            / "apps"
+            / "api"
+            / "src"
+            / "quant_platform_api"
+            / "static"
+            / "admin.html"
+        )
+        admin_js_path = (
+            WORKSPACE_ROOT
+            / "apps"
+            / "api"
+            / "src"
+            / "quant_platform_api"
+            / "static"
+            / "admin.js"
+        )
+        shared_js_path = (
+            WORKSPACE_ROOT
+            / "apps"
+            / "api"
+            / "src"
+            / "quant_platform_api"
+            / "static"
+            / "shared.js"
+        )
+
+        admin_html = admin_html_path.read_text(encoding="utf-8")
+        admin_js = admin_js_path.read_text(encoding="utf-8")
+        shared_js = shared_js_path.read_text(encoding="utf-8")
+
+        self.assertIn("用户报错与应用日志", admin_html)
+        self.assertIn('id="admin-app-logs"', admin_html)
+        self.assertIn("renderAppLogs", admin_js)
+        self.assertIn("/api/v1/admin/app-logs", admin_js)
+        self.assertIn("reportClientError", shared_js)
+        self.assertIn("/api/v1/client-errors", shared_js)
 
 
 if __name__ == "__main__":

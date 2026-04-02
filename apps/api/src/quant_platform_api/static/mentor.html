@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>量化研究平台 · 金融导师</title>
+    <link rel="stylesheet" href="/assets/theme.css" />
+  </head>
+  <body>
+    <div class="layout">
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand-mark">Q</div>
+          <div>
+            <h1>金融导师</h1>
+            <p>交易基础、技术指标与平台使用方法的内置导师</p>
+          </div>
+        </div>
+        <nav class="nav">
+          <a class="nav-link" data-nav href="/">首页</a>
+          <a class="nav-link" data-nav href="/workspace">工作台</a>
+          <a class="nav-link" data-nav href="/strategy">策略工坊</a>
+          <a class="nav-link" data-nav href="/indicators">指标设置</a>
+          <a class="nav-link" data-nav href="/rules">规则模块</a>
+          <a class="nav-link" data-nav href="/mentor">金融导师</a>
+          <a class="nav-link" data-nav href="/backtests">回测中心</a>
+          <a class="nav-link" data-nav href="/replay">交易复盘</a>
+        </nav>
+      </header>
+
+      <div id="status-banner" class="status-banner">先问清楚交易概念和平台流程，再继续下一步研究。</div>
+
+      <section class="hero mentor-hero">
+        <div>
+          <p class="eyebrow">Mentor Desk</p>
+          <h2>先把交易逻辑讲明白，再带你用平台做验证。</h2>
+          <p>金融导师适合新手和非量化用户先理解交易基础、技术指标和平台正确使用顺序。当前版本内置多市场实战导师逻辑，回答会直接给出下一步动作和对应模块入口。</p>
+        </div>
+        <div class="hero-panel">
+          <div class="card muted">
+            <span class="mini-label">导师定位</span>
+            <strong class="metric-value">多市场实战导师</strong>
+          </div>
+          <div class="card muted">
+            <span class="mini-label">推荐起点</span>
+            <strong class="metric-value">先问问题，再去模块实操</strong>
+          </div>
+        </div>
+      </section>
+
+      <section class="grid two stretch" style="margin-top: 22px">
+        <section class="card equal-panel">
+          <div class="panel-header">
+            <h3>你可以先从这些问题开始</h3>
+          </div>
+          <div id="mentor-topic-list" class="mentor-topic-list empty-state">正在加载导师问题卡片。</div>
+        </section>
+
+        <section class="card equal-panel">
+          <div class="panel-header">
+            <h3>向金融导师提问</h3>
+          </div>
+          <div class="form-grid">
+            <label class="field">
+              <span>你的问题</span>
+              <textarea id="mentor-question" placeholder="例如：我是新手，应该先学均线还是先去做回测？"></textarea>
+            </label>
+            <div class="form-grid two">
+              <label class="field">
+                <span>你的经验阶段</span>
+                <select id="mentor-level">
+                  <option value="beginner">刚入门</option>
+                  <option value="developing">已有一些经验</option>
+                  <option value="advanced">有成熟交易经验</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>当前关注市场</span>
+                <select id="mentor-market-scope">
+                  <option value="cn_equity">A股</option>
+                  <option value="us_equity">美股</option>
+                  <option value="crypto">加密货币</option>
+                  <option value="london_gold">伦敦金</option>
+                </select>
+              </label>
+            </div>
+            <div class="actions">
+              <button id="mentor-ask-btn" class="btn disabled" disabled>请导师解答</button>
+              <a class="btn secondary" href="/workspace">回工作台</a>
+            </div>
+          </div>
+        </section>
+      </section>
+
+      <section class="grid two stretch" style="margin-top: 22px">
+        <section class="card equal-panel">
+          <div class="panel-header">
+            <h3>导师判断</h3>
+          </div>
+          <div id="mentor-answer" class="list empty-state">输入问题后，导师会先给出判断、解释和注意事项。</div>
+        </section>
+        <section class="card equal-panel">
+          <div class="panel-header">
+            <h3>建议下一步</h3>
+          </div>
+          <div id="mentor-actions" class="list empty-state">导师会根据你的问题给出具体动作建议。</div>
+        </section>
+      </section>
+    </div>
+
+    <script type="module" src="/assets/mentor.js"></script>
+  </body>
+</html>

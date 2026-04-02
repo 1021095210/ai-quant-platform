@@ -216,7 +216,7 @@ class QuantPlatformApiTests(unittest.TestCase):
     def test_protected_pages_redirect_to_login_when_unauthenticated(self) -> None:
         client = self._build_client()
 
-        for path in ["/workspace", "/admin", "/strategy", "/indicators", "/rules", "/backtests", "/replay"]:
+        for path in ["/workspace", "/admin", "/strategy", "/indicators", "/rules", "/mentor", "/backtests", "/replay"]:
             response = client.get(path, follow_redirects=False)
             self.assertEqual(302, response.status_code)
             self.assertEqual(f"/login?next={path}", response.headers["location"])
@@ -261,6 +261,7 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertIn("任务审计", response.text)
         self.assertIn("登录安全", response.text)
         self.assertIn("管理员审计日志", response.text)
+        self.assertIn("用户报错与应用日志", response.text)
 
     def test_strategy_page_shows_multi_market_and_multi_timeframe_controls(self) -> None:
         client = self._build_client()
@@ -344,6 +345,17 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertIn('id="upload-screenshot-btn" class="btn disabled"', response.text)
         self.assertIn('id="upload-manual-btn" class="btn disabled"', response.text)
         self.assertIn('id="run-replay-btn" class="btn secondary disabled" disabled', response.text)
+
+    def test_mentor_page_is_available_after_login(self) -> None:
+        client = self._build_client()
+        self._login(client)
+
+        response = client.get("/mentor")
+
+        self.assertEqual(200, response.status_code)
+        self.assertIn("金融导师", response.text)
+        self.assertIn("先把交易逻辑讲明白，再带你用平台做验证", response.text)
+        self.assertIn('id="mentor-ask-btn" class="btn disabled" disabled', response.text)
 
     def test_admin_can_login_and_access_workspace(self) -> None:
         client = self._build_client()
@@ -863,9 +875,63 @@ class QuantPlatformApiTests(unittest.TestCase):
 
         self.assertEqual(200, response.status_code)
         self.assertIn("多市场默认研究规则与 AI 术语理解库", response.text)
-        self.assertIn("覆盖 A股、美股、加密货币和伦敦金等市场语境", response.text)
+        self.assertIn("统一管理多市场默认研究规则和术语库", response.text)
         self.assertIn("保存默认规则", response.text)
         self.assertIn("恢复平台默认值", response.text)
+
+    def test_mentor_endpoints_return_topics_and_structured_answer(self) -> None:
+        client = self._build_client()
+        self._login(client)
+
+        topics_response = client.get("/api/v1/mentor/topics")
+        answer_response = client.post(
+            "/api/v1/mentor/ask",
+            json={
+                "question": "A股能不能像加密货币一样直接做空？我这种新手应该先看什么？",
+                "experience_level": "beginner",
+                "market_scope": "cn_equity",
+                "current_module": "mentor",
+            },
+        )
+
+        self.assertEqual(200, topics_response.status_code)
+        self.assertTrue(topics_response.json()["data"]["items"])
+        self.assertEqual(200, answer_response.status_code)
+        data = answer_response.json()["data"]
+        self.assertEqual("金融导师", data["mentor_name"])
+        self.assertEqual("market_constraints", data["topic"])
+        self.assertIn("A股现货股票", data["answer"])
+        self.assertTrue(data["action_plan"])
+        self.assertTrue(any(item["path"] == "/rules" for item in data["related_modules"]))
+
+    def test_client_error_reports_are_visible_in_admin_app_logs(self) -> None:
+        client = self._build_client()
+        self._login(client, username="1111", password="618618")
+
+        report_response = client.post(
+            "/api/v1/client-errors",
+            json={
+                "message": "策略页脚本报错",
+                "source": "web",
+                "category": "client_runtime_error",
+                "request_path": "/strategy",
+                "details": {"module": "strategy"},
+            },
+        )
+
+        self.assertEqual(200, report_response.status_code)
+
+        client.post("/api/v1/auth/logout")
+        self._login(client, username="admin", password="618618")
+        logs_response = client.get("/api/v1/admin/app-logs")
+        summary_response = client.get("/api/v1/admin/summary")
+
+        self.assertEqual(200, logs_response.status_code)
+        items = logs_response.json()["data"]["items"]
+        self.assertTrue(any(item["message"] == "策略页脚本报错" for item in items))
+        self.assertTrue(any(item["request_path"] == "/strategy" for item in items))
+        self.assertEqual(200, summary_response.status_code)
+        self.assertGreaterEqual(summary_response.json()["data"]["counts"]["app_errors_24h"], 1)
 
     def test_create_strategy_project_returns_project_and_version_ids(self) -> None:
         client = self._build_client()

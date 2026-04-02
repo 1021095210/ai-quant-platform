@@ -15,6 +15,7 @@ from quant_platform_api.config import Settings
 from quant_platform_api.market_data import MarketDataService
 from quant_platform_api.models import (
     AdminAuditLogRecord,
+    AppLogRecord,
     AuthEventRecord,
     CustomIndicatorCreateRequest,
     CustomIndicatorGenerateRequest,
@@ -25,6 +26,7 @@ from quant_platform_api.models import (
     ErrorPayload,
     GlossaryTermCreateRequest,
     GlossaryTermRecord,
+    MentorAskRequest,
     StrategyVersionRecord,
     StrategyGenerateRequest,
     TaskRecord,
@@ -38,6 +40,7 @@ from quant_platform_api.models import (
 )
 from quant_platform_api.repository import (
     AdminAuditLogRepository,
+    ApplicationLogRepository,
     AuthEventRepository,
     CustomIndicatorRepository,
     DefaultRuleRepository,
@@ -850,6 +853,43 @@ class AuthService:
         return bool(user and user.role == "admin")
 
 
+class AppLogService:
+    def __init__(self, repository: ApplicationLogRepository) -> None:
+        self._repository = repository
+
+    def record(
+        self,
+        *,
+        message: str,
+        source: str,
+        category: str,
+        level: str = "error",
+        request_path: str | None = None,
+        user: UserProfile | None = None,
+        details: dict[str, Any] | None = None,
+    ) -> AppLogRecord:
+        normalized_message = message.strip() or "unknown application error"
+        return self._repository.create(
+            AppLogRecord(
+                level=level,
+                source=source,
+                category=category,
+                message=normalized_message,
+                request_path=request_path,
+                user_id=user.user_id if user else None,
+                username=user.username if user else None,
+                workspace_id=user.workspace_id if user else None,
+                details=details or {},
+            )
+        )
+
+    def list_recent(self, *, limit: int = 50) -> list[dict[str, Any]]:
+        return [
+            item.model_dump(mode="json")
+            for item in self._repository.list_recent(limit=limit)
+        ]
+
+
 class IndicatorService:
     def __init__(self, repository: CustomIndicatorRepository) -> None:
         self._repository = repository
@@ -999,6 +1039,279 @@ class RuleService:
             example=request.example,
         )
         return self._glossary_repository.create(record)
+
+
+class MentorService:
+    def list_topics(self) -> list[dict[str, Any]]:
+        return [
+            {
+                "topic_id": "mentor_start_here",
+                "title": "我完全是新手，先学什么",
+                "summary": "先建立交易、风控和平台使用顺序，避免一上来就追求复杂策略。",
+                "prompt": "我是交易新手，也没太多量化经验，应该先学什么，再怎么用这个平台？",
+                "path": "/workspace",
+            },
+            {
+                "topic_id": "mentor_indicator_basics",
+                "title": "均线、MACD、RSI 怎么看",
+                "summary": "先理解这些指标在趋势、动量和节奏判断里分别干什么。",
+                "prompt": "均线、MACD、RSI 这些技术指标分别适合看什么？新手应该怎么学？",
+                "path": "/indicators",
+            },
+            {
+                "topic_id": "mentor_backtest_reading",
+                "title": "回测结果怎么看",
+                "summary": "把胜率、盈亏比、回撤、交易次数和成交假设一起读，不只盯收益率。",
+                "prompt": "回测结果里我应该先看哪些指标？怎样判断一个策略值不值得继续研究？",
+                "path": "/backtests",
+            },
+            {
+                "topic_id": "mentor_platform_workflow",
+                "title": "平台正确使用顺序",
+                "summary": "先学指标和规则，再生成策略，最后做回测和复盘。",
+                "prompt": "这个平台从头到尾应该怎么用？每个模块适合在什么阶段进入？",
+                "path": "/strategy",
+            },
+        ]
+
+    def answer(self, request: MentorAskRequest) -> dict[str, Any]:
+        question = request.question.strip()
+        if not question:
+            raise TaskExecutionError("INVALID_ARGUMENT", "question is required")
+
+        normalized = question.lower()
+        topic = self._classify_topic(question, normalized)
+        market_scope = request.market_scope or self._infer_market_scope(question)
+        headline, explanation, why_it_matters, action_plan, glossary = self._build_topic_answer(
+            topic=topic,
+            market_scope=market_scope,
+            experience_level=request.experience_level,
+        )
+        return {
+            "mentor_name": "金融导师",
+            "mentor_role": "多市场实战导师",
+            "question": question,
+            "topic": topic,
+            "experience_level": request.experience_level,
+            "market_scope": market_scope,
+            "current_module": request.current_module,
+            "headline": headline,
+            "answer": explanation,
+            "why_it_matters": why_it_matters,
+            "action_plan": action_plan,
+            "glossary": glossary,
+            "related_modules": self._related_modules_for_topic(topic),
+            "risk_note": self._risk_note_for_market(market_scope),
+        }
+
+    def _classify_topic(self, question: str, normalized: str) -> str:
+        if any(keyword in question for keyword in ("均线", "MACD", "RSI", "KDJ", "布林", "指标")):
+            return "indicator_basics"
+        if any(keyword in question for keyword in ("回测", "胜率", "回撤", "盈亏比", "净值")):
+            return "backtest_reading"
+        if any(keyword in question for keyword in ("平台", "模块", "怎么用", "工作台", "流程")):
+            return "platform_workflow"
+        if any(keyword in question for keyword in ("风控", "止损", "仓位", "亏损")):
+            return "risk_management"
+        if any(keyword in question for keyword in ("做空", "融券", "双向", "卖空")):
+            return "market_constraints"
+        if any(keyword in question for keyword in ("策略", "信号", "买入", "卖出", "周期")):
+            return "strategy_design"
+        if any(keyword in normalized for keyword in ("replay", "复盘", "交割单")):
+            return "trade_review"
+        return "getting_started"
+
+    def _infer_market_scope(self, question: str) -> str:
+        if any(keyword in question for keyword in ("美股", "纳斯达克", "AAPL")):
+            return "us_equity"
+        if any(keyword in question for keyword in ("比特币", "以太坊", "加密", "BTC", "ETH", "USDT")):
+            return "crypto"
+        if any(keyword in question for keyword in ("伦敦金", "黄金", "XAU")):
+            return "london_gold"
+        return "cn_equity"
+
+    def _related_modules_for_topic(self, topic: str) -> list[dict[str, str]]:
+        mapping = {
+            "getting_started": [
+                {"label": "用户工作台", "path": "/workspace", "reason": "先看清研究入口和当前状态"},
+                {"label": "金融导师", "path": "/mentor", "reason": "边问边学，不懂的概念先在这里消化"},
+            ],
+            "indicator_basics": [
+                {"label": "指标设置", "path": "/indicators", "reason": "先看传统指标含义，再设计自定义指标"},
+                {"label": "规则模块", "path": "/rules", "reason": "把你常用术语补进术语库"},
+            ],
+            "strategy_design": [
+                {"label": "策略工坊", "path": "/strategy", "reason": "把交易想法转成可保存、可回测的策略版本"},
+                {"label": "回测中心", "path": "/backtests", "reason": "验证规则是否在历史数据上稳定"},
+            ],
+            "backtest_reading": [
+                {"label": "回测中心", "path": "/backtests", "reason": "先看净值、回撤、交易次数和成交假设"},
+                {"label": "交易复盘", "path": "/replay", "reason": "把真实交易和回测表现对照起来"},
+            ],
+            "risk_management": [
+                {"label": "回测中心", "path": "/backtests", "reason": "把止损、回撤和仓位规则写进执行配置"},
+                {"label": "交易复盘", "path": "/replay", "reason": "从真实亏损单里找风控漏洞"},
+            ],
+            "trade_review": [
+                {"label": "交易复盘", "path": "/replay", "reason": "导入成交记录，先看方向、盈亏和持仓时长"},
+                {"label": "策略工坊", "path": "/strategy", "reason": "把复盘结论回灌到下一版策略"},
+            ],
+            "platform_workflow": [
+                {"label": "指标设置", "path": "/indicators", "reason": "先理解指标和市场规则"},
+                {"label": "策略工坊", "path": "/strategy", "reason": "把交易想法整理成可执行策略"},
+                {"label": "回测中心", "path": "/backtests", "reason": "用明确成交和风控假设验证"},
+            ],
+            "market_constraints": [
+                {"label": "规则模块", "path": "/rules", "reason": "先理解不同市场的制度边界"},
+                {"label": "回测中心", "path": "/backtests", "reason": "把市场约束写进回测配置"},
+            ],
+        }
+        return mapping.get(topic, mapping["getting_started"])
+
+    def _build_topic_answer(
+        self,
+        *,
+        topic: str,
+        market_scope: str,
+        experience_level: str,
+    ) -> tuple[str, str, str, list[str], list[dict[str, str]]]:
+        if topic == "indicator_basics":
+            return (
+                "先分清趋势指标、动量指标和波动指标，再决定它们各自负责什么。",
+                "均线更适合看趋势方向，MACD 更适合看趋势和动量是否共振，RSI 更适合观察短期强弱和节奏。新手不要把很多指标叠在一起，而是先选一类趋势指标、一类节奏指标，再看它们是否在同一段行情里给出一致信号。",
+                "指标真正的作用是帮助你过滤环境、确认节奏，而不是替你直接按下买卖按钮。",
+                [
+                    "先在指标设置里逐个看均线、MACD、RSI 的说明和代码。",
+                    "只保留一套最小组合，比如均线 + RSI，不要一开始堆太多指标。",
+                    "再去策略工坊，把理解后的条件写成自然语言，生成第一版策略。",
+                ],
+                [
+                    {"term": "趋势指标", "meaning": "帮助你判断方向是否在持续向上或向下。"},
+                    {"term": "动量指标", "meaning": "帮助你判断当前涨跌是否有延续性。"},
+                ],
+            )
+        if topic == "backtest_reading":
+            return (
+                "先看最大回撤和交易次数，再看收益率；先确认成交假设，再评价策略好坏。",
+                "很多人只盯累计收益，但真实研究里，更重要的是这个收益是不是建立在合理的回撤、可接受的交易频率和清晰的成交假设上。你应该先看净值曲线是否平稳、回撤是否超过承受范围、交易次数是否太少，以及成交方式、滑点、手续费是否合理。",
+                "如果成交方式、滑点或市场约束写得含糊，哪怕收益看起来很好，也不一定代表真实可执行结果。",
+                [
+                    "先看净值曲线和最大回撤，判断策略波动是否可接受。",
+                    "再看交易次数和平均单笔收益，避免样本太少得出错误结论。",
+                    "最后检查回测配置摘要，确认复权、成交方式、手续费和市场约束都合理。",
+                ],
+                [
+                    {"term": "最大回撤", "meaning": "从历史高点回落到低点的最大幅度。"},
+                    {"term": "盈亏比", "meaning": "平均赚钱幅度和平均亏钱幅度的对比。"},
+                ],
+            )
+        if topic == "platform_workflow":
+            return (
+                "正确顺序不是先回测，而是先讲清楚规则，再去验证规则。",
+                "成熟的研究流程通常是：先理解指标和市场规则，再把经验写成策略描述，接着在策略工坊生成结构化策略，之后在回测中心用明确配置验证，最后把真实交易或模拟结果带到复盘模块做修正。",
+                "如果顺序反过来，你很容易得到一堆收益数字，却说不清这些数字是怎么来的，也无法稳定复现。",
+                [
+                    "第一次使用时，先逛指标设置和规则模块，把常见术语和市场制度看明白。",
+                    "第二步进入策略工坊，写出一套能用中文讲清楚的入场、出场和风控逻辑。",
+                    "第三步去回测中心验证，再把问题带回策略工坊和交易复盘继续改。",
+                ],
+                [
+                    {"term": "策略版本", "meaning": "每一轮研究保存下来的独立版本，便于回测和对比。"},
+                    {"term": "数据快照", "meaning": "某次回测绑定的数据范围和来源摘要，用来保证结果可追踪。"},
+                ],
+            )
+        if topic == "risk_management":
+            return (
+                "先管亏损，再讨论放大收益；风控不是附属项，而是策略本体的一部分。",
+                "新手最容易犯的错误，是先看买点，再补止损和仓位。成熟做法正好相反：先定义单笔最多能亏多少、总回撤能接受多少、是否允许加仓，再决定信号值不值得做。",
+                "没有明确的仓位和止损约束，哪怕信号本身不错，结果也可能因为单笔失控而完全变形。",
+                [
+                    "在回测中心先设置最大回撤保护、最大持有 Bar 数和仓位模式。",
+                    "把止损、止盈和同日是否允许卖出的规则写清楚，不要留给自己临盘发挥。",
+                    "复盘时优先看亏损最大的几笔，判断是信号问题还是仓位问题。",
+                ],
+                [
+                    {"term": "仓位", "meaning": "每次交易投入多少资金或多少数量。"},
+                    {"term": "止损", "meaning": "当亏损达到预设阈值时主动退出，控制单笔风险。"},
+                ],
+            )
+        if topic == "trade_review":
+            return (
+                "复盘不是回忆过程，而是把真实成交转成下一版规则。",
+                "你真正要看的不是哪一笔赚了，而是哪些交易类型在重复赚钱，哪些错误在重复发生。方向、持仓时长、盈亏分布、入场时间和退出方式，都是下一版策略能直接吸收的线索。",
+                "如果复盘只停留在情绪总结，你会觉得自己学到了很多，但下一次下单时还是重复旧错误。",
+                [
+                    "先把真实成交按方向、持仓天数和盈亏大小分组。",
+                    "找出亏损最集中的场景，比如追高、逆势或止损过慢。",
+                    "把结论写回策略工坊或规则模块，形成下一版明确规则。",
+                ],
+                [
+                    {"term": "复盘", "meaning": "把真实交易拆成可解释、可改进的模式。"},
+                    {"term": "样本", "meaning": "用于分析的一组交易记录，样本太少时结论容易失真。"},
+                ],
+            )
+        if topic == "market_constraints":
+            market_name = MARKET_SCOPE_LABELS.get(market_scope, "当前市场")
+            explanation = f"{market_name} 的制度边界会直接决定哪些建议成立。"
+            if market_scope == "cn_equity":
+                explanation += " 对于 A股现货股票，平台默认按“买入后卖出”的单向交易研究，不会把做空当成常规建议；如果你研究的是融资融券、股指期货或期权，需要单独说明。"
+            else:
+                explanation += " 这个市场允许的成交节奏和双向交易能力，与 A股现货不一样，回测和复盘都要按对应制度解释。"
+            return (
+                "先确认市场制度边界，再讨论做多还是做空。",
+                explanation,
+                "市场制度不是备注项，而是策略是否可执行的硬边界。",
+                [
+                    "先在规则模块确认市场默认规则和术语。",
+                    "回测时把交易日历、时区、结算规则和市场约束明确写进配置。",
+                    "如果涉及做空、盘前盘后或杠杆，请在策略描述里显式说明。",
+                ],
+                [
+                    {"term": "T+1", "meaning": "当日买入后通常需要下一个交易日才能卖出。"},
+                    {"term": "双向交易", "meaning": "既可以做多，也可以在允许时做空。"},
+                ],
+            )
+        if topic == "strategy_design":
+            return (
+                "先把入场、出场、风控三件事讲完整，再生成策略版本。",
+                "好的策略描述不是一句“金叉买入”，而是要讲清楚：什么环境下看这个信号、满足什么条件才进场、什么情况下退出、一次最多承担多大风险。平台最适合帮你把这种口语经验整理成结构化策略。",
+                "如果你的描述只讲买点，不讲卖点和风控，后面回测出来的结果大多不可用。",
+                [
+                    "先用一句话写清楚你想做的市场、周期和主要场景。",
+                    "再补充入场条件、退出条件、仓位和风险控制。",
+                    "最后在策略工坊生成策略版本，并保存成便于比较的版本标签。",
+                ],
+                [
+                    {"term": "入场条件", "meaning": "满足哪些信号和环境后才允许开仓。"},
+                    {"term": "退出条件", "meaning": "止盈、止损或趋势转弱时如何离场。"},
+                ],
+            )
+        first_step = "先去指标设置看一两个最常见指标。"
+        if experience_level not in {"beginner", "newbie"}:
+            first_step = "先用最小可验证假设跑一轮实验。"
+        return (
+            "先建立最小研究闭环，再逐步增加复杂度。",
+            "对刚接触交易和量化的人来说，最重要的不是一次学完所有概念，而是先跑通“理解一个概念、写出一条规则、做一次验证、复盘一次结果”的闭环。平台就是按这个顺序设计的。",
+            "只要你能稳定跑通这个闭环，后面无论加指标、换市场还是接更复杂的数据，都会更稳。",
+            [
+                first_step,
+                "再去策略工坊写一条能用自然语言讲清楚的简单规则。",
+                "接着用回测中心验证，再到交易复盘总结哪里需要修正。",
+            ],
+            [
+                {"term": "研究闭环", "meaning": "从想法、验证到修正的完整循环。"},
+                {"term": "最小可验证假设", "meaning": "先用最简单、最明确的一版规则验证方向。"},
+            ],
+        )
+
+    def _risk_note_for_market(self, market_scope: str) -> str:
+        if market_scope == "cn_equity":
+            return "A股现货研究默认按买入后卖出的单向交易理解；如果涉及融券、期权或期货，需要单独声明交易制度。"
+        if market_scope == "crypto":
+            return "加密货币默认按 7x24 连续交易理解，频率更高时更要注意手续费、滑点和样本噪声。"
+        if market_scope == "us_equity":
+            return "美股默认允许同日买卖，但盘前盘后、时区和财报窗口会显著改变成交环境。"
+        return "不同市场的时区、交易日历和波动特征差异很大，先确认制度边界再扩展策略。"
 
 
 class TradeUploadService:
@@ -1270,6 +1583,7 @@ class AdminService:
         session_repository: UserSessionRepository,
         auth_event_repository: AuthEventRepository,
         audit_log_repository: AdminAuditLogRepository,
+        app_log_repository: ApplicationLogRepository,
         strategy_repository: StrategyRepository,
         task_repository: TaskRepository,
     ) -> None:
@@ -1277,6 +1591,7 @@ class AdminService:
         self._session_repository = session_repository
         self._auth_event_repository = auth_event_repository
         self._audit_log_repository = audit_log_repository
+        self._app_log_repository = app_log_repository
         self._strategy_repository = strategy_repository
         self._task_repository = task_repository
 
@@ -1302,6 +1617,7 @@ class AdminService:
         ]
         security_events = self._auth_event_repository.list_recent(limit=200)
         audit_logs = self._audit_log_repository.list_recent(limit=50)
+        app_logs = self._app_log_repository.list_recent(limit=200)
         cutoff_24h = now - timedelta(hours=24)
         failed_logins_24h = len(
             [
@@ -1310,6 +1626,13 @@ class AdminService:
                 if item.event_type == "login"
                 and item.outcome in {"failed", "blocked"}
                 and item.created_at >= cutoff_24h
+            ]
+        )
+        app_errors_24h = len(
+            [
+                item
+                for item in app_logs
+                if item.level == "error" and item.created_at >= cutoff_24h
             ]
         )
 
@@ -1326,6 +1649,7 @@ class AdminService:
                 "failed_tasks": len(failed_tasks),
                 "new_users_7d": len([item for item in users if item.created_at >= cutoff_7d]),
                 "failed_logins_24h": failed_logins_24h,
+                "app_errors_24h": app_errors_24h,
             },
             "role_distribution": self._build_distribution(
                 [item.role for item in users],
@@ -1359,6 +1683,7 @@ class AdminService:
             "snapshot_states": self._collect_snapshot_states(backtests),
             "recent_audit_logs": self.list_audit_logs(limit=8),
             "recent_security_events": self.list_security_events(limit=8),
+            "recent_app_logs": self.list_app_logs(limit=8),
             "governance_notes": self._build_governance_notes(
                 users=len(users),
                 running_tasks=len(running_tasks),
@@ -1366,6 +1691,7 @@ class AdminService:
                 coverage_risk_count=len(coverage_risk_snapshots),
                 suspended_users=len([item for item in users if item.status != "active"]),
                 failed_logins_24h=failed_logins_24h,
+                app_errors_24h=app_errors_24h,
                 audit_events=len(audit_logs),
             ),
         }
@@ -1521,6 +1847,24 @@ class AdminService:
                 "created_at": item.created_at.isoformat(),
             }
             for item in self._auth_event_repository.list_recent(limit=limit)
+        ]
+
+    def list_app_logs(self, *, limit: int = 20) -> list[dict[str, Any]]:
+        return [
+            {
+                "log_id": item.log_id,
+                "level": item.level,
+                "source": item.source,
+                "category": item.category,
+                "message": item.message,
+                "request_path": item.request_path,
+                "user_id": item.user_id,
+                "username": item.username,
+                "workspace_id": item.workspace_id,
+                "details": item.details,
+                "created_at": item.created_at.isoformat(),
+            }
+            for item in self._app_log_repository.list_recent(limit=limit)
         ]
 
     def _build_user_rows(
@@ -1710,6 +2054,7 @@ class AdminService:
         coverage_risk_count: int,
         suspended_users: int,
         failed_logins_24h: int,
+        app_errors_24h: int,
         audit_events: int,
     ) -> list[str]:
         notes: list[str] = []
@@ -1725,6 +2070,8 @@ class AdminService:
             notes.append("当前存在停用账户，建议定期复核停用原因并确认是否需要恢复或清理。")
         if failed_logins_24h:
             notes.append("最近 24 小时存在登录失败或阻断记录，建议关注账户安全和登录提示设计。")
+        if app_errors_24h:
+            notes.append("最近 24 小时存在用户侧或服务侧报错记录，建议管理员优先查看应用日志并复核高频异常。")
         if audit_events == 0:
             notes.append("管理员审计日志刚启用，后续应继续沉淀治理动作证据链。")
         if not notes:

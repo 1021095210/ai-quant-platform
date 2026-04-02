@@ -21,6 +21,7 @@
           <a class="nav-link" data-nav href="/workspace">工作台</a>
           <a class="nav-link" data-nav href="/admin">管理后台</a>
           <a class="nav-link" data-nav href="/strategy">策略工坊</a>
+          <a class="nav-link" data-nav href="/mentor">金融导师</a>
           <a class="nav-link" data-nav href="/backtests">回测中心</a>
           <a class="nav-link" data-nav href="/replay">交易复盘</a>
         </nav>
@@ -86,6 +87,10 @@
         <div class="card">
           <span class="mini-label">24h 登录风险</span>
           <strong id="metric-failed-logins" class="metric-value">0</strong>
+        </div>
+        <div class="card">
+          <span class="mini-label">24h 应用报错</span>
+          <strong id="metric-app-errors" class="metric-value">0</strong>
         </div>
       </section>
 
@@ -177,6 +182,14 @@
           </div>
           <div id="admin-security-events" class="list empty-state">暂无安全事件。</div>
         </section>
+      </section>
+
+      <section class="card" style="margin-top: 22px">
+        <div class="panel-header">
+          <h3>用户报错与应用日志</h3>
+          <span class="muted-note">这里集中查看前端页面报错、接口失败和服务端异常，便于管理员定位真实使用中的问题。</span>
+        </div>
+        <div id="admin-app-logs" class="list empty-state">暂无应用报错记录。</div>
       </section>
     </div>
 
