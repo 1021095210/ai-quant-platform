@@ -375,11 +375,15 @@ console.log('bootstrapped');
         self.assertIn("金融导师", mentor_html)
         self.assertIn('id="mentor-topic-list"', mentor_html)
         self.assertIn('id="mentor-ask-btn" class="btn disabled" disabled', mentor_html)
+        self.assertIn('id="mentor-followup-btn" class="btn disabled" disabled', mentor_html)
         self.assertIn("/api/v1/mentor/topics", mentor_js)
         self.assertIn("/api/v1/mentor/ask", mentor_js)
         self.assertIn("renderTopics", mentor_js)
+        self.assertIn("conversation_history", mentor_js)
+        self.assertIn("renderConversation", mentor_js)
         self.assertIn("导师判断", mentor_html)
         self.assertIn("建议下一步", mentor_html)
+        self.assertIn("继续追问导师", mentor_html)
 
     def test_admin_and_shared_assets_include_error_logging_hooks(self) -> None:
         admin_html_path = (

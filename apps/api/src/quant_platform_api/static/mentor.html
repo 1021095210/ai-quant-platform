@@ -106,6 +106,23 @@
           <div id="mentor-actions" class="list empty-state">导师会根据你的问题给出具体动作建议。</div>
         </section>
       </section>
+
+      <section class="card" style="margin-top: 22px">
+        <div class="panel-header">
+          <h3>继续追问导师</h3>
+          <span class="muted-note">如果第一次回答还不够清楚，可以在这里继续追问“再解释一下”或“举个例子”。</span>
+        </div>
+        <div id="mentor-conversation" class="mentor-conversation empty-state">先完成一次提问后，这里会保留你和导师的对话。</div>
+        <div class="form-grid" style="margin-top: 16px">
+          <label class="field">
+            <span>继续追问</span>
+            <textarea id="mentor-followup" placeholder="例如：还是不太明白，能不能用 A股新手的例子再解释一下？"></textarea>
+          </label>
+          <div class="actions">
+            <button id="mentor-followup-btn" class="btn disabled" disabled>继续追问导师</button>
+          </div>
+        </div>
+      </section>
     </div>
 
     <script type="module" src="/assets/mentor.js"></script>

@@ -1079,22 +1079,31 @@ class MentorService:
         if not question:
             raise TaskExecutionError("INVALID_ARGUMENT", "question is required")
 
-        normalized = question.lower()
-        topic = self._classify_topic(question, normalized)
-        market_scope = request.market_scope or self._infer_market_scope(question)
+        effective_question = self._resolve_effective_question(
+            question=question,
+            conversation_history=request.conversation_history,
+        )
+        normalized = effective_question.lower()
+        topic = self._classify_topic(effective_question, normalized)
+        market_scope = request.market_scope or self._infer_market_scope(effective_question)
+        is_follow_up = bool(request.conversation_history)
         headline, explanation, why_it_matters, action_plan, glossary = self._build_topic_answer(
             topic=topic,
             market_scope=market_scope,
             experience_level=request.experience_level,
+            is_follow_up=is_follow_up,
+            original_question=question,
         )
         return {
             "mentor_name": "金融导师",
             "mentor_role": "多市场实战导师",
             "question": question,
+            "effective_question": effective_question,
             "topic": topic,
             "experience_level": request.experience_level,
             "market_scope": market_scope,
             "current_module": request.current_module,
+            "is_follow_up": is_follow_up,
             "headline": headline,
             "answer": explanation,
             "why_it_matters": why_it_matters,
@@ -1104,11 +1113,25 @@ class MentorService:
             "risk_note": self._risk_note_for_market(market_scope),
         }
 
+    def _resolve_effective_question(
+        self,
+        *,
+        question: str,
+        conversation_history: list[dict[str, str]],
+    ) -> str:
+        follow_up_markers = ("再解释", "详细", "举个例子", "还是不懂", "不明白", "进一步", "再展开", "具体一点")
+        if not conversation_history or not any(marker in question for marker in follow_up_markers):
+            return question
+        for item in reversed(conversation_history):
+            if item.get("role") == "user" and item.get("content"):
+                return f"{item['content']}。补充问题：{question}"
+        return question
+
     def _classify_topic(self, question: str, normalized: str) -> str:
-        if any(keyword in question for keyword in ("均线", "MACD", "RSI", "KDJ", "布林", "指标")):
-            return "indicator_basics"
         if any(keyword in question for keyword in ("回测", "胜率", "回撤", "盈亏比", "净值")):
             return "backtest_reading"
+        if any(keyword in question for keyword in ("均线", "MACD", "RSI", "KDJ", "布林", "指标")):
+            return "indicator_basics"
         if any(keyword in question for keyword in ("平台", "模块", "怎么用", "工作台", "流程")):
             return "platform_workflow"
         if any(keyword in question for keyword in ("风控", "止损", "仓位", "亏损")):
@@ -1174,11 +1197,14 @@ class MentorService:
         topic: str,
         market_scope: str,
         experience_level: str,
+        is_follow_up: bool,
+        original_question: str,
     ) -> tuple[str, str, str, list[str], list[dict[str, str]]]:
         if topic == "indicator_basics":
+            intro = "我顺着你刚才的问题，再把指标怎么用讲得更白一点。 " if is_follow_up else ""
             return (
                 "先分清趋势指标、动量指标和波动指标，再决定它们各自负责什么。",
-                "均线更适合看趋势方向，MACD 更适合看趋势和动量是否共振，RSI 更适合观察短期强弱和节奏。新手不要把很多指标叠在一起，而是先选一类趋势指标、一类节奏指标，再看它们是否在同一段行情里给出一致信号。",
+                intro + "均线更适合看趋势方向，MACD 更适合看趋势和动量是否共振，RSI 更适合观察短期强弱和节奏。新手不要把很多指标叠在一起，而是先选一类趋势指标、一类节奏指标，再看它们是否在同一段行情里给出一致信号。",
                 "指标真正的作用是帮助你过滤环境、确认节奏，而不是替你直接按下买卖按钮。",
                 [
                     "先在指标设置里逐个看均线、MACD、RSI 的说明和代码。",
@@ -1191,9 +1217,10 @@ class MentorService:
                 ],
             )
         if topic == "backtest_reading":
+            intro = "针对你这次追问，我把回测结果应该先看什么讲得再具体一点。 " if is_follow_up else ""
             return (
                 "先看最大回撤和交易次数，再看收益率；先确认成交假设，再评价策略好坏。",
-                "很多人只盯累计收益，但真实研究里，更重要的是这个收益是不是建立在合理的回撤、可接受的交易频率和清晰的成交假设上。你应该先看净值曲线是否平稳、回撤是否超过承受范围、交易次数是否太少，以及成交方式、滑点、手续费是否合理。",
+                intro + "很多人只盯累计收益，但真实研究里，更重要的是这个收益是不是建立在合理的回撤、可接受的交易频率和清晰的成交假设上。你应该先看净值曲线是否平稳、回撤是否超过承受范围、交易次数是否太少，以及成交方式、滑点、手续费是否合理。",
                 "如果成交方式、滑点或市场约束写得含糊，哪怕收益看起来很好，也不一定代表真实可执行结果。",
                 [
                     "先看净值曲线和最大回撤，判断策略波动是否可接受。",
@@ -1206,9 +1233,10 @@ class MentorService:
                 ],
             )
         if topic == "platform_workflow":
+            intro = "你如果还是觉得平台顺序不清楚，就先记住这一条主线。 " if is_follow_up else ""
             return (
                 "正确顺序不是先回测，而是先讲清楚规则，再去验证规则。",
-                "成熟的研究流程通常是：先理解指标和市场规则，再把经验写成策略描述，接着在策略工坊生成结构化策略，之后在回测中心用明确配置验证，最后把真实交易或模拟结果带到复盘模块做修正。",
+                intro + "成熟的研究流程通常是：先理解指标和市场规则，再把经验写成策略描述，接着在策略工坊生成结构化策略，之后在回测中心用明确配置验证，最后把真实交易或模拟结果带到复盘模块做修正。",
                 "如果顺序反过来，你很容易得到一堆收益数字，却说不清这些数字是怎么来的，也无法稳定复现。",
                 [
                     "第一次使用时，先逛指标设置和规则模块，把常见术语和市场制度看明白。",
@@ -1221,9 +1249,10 @@ class MentorService:
                 ],
             )
         if topic == "risk_management":
+            intro = "你这次是在追问风控细节，我把重点直接收敛到最容易落地的几条。 " if is_follow_up else ""
             return (
                 "先管亏损，再讨论放大收益；风控不是附属项，而是策略本体的一部分。",
-                "新手最容易犯的错误，是先看买点，再补止损和仓位。成熟做法正好相反：先定义单笔最多能亏多少、总回撤能接受多少、是否允许加仓，再决定信号值不值得做。",
+                intro + "新手最容易犯的错误，是先看买点，再补止损和仓位。成熟做法正好相反：先定义单笔最多能亏多少、总回撤能接受多少、是否允许加仓，再决定信号值不值得做。",
                 "没有明确的仓位和止损约束，哪怕信号本身不错，结果也可能因为单笔失控而完全变形。",
                 [
                     "在回测中心先设置最大回撤保护、最大持有 Bar 数和仓位模式。",
@@ -1236,9 +1265,10 @@ class MentorService:
                 ],
             )
         if topic == "trade_review":
+            intro = "如果你是在追问复盘到底该怎么做，我把它再压缩成更实际的话。 " if is_follow_up else ""
             return (
                 "复盘不是回忆过程，而是把真实成交转成下一版规则。",
-                "你真正要看的不是哪一笔赚了，而是哪些交易类型在重复赚钱，哪些错误在重复发生。方向、持仓时长、盈亏分布、入场时间和退出方式，都是下一版策略能直接吸收的线索。",
+                intro + "你真正要看的不是哪一笔赚了，而是哪些交易类型在重复赚钱，哪些错误在重复发生。方向、持仓时长、盈亏分布、入场时间和退出方式，都是下一版策略能直接吸收的线索。",
                 "如果复盘只停留在情绪总结，你会觉得自己学到了很多，但下一次下单时还是重复旧错误。",
                 [
                     "先把真实成交按方向、持仓天数和盈亏大小分组。",
@@ -1252,7 +1282,8 @@ class MentorService:
             )
         if topic == "market_constraints":
             market_name = MARKET_SCOPE_LABELS.get(market_scope, "当前市场")
-            explanation = f"{market_name} 的制度边界会直接决定哪些建议成立。"
+            intro = "我结合你刚才的追问，把市场制度边界说得更直接一点。 " if is_follow_up else ""
+            explanation = intro + f"{market_name} 的制度边界会直接决定哪些建议成立。"
             if market_scope == "cn_equity":
                 explanation += " 对于 A股现货股票，平台默认按“买入后卖出”的单向交易研究，不会把做空当成常规建议；如果你研究的是融资融券、股指期货或期权，需要单独说明。"
             else:
@@ -1272,9 +1303,10 @@ class MentorService:
                 ],
             )
         if topic == "strategy_design":
+            intro = "如果你想让策略描述更容易落地，我建议按这套顺序继续拆。 " if is_follow_up else ""
             return (
                 "先把入场、出场、风控三件事讲完整，再生成策略版本。",
-                "好的策略描述不是一句“金叉买入”，而是要讲清楚：什么环境下看这个信号、满足什么条件才进场、什么情况下退出、一次最多承担多大风险。平台最适合帮你把这种口语经验整理成结构化策略。",
+                intro + "好的策略描述不是一句“金叉买入”，而是要讲清楚：什么环境下看这个信号、满足什么条件才进场、什么情况下退出、一次最多承担多大风险。平台最适合帮你把这种口语经验整理成结构化策略。",
                 "如果你的描述只讲买点，不讲卖点和风控，后面回测出来的结果大多不可用。",
                 [
                     "先用一句话写清楚你想做的市场、周期和主要场景。",
@@ -1286,12 +1318,13 @@ class MentorService:
                     {"term": "退出条件", "meaning": "止盈、止损或趋势转弱时如何离场。"},
                 ],
             )
+        intro = "我沿着你刚才的问题继续补充。 " if is_follow_up else ""
         first_step = "先去指标设置看一两个最常见指标。"
         if experience_level not in {"beginner", "newbie"}:
             first_step = "先用最小可验证假设跑一轮实验。"
         return (
             "先建立最小研究闭环，再逐步增加复杂度。",
-            "对刚接触交易和量化的人来说，最重要的不是一次学完所有概念，而是先跑通“理解一个概念、写出一条规则、做一次验证、复盘一次结果”的闭环。平台就是按这个顺序设计的。",
+            intro + "对刚接触交易和量化的人来说，最重要的不是一次学完所有概念，而是先跑通“理解一个概念、写出一条规则、做一次验证、复盘一次结果”的闭环。平台就是按这个顺序设计的。",
             "只要你能稳定跑通这个闭环，后面无论加指标、换市场还是接更复杂的数据，都会更稳。",
             [
                 first_step,

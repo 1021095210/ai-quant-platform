@@ -184,6 +184,7 @@ class MentorAskRequest(BaseModel):
     experience_level: str = "beginner"
     market_scope: str | None = None
     current_module: str | None = None
+    conversation_history: list[dict[str, str]] = Field(default_factory=list)
 
 
 class ClientErrorReportRequest(BaseModel):

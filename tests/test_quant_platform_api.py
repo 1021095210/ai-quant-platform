@@ -356,6 +356,8 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertIn("金融导师", response.text)
         self.assertIn("先把交易逻辑讲明白，再带你用平台做验证", response.text)
         self.assertIn('id="mentor-ask-btn" class="btn disabled" disabled', response.text)
+        self.assertIn('id="mentor-followup-btn" class="btn disabled" disabled', response.text)
+        self.assertIn("继续追问导师", response.text)
 
     def test_admin_can_login_and_access_workspace(self) -> None:
         client = self._build_client()
@@ -903,6 +905,30 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertIn("A股现货股票", data["answer"])
         self.assertTrue(data["action_plan"])
         self.assertTrue(any(item["path"] == "/rules" for item in data["related_modules"]))
+
+    def test_mentor_followup_uses_conversation_history_for_further_explanation(self) -> None:
+        client = self._build_client()
+        self._login(client)
+
+        response = client.post(
+            "/api/v1/mentor/ask",
+            json={
+                "question": "还是不太明白，能不能再解释一下回测结果应该先看什么？",
+                "experience_level": "beginner",
+                "market_scope": "cn_equity",
+                "current_module": "mentor",
+                "conversation_history": [
+                    {"role": "user", "content": "回测结果里我应该先看哪些指标？"},
+                    {"role": "assistant", "content": "先看最大回撤和交易次数，再看收益率。"},
+                ],
+            },
+        )
+
+        self.assertEqual(200, response.status_code)
+        data = response.json()["data"]
+        self.assertTrue(data["is_follow_up"])
+        self.assertEqual("backtest_reading", data["topic"])
+        self.assertIn("再具体一点", data["answer"])
 
     def test_client_error_reports_are_visible_in_admin_app_logs(self) -> None:
         client = self._build_client()
