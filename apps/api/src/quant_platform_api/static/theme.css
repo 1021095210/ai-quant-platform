@@ -489,6 +489,21 @@ button:hover {
   margin-bottom: 8px;
 }
 
+.history-card {
+  display: grid;
+  gap: 12px;
+}
+
+.history-primary {
+  width: 100%;
+  text-align: left;
+}
+
+.history-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
 .compact-item {
   padding: 14px 16px;
 }
@@ -538,6 +553,10 @@ th {
 .muted-note {
   color: var(--text-soft);
   font-size: 13px;
+}
+
+.compare-note + .compare-note {
+  margin-top: 6px;
 }
 
 .equal-panel {
