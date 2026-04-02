@@ -39,6 +39,12 @@ const nodes = {
   selectedVersion: document.querySelector("#selected-version"),
   latestProvider: document.querySelector("#latest-provider"),
   history: document.querySelector("#backtest-history"),
+  compareStatus: document.querySelector("#backtest-compare-status"),
+  compareHighlights: document.querySelector("#backtest-compare-highlights"),
+  compareHead: document.querySelector("#backtest-compare-head"),
+  compareBody: document.querySelector("#backtest-compare-body"),
+  compareConfigList: document.querySelector("#backtest-compare-config-list"),
+  compareSnapshotList: document.querySelector("#backtest-compare-snapshot-list"),
   metrics: document.querySelector("#backtest-metrics"),
   sourcePills: document.querySelector("#backtest-source-pills"),
   configList: document.querySelector("#backtest-config-list"),
@@ -48,6 +54,8 @@ const nodes = {
   strategyPython: document.querySelector("#backtest-strategy-python"),
   tradeTableBody: document.querySelector("#trade-table-body"),
 };
+
+const compareSelection = new Set();
 
 async function loadProjects() {
   const payload = await api("/api/v1/strategies/projects");
@@ -163,17 +171,29 @@ async function refreshHistory() {
   const items = payload.data.items;
   if (!items.length) {
     nodes.history.textContent = "暂无回测记录。";
+    renderEmptyComparison();
     return;
   }
   nodes.history.innerHTML = items
     .map(
       (item) => `
-        <button class="list-item" data-backtest-id="${item.backtest_run_id}" style="text-align:left">
-          <strong>${item.strategy_title || item.market}</strong>
-          <div class="muted-note">${item.market} · ${formatDateTime(item.created_at)}</div>
-          <div class="muted-note">收益 ${item.metrics.total_return_pct ?? 0}% · 交易 ${item.metrics.trade_count ?? 0} 次</div>
-          <div class="muted-note">快照 ${item.data_snapshot_summary?.dataset_snapshot_ref || "未标记"} · 来源 ${item.data_source.provider || "未知"}</div>
-        </button>
+        <div class="list-item history-card">
+          <button class="history-primary" data-backtest-id="${item.backtest_run_id}" style="text-align:left">
+            <strong>${item.strategy_title || item.market}</strong>
+            <div class="muted-note">${item.market} · ${formatDateTime(item.created_at)}</div>
+            <div class="muted-note">收益 ${item.metrics.total_return_pct ?? 0}% · 交易 ${item.metrics.trade_count ?? 0} 次</div>
+            <div class="muted-note">快照 ${item.data_snapshot_summary?.dataset_snapshot_ref || "未标记"} · 来源 ${item.data_source.provider || "未知"}</div>
+          </button>
+          <div class="history-actions">
+            <button
+              class="btn ${compareSelection.has(item.backtest_run_id) ? "secondary" : "ghost"} history-compare-toggle"
+              data-compare-id="${item.backtest_run_id}"
+              type="button"
+            >
+              ${compareSelection.has(item.backtest_run_id) ? "已加入对比" : "加入对比"}
+            </button>
+          </div>
+        </div>
       `,
     )
     .join("");
@@ -186,6 +206,10 @@ async function refreshHistory() {
       }),
     );
   });
+  nodes.history.querySelectorAll("[data-compare-id]").forEach((node) => {
+    node.addEventListener("click", () => toggleCompareSelection(node.dataset.compareId));
+  });
+  syncCompareStatus();
 }
 
 function renderBacktestDetail(data) {
@@ -320,10 +344,171 @@ function renderAssumptionList(config, summary) {
     .join("");
 }
 
+function toggleCompareSelection(runId) {
+  if (!runId) {
+    return;
+  }
+  if (compareSelection.has(runId)) {
+    compareSelection.delete(runId);
+    refreshHistory().catch((error) => setStatus(error.message));
+    return;
+  }
+  if (compareSelection.size >= 4) {
+    setStatus("一次最多对比 4 条回测记录。");
+    return;
+  }
+  compareSelection.add(runId);
+  refreshHistory().catch((error) => setStatus(error.message));
+}
+
+function syncCompareStatus() {
+  const count = compareSelection.size;
+  if (count < 2) {
+    nodes.compareStatus.textContent = `已选择 ${count} 条记录。请至少选择 2 条回测后再生成对比。`;
+    return;
+  }
+  nodes.compareStatus.textContent = `已选择 ${count} 条记录，可以生成实验 / 回测对比。基线将按当前选择顺序的第一条记录处理。`;
+}
+
+async function runComparison() {
+  if (compareSelection.size < 2) {
+    throw new Error("请先选择至少 2 条回测记录。");
+  }
+  const search = new URLSearchParams();
+  [...compareSelection].forEach((runId) => search.append("run_ids", runId));
+  const payload = await api(`/api/v1/backtests/compare?${search.toString()}`);
+  renderComparison(payload.data);
+  setStatus("回测对比已生成，可以继续调整执行规则后重复比较。");
+}
+
+function clearComparisonSelection() {
+  compareSelection.clear();
+  renderEmptyComparison();
+  refreshHistory().catch((error) => setStatus(error.message));
+}
+
+function renderComparison(data) {
+  renderCompareHighlights(data.highlights || []);
+  renderCompareTable(data.items || [], data.metric_rows || []);
+  renderCompareDiffList(nodes.compareConfigList, data.config_diffs || []);
+  renderCompareDiffList(nodes.compareSnapshotList, data.snapshot_diffs || []);
+}
+
+function renderCompareHighlights(highlights) {
+  nodes.compareHighlights.innerHTML = highlights.length
+    ? highlights.map((item) => `<span class="pill">${item}</span>`).join("")
+    : '<span class="pill">当前对比中没有可提炼的高亮结论。</span>';
+}
+
+function renderCompareTable(items, rows) {
+  if (!items.length || !rows.length) {
+    renderEmptyComparison();
+    return;
+  }
+  nodes.compareHead.innerHTML = `
+    <tr>
+      <th>指标</th>
+      ${items
+        .map(
+          (item, index) =>
+            `<th>${index === 0 ? "基线" : "对比项"}<div class="muted-note">${item.display_title}<br />${formatDateTime(item.created_at)}</div></th>`,
+        )
+        .join("")}
+    </tr>
+  `;
+  nodes.compareBody.innerHTML = rows
+    .map(
+      (row) => `
+        <tr>
+          <td><strong>${row.label}</strong></td>
+          ${row.values
+            .map(
+              (item, index) => `
+                <td>
+                  <div>${formatCompareValue(item.value)}</div>
+                  ${
+                    index === 0 || item.delta_vs_baseline === null
+                      ? '<div class="muted-note">基线</div>'
+                      : `<div class="muted-note ${item.delta_vs_baseline >= 0 ? "positive" : "negative"}">Δ ${formatCompareDelta(item.delta_vs_baseline)}</div>`
+                  }
+                </td>
+              `,
+            )
+            .join("")}
+        </tr>
+      `,
+    )
+    .join("");
+}
+
+function renderCompareDiffList(target, rows) {
+  if (!rows.length) {
+    target.textContent = "当前没有差异。";
+    return;
+  }
+  target.innerHTML = rows
+    .map(
+      (row) => `
+        <div class="list-item compact-item">
+          <strong>${row.label}</strong>
+          ${row.values
+            .map(
+              (item, index) => `
+                <div class="muted-note compare-note">
+                  ${index === 0 ? "基线" : "对比项"} · ${item.display_title}：${formatCompareValue(item.value)}
+                </div>
+              `,
+            )
+            .join("")}
+        </div>
+      `,
+    )
+    .join("");
+}
+
+function renderEmptyComparison() {
+  nodes.compareHighlights.innerHTML =
+    '<span class="pill">等待选择至少 2 条回测记录后生成对比。</span>';
+  nodes.compareHead.innerHTML = `
+    <tr>
+      <th>指标</th>
+      <th>等待对比</th>
+    </tr>
+  `;
+  nodes.compareBody.innerHTML = `
+    <tr>
+      <td colspan="2" class="empty-state">从回测历史中加入记录后再生成对比。</td>
+    </tr>
+  `;
+  nodes.compareConfigList.textContent = "等待对比。";
+  nodes.compareSnapshotList.textContent = "等待对比。";
+}
+
+function formatCompareValue(value) {
+  if (value === null || value === undefined || value === "") {
+    return "未记录";
+  }
+  if (typeof value === "number") {
+    return Number.isInteger(value) ? `${value}` : value.toFixed(2);
+  }
+  return `${value}`;
+}
+
+function formatCompareDelta(value) {
+  const sign = value > 0 ? "+" : "";
+  return `${sign}${formatCompareValue(value)}`;
+}
+
 nodes.projectSelect.addEventListener("change", applySelectedProjectDefaults);
 document.querySelector("#run-backtest-btn").addEventListener("click", handle(runBacktest));
 document
   .querySelector("#refresh-backtests-btn")
   .addEventListener("click", handle(refreshHistory));
+document
+  .querySelector("#run-backtest-compare-btn")
+  .addEventListener("click", handle(runComparison));
+document
+  .querySelector("#clear-backtest-compare-btn")
+  .addEventListener("click", handle(async () => clearComparisonSelection()));
 
 Promise.all([loadProjects(), refreshHistory()]).catch((error) => setStatus(error.message));
