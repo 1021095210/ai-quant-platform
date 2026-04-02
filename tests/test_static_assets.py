@@ -53,6 +53,12 @@ class StaticAssetTests(unittest.TestCase):
     def test_shared_js_has_valid_module_syntax(self) -> None:
         self._assert_asset_has_valid_module_syntax("shared.js")
 
+    def test_strategy_js_has_valid_module_syntax(self) -> None:
+        self._assert_asset_has_valid_module_syntax("strategy.js")
+
+    def test_indicators_js_has_valid_module_syntax(self) -> None:
+        self._assert_asset_has_valid_module_syntax("indicators.js")
+
     def test_rules_js_can_bootstrap_with_stubbed_dom(self) -> None:
         node = shutil.which("node")
         if node is None:
@@ -191,6 +197,57 @@ console.log('bootstrapped');
         self.assertIn('data-delete-id="${item.backtest_run_id}"', source)
         self.assertIn('method: "DELETE"', source)
         self.assertIn("删除记录", source)
+
+    def test_strategy_and_indicator_assets_use_progressive_action_states(self) -> None:
+        strategy_html_path = (
+            WORKSPACE_ROOT
+            / "apps"
+            / "api"
+            / "src"
+            / "quant_platform_api"
+            / "static"
+            / "strategy.html"
+        )
+        strategy_js_path = (
+            WORKSPACE_ROOT
+            / "apps"
+            / "api"
+            / "src"
+            / "quant_platform_api"
+            / "static"
+            / "strategy.js"
+        )
+        indicators_html_path = (
+            WORKSPACE_ROOT
+            / "apps"
+            / "api"
+            / "src"
+            / "quant_platform_api"
+            / "static"
+            / "indicators.html"
+        )
+        indicators_js_path = (
+            WORKSPACE_ROOT
+            / "apps"
+            / "api"
+            / "src"
+            / "quant_platform_api"
+            / "static"
+            / "indicators.js"
+        )
+
+        strategy_html = strategy_html_path.read_text(encoding="utf-8")
+        strategy_js = strategy_js_path.read_text(encoding="utf-8")
+        indicators_html = indicators_html_path.read_text(encoding="utf-8")
+        indicators_js = indicators_js_path.read_text(encoding="utf-8")
+
+        self.assertIn('id="project-version-label"', strategy_html)
+        self.assertIn('id="save-project-btn" class="btn disabled" disabled', strategy_html)
+        self.assertIn('id="go-backtests-link" class="btn disabled"', strategy_html)
+        self.assertIn("syncStrategyActionState", strategy_js)
+        self.assertIn('version_label: nodes.versionLabel.value', strategy_js)
+        self.assertIn('id="save-custom-indicator-btn" class="btn disabled" disabled', indicators_html)
+        self.assertIn("syncIndicatorActionState", indicators_js)
 
     def test_replay_assets_include_ready_state_and_clear_side_language(self) -> None:
         replay_js_path = (
