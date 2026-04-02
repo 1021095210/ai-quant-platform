@@ -1006,16 +1006,63 @@ class TradeUploadService:
         source_file_name: str,
         raw_text: str,
         *,
+        upload_kind: str = "csv",
+        metadata: dict[str, Any] | None = None,
         user_id: str,
         workspace_id: str,
     ) -> TradeUploadRecord:
-        detected_columns = self._detect_columns(raw_text)
+        detected_columns = self._detect_columns(raw_text) if upload_kind == "csv" else []
         record = TradeUploadRecord(
             user_id=user_id,
             workspace_id=workspace_id,
             source_file_name=source_file_name,
             raw_text=raw_text,
+            upload_kind=upload_kind,
             detected_columns=detected_columns,
+            metadata=metadata or {},
+        )
+        return self._repository.create(record)
+
+    def create_manual_upload(
+        self,
+        *,
+        source_file_name: str,
+        upload_kind: str,
+        records: list[dict[str, Any]],
+        metadata: dict[str, Any] | None = None,
+        user_id: str,
+        workspace_id: str,
+    ) -> TradeUploadRecord:
+        parsed_records = [
+            TradeRecordItem(
+                trade_id=f"trade_{index + 1:03d}",
+                symbol=item["symbol"],
+                side="short"
+                if str(item.get("side", "long")).lower() in {"short", "sell", "做空"}
+                else "long",
+                entry_time=item["entry_time"],
+                exit_time=item.get("exit_time"),
+                pnl=float(item.get("pnl", 0.0)),
+            )
+            for index, item in enumerate(records)
+        ]
+        record = TradeUploadRecord(
+            user_id=user_id,
+            workspace_id=workspace_id,
+            source_file_name=source_file_name,
+            raw_text=json.dumps(records, ensure_ascii=False),
+            upload_kind=upload_kind,
+            status="parsed",
+            detected_columns=["symbol", "side", "entry_time", "exit_time", "pnl"],
+            column_mapping={
+                "symbol": "symbol",
+                "side": "side",
+                "entry_time": "entry_time",
+                "exit_time": "exit_time",
+                "pnl": "pnl",
+            },
+            metadata=metadata or {},
+            records=parsed_records,
         )
         return self._repository.create(record)
 
@@ -2197,34 +2244,13 @@ def build_replay_result(
                 }
             )
         if not has_side_comparison:
-            suggestion_rules.append(
-                {
-                    "title": "优化单一方向入场过滤",
-                    "description": (
-                        f"当前样本全部为{best_side_label}，暂时不能做方向对比。"
-                        "建议优先检查入场过滤、止损阈值和最长持有时间，"
-                        "例如加入成交量放大、均线同向或前一交易日强弱确认后再进场。"
-                    ),
-                    "dsl_patch": {
-                        "filters": {
-                            "volume_confirmation": {
-                                "enabled": True,
-                                "indicator": "volume_ratio",
-                                "operator": ">=",
-                                "value": 1.2,
-                            },
-                            "trend_confirmation": {
-                                "enabled": True,
-                                "timeframe": "1d",
-                                "rule": "only_trade_with_primary_trend",
-                            },
-                        },
-                        "risk": {
-                            "stop_loss_pct": -0.02,
-                            "max_holding_bars": 8,
-                        },
-                    },
-                }
+            suggestion_rules.extend(
+                _build_single_side_suggestions(
+                    side=best_side[0],
+                    side_label=best_side_label,
+                    market=replay_market,
+                    stats=best_side[1],
+                )
             )
         if loss_records and abs(avg_loss) > avg_win:
             suggestion_rules.append(
@@ -2388,6 +2414,149 @@ def _build_side_optimization_patch(
             }
         },
     }
+
+
+def _build_single_side_suggestions(
+    *,
+    side: str,
+    side_label: str,
+    market: str,
+    stats: dict[str, float],
+) -> list[dict[str, Any]]:
+    if market == "cn_a_share":
+        return [
+            {
+                "title": "只在日线趋势同向时入场",
+                "description": (
+                    f"当前样本全部为{side_label}，共 {int(stats['count'])} 笔。"
+                    "A 股单方向策略先不要急着扩方向，建议只在日线 20 均线向上、"
+                    "且前一交易日收盘仍站在 10 日均线之上时才允许开仓。"
+                ),
+                "dsl_patch": {
+                    "filters": {
+                        "trend_confirmation": {
+                            "enabled": True,
+                            "timeframe": "1d",
+                            "rules": [
+                                "sma_20_slope_positive",
+                                "previous_close_above_sma_10",
+                            ],
+                        }
+                    }
+                },
+            },
+            {
+                "title": "加入量能和弱开过滤",
+                "description": (
+                    "A 股里单方向策略常见问题是缩量追涨和弱开承接不足。"
+                    "建议只在量比不低于 1.2，且开盘不弱于前收 0.5% 以上时入场，"
+                    "把弱开、无量的信号先过滤掉。"
+                ),
+                "dsl_patch": {
+                    "filters": {
+                        "volume_confirmation": {
+                            "enabled": True,
+                            "indicator": "volume_ratio",
+                            "operator": ">=",
+                            "value": 1.2,
+                        },
+                        "weak_open_filter": {
+                            "enabled": True,
+                            "min_open_vs_prev_close_pct": -0.005,
+                        },
+                    }
+                },
+            },
+            {
+                "title": "收紧止损并缩短持有周期",
+                "description": (
+                    "A 股单方向样本更适合先把亏损截断。"
+                    "建议先把止损收紧到 2%，最长持有缩到 8 根 K 线，"
+                    "同时把止盈先收在 6% 左右，再用更多样本验证是否需要放宽。"
+                ),
+                "dsl_patch": {
+                    "risk": {
+                        "stop_loss_pct": -0.02,
+                        "take_profit_pct": 0.06,
+                        "max_holding_bars": 8,
+                    }
+                },
+            },
+        ]
+    if market == "crypto":
+        return [
+            {
+                "title": "只在更高周期趋势一致时追随动量",
+                "description": (
+                    f"当前样本全部为{side_label}，更适合先做顺势约束。"
+                    "建议只有在 1 小时趋势与 15 分钟入场信号同向时才开仓，"
+                    "避免在震荡区间里反复追单。"
+                ),
+                "dsl_patch": {
+                    "filters": {
+                        "trend_confirmation": {
+                            "enabled": True,
+                            "entry_timeframe": "15m",
+                            "context_timeframe": "1h",
+                            "rule": "only_trade_with_higher_timeframe_trend",
+                        }
+                    }
+                },
+            },
+            {
+                "title": "增加波动率过滤和更短的保护止损",
+                "description": (
+                    "加密货币 7x24 波动大，单方向样本容易被突然扩大的波动吞没。"
+                    "建议加入 ATR 或振幅过滤，并把保护止损先收紧到 1.5%，"
+                    "同时把最长持有时间缩到 24 根 15 分钟 K 线。"
+                ),
+                "dsl_patch": {
+                    "filters": {
+                        "volatility_filter": {
+                            "enabled": True,
+                            "indicator": "atr_pct",
+                            "operator": "<=",
+                            "value": 0.03,
+                        }
+                    },
+                    "risk": {
+                        "stop_loss_pct": -0.015,
+                        "max_holding_bars": 24,
+                    },
+                },
+            },
+        ]
+    return [
+        {
+            "title": "先做趋势确认再开仓",
+            "description": (
+                f"当前样本全部为{side_label}，暂时不能做方向对比。"
+                "建议先加更大周期趋势确认，再决定是否保留现有入场信号。"
+            ),
+            "dsl_patch": {
+                "filters": {
+                    "trend_confirmation": {
+                        "enabled": True,
+                        "timeframe": "1d",
+                        "rule": "only_trade_with_primary_trend",
+                    }
+                }
+            },
+        },
+        {
+            "title": "收紧风控后继续积累样本",
+            "description": (
+                "当前更适合先把止损、止盈和最长持有周期收紧，"
+                "再继续积累更多同类交易记录。"
+            ),
+            "dsl_patch": {
+                "risk": {
+                    "stop_loss_pct": -0.02,
+                    "max_holding_bars": 8,
+                }
+            },
+        },
+    ]
 
 
 def _render_strategy_python(
