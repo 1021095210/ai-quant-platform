@@ -294,6 +294,27 @@
           <div class="muted-note">先看时间区间、区间收益和净值波动，再往下看配置摘要和执行说明。</div>
           <div id="equity-sparkline" class="sparkline" style="margin-top: 18px"></div>
         </section>
+        <section class="card muted" style="margin-top: 18px">
+          <div class="panel-header">
+            <h4>成交明细</h4>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>入场</th>
+                  <th>出场</th>
+                  <th>方向</th>
+                  <th>收益</th>
+                  <th>原因</th>
+                </tr>
+              </thead>
+              <tbody id="trade-table-body">
+                <tr><td colspan="5" class="empty-state">等待回测。</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
         <div id="backtest-source-pills" class="pill-row" style="margin-top: 18px"></div>
         <section class="card muted" style="margin-top: 18px">
           <div class="panel-header">
@@ -313,35 +334,12 @@
           </div>
           <div id="backtest-snapshot-list" class="list empty-state">等待回测。</div>
         </section>
-        <div class="grid two" style="margin-top: 18px">
-          <section class="card muted">
-            <div class="panel-header">
-              <h4>策略 Python</h4>
-            </div>
-            <pre id="backtest-strategy-python" class="code-block">等待回测。</pre>
-          </section>
-          <section class="card muted">
-            <div class="panel-header">
-              <h4>成交明细</h4>
-            </div>
-            <div class="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>入场</th>
-                    <th>出场</th>
-                    <th>方向</th>
-                    <th>收益</th>
-                    <th>原因</th>
-                  </tr>
-                </thead>
-                <tbody id="trade-table-body">
-                  <tr><td colspan="5" class="empty-state">等待回测。</td></tr>
-                </tbody>
-              </table>
-            </div>
-          </section>
-        </div>
+        <section class="card muted" style="margin-top: 18px">
+          <div class="panel-header">
+            <h4>策略 Python</h4>
+          </div>
+          <pre id="backtest-strategy-python" class="code-block">等待回测。</pre>
+        </section>
       </section>
 
       <section class="card" style="margin-top: 22px">
