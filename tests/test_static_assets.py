@@ -50,6 +50,9 @@ class StaticAssetTests(unittest.TestCase):
     def test_replay_js_has_valid_module_syntax(self) -> None:
         self._assert_asset_has_valid_module_syntax("replay.js")
 
+    def test_shared_js_has_valid_module_syntax(self) -> None:
+        self._assert_asset_has_valid_module_syntax("shared.js")
+
     def test_rules_js_can_bootstrap_with_stubbed_dom(self) -> None:
         node = shutil.which("node")
         if node is None:
@@ -176,6 +179,14 @@ console.log('bootstrapped');
         self.assertIn('const compareSelection = new Set();', source)
         self.assertIn("/api/v1/backtests/compare?", source)
         self.assertIn("renderCompareTable", source)
+        self.assertIn("formatSettlementPolicyLabel", source)
+        self.assertIn("formatAdjustmentModeLabel", source)
+        self.assertIn('class="history-meta-grid"', source)
+        self.assertIn("结算与卖出", source)
+        self.assertIn("价格口径", source)
+        self.assertIn("数据快照", source)
+        self.assertIn("T+1，当日买入后需次日才能卖出", source)
+        self.assertIn("未设置价格口径", source)
 
     def test_replay_assets_include_ready_state_and_clear_side_language(self) -> None:
         replay_js_path = (
@@ -210,10 +221,15 @@ console.log('bootstrapped');
         services_source = services_path.read_text(encoding="utf-8")
 
         self.assertIn("syncReplayActionState", replay_js_source)
+        self.assertIn("uploadScreenshotTrade", replay_js_source)
+        self.assertIn("uploadManualTrades", replay_js_source)
         self.assertIn('classList.toggle("primary"', replay_js_source)
         self.assertIn('disabled>运行 AI 复盘</button>', replay_html_source)
+        self.assertIn("成交截图", replay_html_source)
+        self.assertIn("手动录入", replay_html_source)
         self.assertIn('return "做空交易" if side == "short" else "做多交易"', services_source)
         self.assertIn('f"{best_side_label}的累计盈亏和整体表现当前更优"', services_source)
+        self.assertIn("def _build_single_side_suggestions(", services_source)
 
 
 if __name__ == "__main__":
