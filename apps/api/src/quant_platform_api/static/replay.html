@@ -55,6 +55,7 @@
               <button id="source-mode-screenshot" class="btn ghost source-mode-btn" type="button">成交截图</button>
               <button id="source-mode-manual" class="btn ghost source-mode-btn" type="button">手动录入</button>
             </div>
+            <div id="source-mode-intro" class="muted-note">适合直接上传券商导出的 CSV，或把 CSV 内容粘贴进来后再解析。</div>
 
             <div id="source-panel-csv" class="source-panel">
               <label class="field">
@@ -69,10 +70,12 @@
 510300.SH,long,2024-05-06T09:30:00Z,2024-05-14T15:00:00Z,1300
 510300.SH,long,2024-06-03T09:30:00Z,2024-06-11T15:00:00Z,-900</textarea>
               </label>
+              <div class="actions">
+                <button id="upload-trades-btn" class="btn disabled" disabled>上传并解析</button>
+              </div>
             </div>
 
             <div id="source-panel-screenshot" class="source-panel" hidden>
-              <div class="muted-note">适合只拿到券商成交截图、聊天记录截图或软件成交明细截图时使用。当前需要你同时补齐关键字段，平台先按结构化记录复盘。</div>
               <label class="field">
                 <span>成交截图</span>
                 <input id="trade-screenshot-file" type="file" accept="image/*" />
@@ -119,10 +122,12 @@
                 <span>补充说明</span>
                 <textarea id="trade-screenshot-notes" placeholder="如：来自某券商当日成交截图、手续费已含在盈亏里等"></textarea>
               </label>
+              <div class="actions">
+                <button id="upload-screenshot-btn" class="btn disabled" type="button" disabled>登记截图并生成记录</button>
+              </div>
             </div>
 
             <div id="source-panel-manual" class="source-panel" hidden>
-              <div class="muted-note">适合没有交割单文件时，直接补录股票代码、买卖日期、方向和盈亏。可以连续录入多笔再一起复盘。</div>
               <div class="form-grid two">
                 <label class="field">
                   <span>标的代码</span>
@@ -160,12 +165,12 @@
                 <button id="add-manual-trade-btn" class="btn disabled" type="button" disabled>加入手动记录</button>
               </div>
               <div id="manual-trade-list" class="list empty-state">尚未加入手动记录。</div>
+              <div class="actions">
+                <button id="upload-manual-btn" class="btn disabled" type="button" disabled>提交手动记录</button>
+              </div>
             </div>
 
             <div class="actions">
-              <button id="upload-trades-btn" class="btn disabled" disabled>上传并解析</button>
-              <button id="upload-screenshot-btn" class="btn disabled" type="button" hidden disabled>登记截图并生成记录</button>
-              <button id="upload-manual-btn" class="btn disabled" type="button" hidden disabled>提交手动记录</button>
               <button id="run-replay-btn" class="btn secondary disabled" disabled>运行 AI 复盘</button>
               <a class="btn secondary" href="/mentor">先问金融导师</a>
             </div>

@@ -9,6 +9,12 @@ const state = {
   manualTrades: [],
 };
 
+const SOURCE_MODE_INTROS = {
+  csv: "适合直接上传券商导出的 CSV，或把 CSV 内容粘贴进来后再解析。",
+  screenshot: "适合只拿到券商成交截图、聊天记录截图或软件成交明细截图时使用。当前需要你同时补齐关键字段，平台先按结构化记录复盘。",
+  manual: "适合没有交割单文件时，直接补录股票代码、买卖日期、方向和盈亏。可以连续录入多笔再一起复盘。",
+};
+
 const nodes = {
   file: document.querySelector("#trade-file"),
   csvText: document.querySelector("#trade-csv-text"),
@@ -36,6 +42,7 @@ const nodes = {
   uploadManualButton: document.querySelector("#upload-manual-btn"),
   addManualTradeButton: document.querySelector("#add-manual-trade-btn"),
   replayButton: document.querySelector("#run-replay-btn"),
+  sourceModeIntro: document.querySelector("#source-mode-intro"),
   sourceModeButtons: document.querySelectorAll(".source-mode-btn"),
   sourcePanels: {
     csv: document.querySelector("#source-panel-csv"),
@@ -247,14 +254,12 @@ function applySourceMode(mode) {
   Object.entries(nodes.sourcePanels).forEach(([key, panel]) => {
     panel.hidden = key !== mode;
   });
+  nodes.sourceModeIntro.textContent = SOURCE_MODE_INTROS[mode] || "";
   nodes.sourceModeButtons.forEach((button) => {
     const isActive = button.id === `source-mode-${mode}`;
     button.classList.toggle("secondary", isActive);
     button.classList.toggle("ghost", !isActive);
   });
-  nodes.uploadButton.hidden = mode !== "csv";
-  nodes.uploadScreenshotButton.hidden = mode !== "screenshot";
-  nodes.uploadManualButton.hidden = mode !== "manual";
 }
 
 function syncReplayActionState(options = {}) {

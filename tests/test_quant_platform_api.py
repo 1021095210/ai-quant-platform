@@ -345,6 +345,9 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertIn('id="upload-screenshot-btn" class="btn disabled"', response.text)
         self.assertIn('id="upload-manual-btn" class="btn disabled"', response.text)
         self.assertIn('id="run-replay-btn" class="btn secondary disabled" disabled', response.text)
+        self.assertIn('id="source-panel-screenshot" class="source-panel" hidden', response.text)
+        self.assertIn('id="source-panel-manual" class="source-panel" hidden', response.text)
+        self.assertIn('id="source-mode-intro" class="muted-note">适合直接上传券商导出的 CSV', response.text)
 
     def test_mentor_page_is_available_after_login(self) -> None:
         client = self._build_client()
@@ -1980,6 +1983,8 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertIn("CSV 导入", response.text)
         self.assertIn("成交截图", response.text)
         self.assertIn("手动录入", response.text)
+        self.assertIn("CSV 文件", response.text)
+        self.assertIn("或直接粘贴 CSV", response.text)
         self.assertIn("登记截图并生成记录", response.text)
         self.assertIn("加入手动记录", response.text)
 
