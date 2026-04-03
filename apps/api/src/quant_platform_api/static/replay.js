@@ -50,6 +50,8 @@ const nodes = {
   screenshotEntry: document.querySelector("#trade-screenshot-entry"),
   screenshotExit: document.querySelector("#trade-screenshot-exit"),
   screenshotNotes: document.querySelector("#trade-screenshot-notes"),
+  screenshotOcrButton: document.querySelector("#ocr-screenshot-btn"),
+  screenshotOcrSummary: document.querySelector("#screenshot-ocr-summary"),
   manualSymbol: document.querySelector("#trade-manual-symbol"),
   manualSide: document.querySelector("#trade-manual-side"),
   manualEntry: document.querySelector("#trade-manual-entry"),
@@ -155,6 +157,50 @@ async function uploadScreenshotTrade() {
   state.replayReady = true;
   syncReplayActionState();
   setStatus("成交截图已登记，结构化记录已生成。");
+}
+
+async function recognizeScreenshotTrade() {
+  syncReplayActionState({ uploadBusy: true });
+  const file = nodes.screenshotFile.files[0];
+  if (!file) {
+    throw new Error("请先选择成交截图。");
+  }
+  setStatus("正在识别截图中的日期、代码和方向...");
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("market", nodes.screenshotMarket.value);
+  const payload = await api("/api/v1/trades/uploads/screenshot/ocr", {
+    method: "POST",
+    body: formData,
+  });
+  const data = payload.data;
+  if (data.suggested_symbol) {
+    nodes.screenshotSymbol.value = data.suggested_symbol;
+  }
+  if (data.suggested_side) {
+    nodes.screenshotSide.value = data.suggested_side;
+  }
+  if (data.suggested_entry_time) {
+    nodes.screenshotEntry.value = toLocalInputValue(data.suggested_entry_time);
+  }
+  if (data.suggested_exit_time) {
+    nodes.screenshotExit.value = toLocalInputValue(data.suggested_exit_time);
+  }
+  if (typeof data.suggested_pnl === "number") {
+    nodes.screenshotPnl.value = String(data.suggested_pnl);
+  }
+  if (data.suggested_notes) {
+    nodes.screenshotNotes.value = data.suggested_notes;
+  }
+  nodes.screenshotOcrSummary.textContent = [
+    data.raw_text ? `识别文字：\n${data.raw_text}` : "",
+    data.suggested_symbol ? `建议代码：${data.suggested_symbol}` : "",
+    data.detected_trade_date ? `识别日期：${data.detected_trade_date}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+  syncReplayActionState();
+  setStatus("截图 OCR 识别完成，请确认识别结果后再登记成交记录。");
 }
 
 async function uploadManualTrades() {
@@ -337,6 +383,7 @@ function syncReplayActionState(options = {}) {
       nodes.screenshotSymbol.value.trim() &&
       nodes.screenshotEntry.value,
   );
+  const screenshotOcrReady = Boolean(nodes.screenshotFile.files[0]);
   const manualTextReady = Boolean(nodes.manualSmartText.value.trim());
   const manualDraftReady = Boolean(nodes.manualSymbol.value.trim() && nodes.manualEntry.value);
   const manualUploadReady = Boolean(state.manualTrades.length);
@@ -359,6 +406,14 @@ function syncReplayActionState(options = {}) {
   nodes.uploadScreenshotButton.title = screenshotReady
     ? "截图和关键字段已齐备，可以登记并生成记录。"
     : "请先补齐截图、标的代码和买入日期时间。";
+
+  nodes.screenshotOcrButton.disabled = uploadBusy || !screenshotOcrReady;
+  nodes.screenshotOcrButton.className =
+    screenshotOcrReady && !uploadBusy ? "btn secondary" : "btn disabled";
+  nodes.screenshotOcrButton.textContent = uploadBusy ? "正在识别..." : "智能识别截图内容";
+  nodes.screenshotOcrButton.title = screenshotOcrReady
+    ? "先用 OCR 读取截图里的日期、股票代码和方向，再人工确认。"
+    : "请先上传一张成交截图。";
 
   nodes.uploadManualButton.disabled = uploadBusy || !manualUploadReady;
   nodes.uploadManualButton.className =
@@ -391,6 +446,13 @@ function toIsoTimestamp(value) {
   return `${value}:00Z`.replace(" ", "T");
 }
 
+function toLocalInputValue(value) {
+  if (!value) {
+    return "";
+  }
+  return value.replace("Z", "").replace("+00:00", "").slice(0, 16);
+}
+
 document.querySelector("#upload-trades-btn").addEventListener(
   "click",
   handle(async () => {
@@ -407,6 +469,17 @@ document.querySelector("#upload-screenshot-btn").addEventListener(
   handle(async () => {
     try {
       await uploadScreenshotTrade();
+    } finally {
+      syncReplayActionState();
+    }
+  }),
+);
+
+document.querySelector("#ocr-screenshot-btn").addEventListener(
+  "click",
+  handle(async () => {
+    try {
+      await recognizeScreenshotTrade();
     } finally {
       syncReplayActionState();
     }
@@ -447,6 +520,7 @@ nodes.sourceModeButtons.forEach((button) => {
   nodes.file,
   nodes.csvText,
   nodes.screenshotFile,
+  nodes.screenshotMarket,
   nodes.screenshotSymbol,
   nodes.screenshotEntry,
   nodes.screenshotExit,

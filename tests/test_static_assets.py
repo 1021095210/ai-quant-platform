@@ -88,6 +88,31 @@ class StaticAssetTests(unittest.TestCase):
         self.assertIn("/api/v1/trades/uploads/manual/parse-text", replay_js)
         self.assertIn("智能识别并加入记录", replay_js)
 
+    def test_replay_assets_include_screenshot_ocr_flow(self) -> None:
+        replay_html = (
+            WORKSPACE_ROOT
+            / "apps"
+            / "api"
+            / "src"
+            / "quant_platform_api"
+            / "static"
+            / "replay.html"
+        ).read_text(encoding="utf-8")
+        replay_js = (
+            WORKSPACE_ROOT
+            / "apps"
+            / "api"
+            / "src"
+            / "quant_platform_api"
+            / "static"
+            / "replay.js"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn('id="ocr-screenshot-btn"', replay_html)
+        self.assertIn('id="screenshot-ocr-summary"', replay_html)
+        self.assertIn("/api/v1/trades/uploads/screenshot/ocr", replay_js)
+        self.assertIn("智能识别截图内容", replay_js)
+
     def test_rules_js_can_bootstrap_with_stubbed_dom(self) -> None:
         node = shutil.which("node")
         if node is None:

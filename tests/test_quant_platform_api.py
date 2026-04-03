@@ -6,6 +6,7 @@ import sqlite3
 import tempfile
 import time
 import unittest
+from io import BytesIO
 from pathlib import Path
 
 
@@ -23,16 +24,27 @@ if VENV_LIB.exists():
 
 try:
     from fastapi.testclient import TestClient
+    from PIL import Image, ImageDraw
     from quant_platform_api.config import Settings
     from quant_platform_api.main import create_app
 except ModuleNotFoundError:  # pragma: no cover - handled by skip
     TestClient = None
+    Image = None
+    ImageDraw = None
     Settings = None
     create_app = None
 
 
 @unittest.skipIf(TestClient is None, "FastAPI dependencies are unavailable")
 class QuantPlatformApiTests(unittest.TestCase):
+    def _build_trade_screenshot_bytes(self, text: str) -> bytes:
+        image = Image.new("RGB", (900, 260), "white")
+        draw = ImageDraw.Draw(image)
+        draw.multiline_text((20, 20), text, fill="black", spacing=8)
+        buffer = BytesIO()
+        image.save(buffer, format="PNG")
+        return buffer.getvalue()
+
     def _build_client(
         self,
         *,
@@ -350,6 +362,8 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertIn('id="source-panel-manual" class="source-panel" hidden', response.text)
         self.assertIn('id="source-mode-intro" class="muted-note">适合直接上传券商导出的 CSV', response.text)
         self.assertIn('id="source-mode-steps" class="source-mode-step-list"', response.text)
+        self.assertIn('id="ocr-screenshot-btn" class="btn disabled"', response.text)
+        self.assertIn('id="screenshot-ocr-summary" class="result-box light"', response.text)
 
     def test_mentor_page_is_available_after_login(self) -> None:
         client = self._build_client()
@@ -2044,6 +2058,27 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertEqual("parsed", data["status"])
         self.assertEqual(1, data["record_count"])
 
+    def test_screenshot_ocr_endpoint_extracts_symbol_and_date(self) -> None:
+        client = self._build_client()
+        self._login(client)
+        image_bytes = self._build_trade_screenshot_bytes(
+            "2025-07-25\n603590.SH\n买入\n盈亏: 1280"
+        )
+
+        response = client.post(
+            "/api/v1/trades/uploads/screenshot/ocr",
+            data={"market": "cn_equity"},
+            files={"file": ("trade.png", image_bytes, "image/png")},
+        )
+
+        self.assertEqual(200, response.status_code)
+        data = response.json()["data"]
+        self.assertEqual("603590.SH", data["suggested_symbol"])
+        self.assertEqual("2025-07-25", data["detected_trade_date"])
+        self.assertEqual("long", data["suggested_side"])
+        self.assertGreaterEqual(data["suggested_pnl"], 1280)
+        self.assertIn("来源：截图 OCR 识别", data["suggested_notes"])
+
     def test_replay_page_supports_csv_screenshot_and_manual_sources(self) -> None:
         client = self._build_client()
         self._login(client)
@@ -2057,6 +2092,7 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertIn("建议顺序", response.text)
         self.assertIn("CSV 文件", response.text)
         self.assertIn("或直接粘贴 CSV", response.text)
+        self.assertIn("智能识别截图内容", response.text)
         self.assertIn("登记截图并生成记录", response.text)
         self.assertIn("加入手动记录", response.text)
         self.assertIn("长文字智能识别", response.text)

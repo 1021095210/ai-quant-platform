@@ -1352,6 +1352,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             },
         )
 
+    @app.post(f"{app_settings.api_prefix}/trades/uploads/screenshot/ocr")
+    async def recognize_trade_screenshot(
+        request: Request,
+        file: UploadFile = File(...),
+        market: str = Form("cn_equity"),
+    ) -> JSONResponse:
+        _require_current_user(request, services.auth_service)
+        content = await file.read()
+        suggestion = services.trade_upload_service.recognize_trade_screenshot(
+            content=content,
+            market=market,
+        )
+        return _success_response(request, data=suggestion)
+
     @app.post(f"{app_settings.api_prefix}/trades/uploads/{{upload_id}}/parse")
     def parse_trade_upload(
         request: Request,

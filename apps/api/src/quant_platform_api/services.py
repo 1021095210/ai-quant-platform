@@ -4,7 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 import csv
 from datetime import date, datetime, timedelta
 import hashlib
-from io import StringIO
+from io import BytesIO, StringIO
 import json
 import re
 from time import sleep
@@ -1464,6 +1464,7 @@ class TradeUploadService:
     ) -> None:
         self._repository = repository
         self._market_data_service = market_data_service
+        self._ocr_engine: Any | None = None
 
     def create_upload(
         self,
@@ -1653,6 +1654,44 @@ class TradeUploadService:
                 f"已识别 {len(records)} 笔交易，日期为 {trade_date.isoformat()}，"
                 f"买入规则按“{entry_rule['label']}”理解。"
             ),
+        }
+
+    def recognize_trade_screenshot(
+        self,
+        *,
+        content: bytes,
+        market: str,
+    ) -> dict[str, Any]:
+        lines = self._ocr_image_lines(content)
+        combined_text = "\n".join(lines).strip()
+        if not combined_text:
+            raise TaskExecutionError("INVALID_ARGUMENT", "当前截图里未识别到可用文字，请换一张更清晰的成交截图或继续手工补录。")
+
+        detected_date = self._extract_trade_date(combined_text)
+        symbol_candidates = self._extract_symbols_by_market(combined_text, market)
+        side = self._extract_trade_side(combined_text, market)
+        pnl = self._extract_trade_pnl(combined_text)
+        entry_time = None
+        if detected_date is not None:
+            entry_time = self._default_entry_time_for_market(detected_date, market)
+
+        notes_parts = ["来源：截图 OCR 识别"]
+        if symbol_candidates:
+            notes_parts.append(f"识别到代码 {', '.join(symbol_candidates[:3])}")
+        if detected_date is not None:
+            notes_parts.append(f"识别到日期 {detected_date.isoformat()}")
+
+        return {
+            "raw_text": combined_text,
+            "symbol_candidates": symbol_candidates,
+            "suggested_symbol": symbol_candidates[0] if symbol_candidates else "",
+            "suggested_side": side,
+            "suggested_market": market,
+            "detected_trade_date": detected_date.isoformat() if detected_date else None,
+            "suggested_entry_time": entry_time.isoformat() if entry_time else None,
+            "suggested_exit_time": None,
+            "suggested_pnl": pnl,
+            "suggested_notes": "；".join(notes_parts),
         }
 
     def _build_text_trade_record(
@@ -1851,6 +1890,86 @@ class TradeUploadService:
             if symbol not in deduped:
                 deduped.append(symbol)
         return deduped
+
+    def _extract_symbols_by_market(self, text: str, market: str) -> list[str]:
+        normalized = text.upper().replace(" ", "")
+        if market == "cn_equity":
+            direct = re.findall(r"\b\d{6}\.(?:SH|SZ)\b", normalized)
+            plain = re.findall(r"\b\d{6}\b", normalized)
+            deduped: list[str] = []
+            for symbol in direct:
+                if symbol not in deduped:
+                    deduped.append(symbol)
+            for symbol in plain:
+                inferred = f"{symbol}.SH" if symbol.startswith(("5", "6", "9")) else f"{symbol}.SZ"
+                if inferred not in deduped:
+                    deduped.append(inferred)
+            return deduped
+        if market == "us_equity":
+            candidates = re.findall(r"\b[A-Z]{1,5}\b", normalized)
+            return [item for item in candidates if item not in {"BUY", "SELL", "OPEN", "CLOSE", "USD"}][:5]
+        if market == "crypto":
+            return re.findall(r"\b[A-Z0-9]{6,15}\b", normalized)[:5]
+        if market == "london_gold":
+            return [item for item in re.findall(r"\b(?:XAUUSD|GOLD|XAU)\b", normalized)][:3]
+        return []
+
+    def _extract_trade_side(self, text: str, market: str) -> str:
+        normalized = text.upper()
+        if market != "cn_equity" and any(marker in normalized for marker in ("SHORT", "SELLSHORT", "做空")):
+            return "short"
+        if any(marker in normalized for marker in ("BUY", "买入", "建仓")):
+            return "long"
+        if market != "cn_equity" and any(marker in normalized for marker in ("SELL", "卖出", "平空")):
+            return "short"
+        return "long"
+
+    def _extract_trade_pnl(self, text: str) -> float:
+        match = re.search(
+            r"(?:盈亏|浮盈浮亏|收益|P/?L)[:：]?\s*([+-]?\d+(?:\.\d+)?)",
+            text,
+            flags=re.I,
+        )
+        if match is not None:
+            return float(match.group(1))
+        for line in text.splitlines():
+            candidate = line.strip().replace(",", "")
+            if not candidate:
+                continue
+            if any(marker in candidate.upper() for marker in ("SH", "SZ", "USDT", "XAU", "-")):
+                continue
+            if re.fullmatch(r"[+-]?\d+(?:\.\d+)?", candidate):
+                return float(candidate)
+        return 0.0
+
+    def _default_entry_time_for_market(self, trade_date: date, market: str) -> datetime:
+        if market == "us_equity":
+            time_text = "09:30:00"
+        elif market == "crypto":
+            time_text = "00:00:00"
+        elif market == "london_gold":
+            time_text = "08:00:00"
+        else:
+            time_text = "09:30:00"
+        return datetime.fromisoformat(f"{trade_date.isoformat()}T{time_text}+00:00")
+
+    def _ocr_image_lines(self, content: bytes) -> list[str]:
+        try:
+            import numpy as np
+            from PIL import Image
+            from rapidocr_onnxruntime import RapidOCR
+        except Exception as exc:  # pragma: no cover - import is validated in runtime tests
+            raise TaskExecutionError("INTERNAL_ERROR", "OCR 依赖不可用，请重新安装应用依赖。") from exc
+
+        if self._ocr_engine is None:
+            self._ocr_engine = RapidOCR()
+
+        image = Image.open(BytesIO(content)).convert("RGB")
+        result, _ = self._ocr_engine(np.array(image))
+        if not result:
+            return []
+        ordered = sorted(result, key=lambda item: (item[0][0][1], item[0][0][0]))
+        return [str(item[1]).strip() for item in ordered if str(item[1]).strip()]
 
     def _extract_entry_rule(self, text: str) -> dict[str, Any]:
         explicit_price_match = re.search(
