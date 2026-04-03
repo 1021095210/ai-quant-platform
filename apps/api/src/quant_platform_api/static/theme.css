@@ -448,6 +448,39 @@ button:disabled:hover {
   flex-wrap: wrap;
 }
 
+.source-mode-btn.active {
+  box-shadow: 0 10px 22px rgba(36, 99, 235, 0.16);
+}
+
+.source-mode-guide {
+  display: grid;
+  gap: 14px;
+  padding: 16px 18px;
+  border-radius: 18px;
+  border: 1px solid rgba(160, 190, 245, 0.48);
+  background: linear-gradient(180deg, rgba(246, 250, 255, 0.96), rgba(236, 244, 255, 0.9));
+}
+
+.source-mode-guide-copy,
+.source-mode-steps {
+  display: grid;
+  gap: 8px;
+}
+
+.source-mode-guide-copy strong {
+  font-size: 18px;
+  line-height: 1.3;
+  color: var(--text);
+}
+
+.source-mode-step-list {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--text-soft);
+  display: grid;
+  gap: 6px;
+}
+
 .choice-pill {
   display: inline-flex;
   align-items: center;

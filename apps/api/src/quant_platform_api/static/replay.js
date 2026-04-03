@@ -9,10 +9,34 @@ const state = {
   manualTrades: [],
 };
 
-const SOURCE_MODE_INTROS = {
-  csv: "适合直接上传券商导出的 CSV，或把 CSV 内容粘贴进来后再解析。",
-  screenshot: "适合只拿到券商成交截图、聊天记录截图或软件成交明细截图时使用。当前需要你同时补齐关键字段，平台先按结构化记录复盘。",
-  manual: "适合没有交割单文件时，直接补录股票代码、买卖日期、方向和盈亏。可以连续录入多笔再一起复盘。",
+const SOURCE_MODE_META = {
+  csv: {
+    title: "CSV 导入",
+    intro: "适合直接上传券商导出的 CSV，或把 CSV 内容粘贴进来后再解析。",
+    steps: [
+      "上传 CSV 文件或直接粘贴 CSV 文本。",
+      "检查字段是否完整，再点击上传并解析。",
+      "解析结果出来后，再运行 AI 复盘。",
+    ],
+  },
+  screenshot: {
+    title: "成交截图",
+    intro: "适合只拿到券商成交截图、聊天记录截图或软件成交明细截图时使用。当前需要你同时补齐关键字段，平台先按结构化记录复盘。",
+    steps: [
+      "先上传成交截图，再补齐标的、时间和盈亏。",
+      "确认截图对应的市场和方向没有填错。",
+      "生成结构化记录后，再运行 AI 复盘。",
+    ],
+  },
+  manual: {
+    title: "手动录入",
+    intro: "适合没有交割单文件时，直接补录股票代码、买卖日期、方向和盈亏。可以连续录入多笔再一起复盘。",
+    steps: [
+      "先补一笔交易的标的、时间、方向和盈亏。",
+      "点击加入手动记录，重复补录需要复盘的样本。",
+      "确认记录列表无误后，再提交并运行 AI 复盘。",
+    ],
+  },
 };
 
 const nodes = {
@@ -42,7 +66,9 @@ const nodes = {
   uploadManualButton: document.querySelector("#upload-manual-btn"),
   addManualTradeButton: document.querySelector("#add-manual-trade-btn"),
   replayButton: document.querySelector("#run-replay-btn"),
+  sourceModeTitle: document.querySelector("#source-mode-title"),
   sourceModeIntro: document.querySelector("#source-mode-intro"),
+  sourceModeSteps: document.querySelector("#source-mode-steps"),
   sourceModeButtons: document.querySelectorAll(".source-mode-btn"),
   sourcePanels: {
     csv: document.querySelector("#source-panel-csv"),
@@ -251,14 +277,18 @@ async function runReplay() {
 
 function applySourceMode(mode) {
   state.sourceMode = mode;
+  const modeMeta = SOURCE_MODE_META[mode] || SOURCE_MODE_META.csv;
   Object.entries(nodes.sourcePanels).forEach(([key, panel]) => {
     panel.hidden = key !== mode;
   });
-  nodes.sourceModeIntro.textContent = SOURCE_MODE_INTROS[mode] || "";
+  nodes.sourceModeTitle.textContent = modeMeta.title;
+  nodes.sourceModeIntro.textContent = modeMeta.intro;
+  nodes.sourceModeSteps.innerHTML = modeMeta.steps.map((item) => `<li>${item}</li>`).join("");
   nodes.sourceModeButtons.forEach((button) => {
     const isActive = button.id === `source-mode-${mode}`;
     button.classList.toggle("secondary", isActive);
     button.classList.toggle("ghost", !isActive);
+    button.classList.toggle("active", isActive);
   });
 }
 

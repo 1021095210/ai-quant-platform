@@ -55,7 +55,21 @@
               <button id="source-mode-screenshot" class="btn ghost source-mode-btn" type="button">成交截图</button>
               <button id="source-mode-manual" class="btn ghost source-mode-btn" type="button">手动录入</button>
             </div>
-            <div id="source-mode-intro" class="muted-note">适合直接上传券商导出的 CSV，或把 CSV 内容粘贴进来后再解析。</div>
+            <section class="source-mode-guide">
+              <div class="source-mode-guide-copy">
+                <span class="mini-label">当前方式</span>
+                <strong id="source-mode-title">CSV 导入</strong>
+                <div id="source-mode-intro" class="muted-note">适合直接上传券商导出的 CSV，或把 CSV 内容粘贴进来后再解析。</div>
+              </div>
+              <div class="source-mode-steps">
+                <span class="mini-label">建议顺序</span>
+                <ol id="source-mode-steps" class="source-mode-step-list">
+                  <li>上传 CSV 文件或直接粘贴 CSV 文本。</li>
+                  <li>检查字段是否完整，再点击上传并解析。</li>
+                  <li>解析结果出来后，再运行 AI 复盘。</li>
+                </ol>
+              </div>
+            </section>
 
             <div id="source-panel-csv" class="source-panel">
               <label class="field">
