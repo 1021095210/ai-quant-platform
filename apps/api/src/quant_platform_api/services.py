@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 import csv
 from datetime import date, datetime, timedelta
 import hashlib
+import httpx
 from io import BytesIO, StringIO
 import json
 import re
@@ -1150,6 +1151,9 @@ class RuleService:
 
 
 class MentorService:
+    def __init__(self, settings: Settings | None = None) -> None:
+        self._settings = settings or Settings()
+
     def list_topics(self) -> list[dict[str, Any]]:
         return [
             {
@@ -1201,8 +1205,9 @@ class MentorService:
             experience_level=request.experience_level,
             is_follow_up=is_follow_up,
             original_question=question,
+            effective_question=effective_question,
         )
-        return {
+        response = {
             "mentor_name": "金融导师",
             "mentor_role": "多市场实战导师",
             "question": question,
@@ -1219,7 +1224,173 @@ class MentorService:
             "glossary": glossary,
             "related_modules": self._related_modules_for_topic(topic),
             "risk_note": self._risk_note_for_market(market_scope),
+            "answer_source": "fallback",
+            "answer_mode_label": "平台导师兜底",
         }
+        if self._llm_ready():
+            try:
+                llm_payload = self._answer_with_llm(
+                    question=question,
+                    effective_question=effective_question,
+                    experience_level=request.experience_level,
+                    market_scope=market_scope,
+                    current_module=request.current_module,
+                    conversation_history=request.conversation_history,
+                    fallback_response=response,
+                )
+                response.update(llm_payload)
+                response["answer_source"] = "llm"
+                response["answer_mode_label"] = "AI 实时回答"
+            except Exception:
+                pass
+        return response
+
+    def _llm_ready(self) -> bool:
+        return bool(
+            self._settings.llm_base_url.strip()
+            and self._settings.llm_api_key.strip()
+        )
+
+    def _answer_with_llm(
+        self,
+        *,
+        question: str,
+        effective_question: str,
+        experience_level: str,
+        market_scope: str,
+        current_module: str | None,
+        conversation_history: list[dict[str, str]],
+        fallback_response: dict[str, Any],
+    ) -> dict[str, Any]:
+        endpoint = self._settings.llm_base_url.rstrip("/")
+        if not endpoint.endswith("/chat/completions"):
+            endpoint = f"{endpoint}/chat/completions"
+
+        prompt_payload = {
+            "question": question,
+            "effective_question": effective_question,
+            "experience_level": experience_level,
+            "market_scope": market_scope,
+            "current_module": current_module,
+            "conversation_history": conversation_history,
+            "fallback_response": {
+                "headline": fallback_response["headline"],
+                "answer": fallback_response["answer"],
+                "why_it_matters": fallback_response["why_it_matters"],
+                "action_plan": fallback_response["action_plan"],
+                "glossary": fallback_response["glossary"],
+                "risk_note": fallback_response["risk_note"],
+            },
+        }
+        system_prompt = (
+            "你是一名有多年实战经验的金融导师，面向中文用户回答交易、技术指标、"
+            "市场制度和本平台使用问题。回答必须真正跟随用户追问深入解释，不能重复上一轮原话。"
+            "请优先解释构造逻辑、为什么有效、常见误用和实际使用顺序。"
+            "输出必须是 JSON，对象字段固定为：headline、answer、why_it_matters、action_plan、glossary。"
+            "其中 action_plan 是 3 条中文步骤数组；glossary 是 2-4 个对象数组，每个对象含 term 和 meaning。"
+        )
+        request_payload = {
+            "model": self._settings.llm_model_mentor
+            or self._settings.llm_model_summary
+            or self._settings.llm_model_strategy
+            or "gpt-5-mini",
+            "temperature": 0.35,
+            "stream": True,
+            "response_format": {"type": "json_object"},
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": json.dumps(prompt_payload, ensure_ascii=False)},
+            ],
+        }
+        content = ""
+        for attempt in range(3):
+            try:
+                with httpx.Client(timeout=45) as client:
+                    with client.stream(
+                        "POST",
+                        endpoint,
+                        headers={
+                            "Authorization": f"Bearer {self._settings.llm_api_key}",
+                            "Content-Type": "application/json",
+                        },
+                        json=request_payload,
+                    ) as response:
+                        response.raise_for_status()
+                        content = self._extract_stream_content(response)
+                break
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code in {429, 500, 502, 503, 504} and attempt < 2:
+                    sleep(1.2 * (attempt + 1))
+                    continue
+                raise
+        parsed = self._extract_json_object(content)
+        return {
+            "headline": str(parsed.get("headline") or fallback_response["headline"]),
+            "answer": str(parsed.get("answer") or fallback_response["answer"]),
+            "why_it_matters": str(
+                parsed.get("why_it_matters") or fallback_response["why_it_matters"]
+            ),
+            "action_plan": self._normalize_action_plan(
+                parsed.get("action_plan") or fallback_response["action_plan"]
+            ),
+            "glossary": self._normalize_glossary(
+                parsed.get("glossary") or fallback_response["glossary"]
+            ),
+        }
+
+    def _extract_stream_content(self, response: httpx.Response) -> str:
+        content_parts: list[str] = []
+        for raw_line in response.iter_lines():
+            line = raw_line.strip()
+            if not line or not line.startswith("data:"):
+                continue
+            payload_text = line[5:].strip()
+            if payload_text == "[DONE]":
+                break
+            try:
+                chunk = json.loads(payload_text)
+            except json.JSONDecodeError:
+                continue
+            choices = chunk.get("choices") or []
+            if not choices:
+                continue
+            delta = choices[0].get("delta") or {}
+            piece = delta.get("content")
+            if piece:
+                content_parts.append(str(piece))
+        if content_parts:
+            return "".join(content_parts)
+        return response.text
+
+    def _extract_json_object(self, content: str) -> dict[str, Any]:
+        candidate = content.strip()
+        fenced = re.search(r"```(?:json)?\s*(\{.*\})\s*```", candidate, flags=re.S)
+        if fenced:
+            candidate = fenced.group(1)
+        if not candidate.startswith("{"):
+            start = candidate.find("{")
+            end = candidate.rfind("}")
+            if start != -1 and end != -1 and end > start:
+                candidate = candidate[start : end + 1]
+        return json.loads(candidate)
+
+    def _normalize_action_plan(self, value: Any) -> list[str]:
+        if isinstance(value, list):
+            return [str(item).strip() for item in value if str(item).strip()][:5]
+        return []
+
+    def _normalize_glossary(self, value: Any) -> list[dict[str, str]]:
+        if not isinstance(value, list):
+            return []
+        normalized: list[dict[str, str]] = []
+        for item in value[:5]:
+            if not isinstance(item, dict):
+                continue
+            term = str(item.get("term", "")).strip()
+            meaning = str(item.get("meaning", "")).strip()
+            if term and meaning:
+                normalized.append({"term": term, "meaning": meaning})
+        return normalized
 
     def _resolve_effective_question(
         self,
@@ -1307,8 +1478,31 @@ class MentorService:
         experience_level: str,
         is_follow_up: bool,
         original_question: str,
+        effective_question: str,
     ) -> tuple[str, str, str, list[str], list[dict[str, str]]]:
         if topic == "indicator_basics":
+            detailed_follow_up = any(
+                marker in (original_question + effective_question)
+                for marker in ("构造逻辑", "为什么有效", "更详细", "精准", "具体含义", "怎么用")
+            )
+            if detailed_follow_up:
+                return (
+                    "先把均线、MACD、RSI 分成三种不同职责，再理解它们为什么会有效。",
+                    "均线的本质，是把一段时间的平均成交成本平滑出来，所以它更适合看趋势方向和市场共识成本。价格持续站在均线上方，说明最近一段时间买入的人整体处于优势区，这就是它能帮助判断趋势的原因。"
+                    " MACD 的本质，是比较短周期和长周期指数平均价格的差值变化，所以它看的是趋势有没有加速、减速，以及动量是否跟趋势共振。它有效，不是因为金叉本身神奇，而是因为短期价格推动力开始持续强于长期平均。"
+                    " RSI 的本质，是统计一段时间内上涨力度和下跌力度的相对强弱，所以它更适合看节奏、超买超卖和短期情绪。它有效的前提不是单独使用，而是放到趋势环境里去看，例如上升趋势里 RSI 回落后重新转强，比单纯看到 RSI 大于 70 更有意义。",
+                    "如果把这三类指标混成同一种用途，你就会在趋势里拿 RSI 抓顶，在震荡里拿均线追突破，最后觉得每个指标都不稳定。",
+                    [
+                        "先在指标设置里分别看均线、MACD、RSI 的公式和默认参数，理解它们到底在度量什么。",
+                        "用一张历史行情图，只观察一个指标在趋势行情和震荡行情中的表现差异。",
+                        "再回到策略工坊，把“趋势判断”和“节奏确认”拆成两层条件，不要让一个指标同时负责所有任务。",
+                    ],
+                    [
+                        {"term": "均线", "meaning": "一段时间内市场平均成交成本的平滑表达，更适合看趋势方向。"},
+                        {"term": "MACD", "meaning": "快慢均线差值及其变化，更适合看趋势与动量是否共振。"},
+                        {"term": "RSI", "meaning": "涨跌力度的相对强弱，更适合看短期节奏和超买超卖。"},
+                    ],
+                )
             intro = "我顺着你刚才的问题，再把指标怎么用讲得更白一点。 " if is_follow_up else ""
             return (
                 "先分清趋势指标、动量指标和波动指标，再决定它们各自负责什么。",
@@ -1619,16 +1813,17 @@ class TradeUploadService:
         if not normalized_text:
             raise TaskExecutionError("INVALID_ARGUMENT", "请先输入需要识别的长文字内容。")
 
-        trade_date = self._extract_trade_date(normalized_text)
+        trade_date = self._extract_labeled_trade_date(normalized_text, "买入日期") or self._extract_trade_date(normalized_text)
         if trade_date is None:
             raise TaskExecutionError("INVALID_ARGUMENT", "未识别到交易日期，请至少包含 YYYY-MM-DD。")
 
-        symbols = self._extract_symbols(normalized_text)
+        symbols = self._extract_symbols_by_market(normalized_text, market)
         if not symbols:
-            raise TaskExecutionError("INVALID_ARGUMENT", "未识别到股票代码，请至少包含一个类似 600519.SH 的代码。")
+            raise TaskExecutionError("INVALID_ARGUMENT", "未识别到股票代码，请至少包含一个可识别的标的代码。")
 
         entry_rule = self._extract_entry_rule(normalized_text)
         exit_rule = self._extract_exit_rule(normalized_text)
+        explicit_exit_date = self._extract_labeled_trade_date(normalized_text, "卖出日期")
 
         records = [
             self._build_text_trade_record(
@@ -1638,6 +1833,7 @@ class TradeUploadService:
                 adjustment_mode=adjustment_mode,
                 entry_rule=entry_rule,
                 exit_rule=exit_rule,
+                explicit_exit_date=explicit_exit_date,
                 index=index,
             )
             for index, symbol in enumerate(symbols, start=1)
@@ -1703,6 +1899,7 @@ class TradeUploadService:
         adjustment_mode: str,
         entry_rule: dict[str, Any],
         exit_rule: dict[str, Any] | None,
+        explicit_exit_date: date | None,
         index: int,
     ) -> TradeRecordItem:
         bars, _ = self._load_trade_bars(
@@ -1737,6 +1934,12 @@ class TradeUploadService:
             exit_time = exit_match.get("exit_time")
             pnl = exit_match.get("pnl", 0.0)
             notes = f"{notes}；卖出规则：{exit_rule['label']}；{exit_match['note']}"
+        elif explicit_exit_date is not None:
+            target_bar = self._find_first_bar_on_or_after(bars, explicit_exit_date) or entry_bar
+            exit_price = float(target_bar.close)
+            exit_time = datetime.fromisoformat(f"{target_bar.trade_date}T15:00:00+00:00")
+            pnl = exit_price - entry_price
+            notes = f"{notes}；按卖出日期 {explicit_exit_date.isoformat()} 的收盘价补全"
 
         return TradeRecordItem(
             trade_id=f"text_trade_{index:03d}",
@@ -1841,6 +2044,60 @@ class TradeUploadService:
                 "note": "按次日收盘价卖出补全",
             }
 
+        if exit_rule["type"] == "offset_close":
+            target_bar = self._find_bar_by_offset(
+                bars,
+                entry_bar.trade_date,
+                exit_rule.get("offset", 0),
+            ) or entry_bar
+            exit_price = float(target_bar.close)
+            return {
+                "exit_price": exit_price,
+                "exit_time": datetime.fromisoformat(f"{target_bar.trade_date}T15:00:00+00:00"),
+                "pnl": exit_price - entry_price,
+                "note": "按指定交易日收盘价卖出补全",
+            }
+
+        if exit_rule["type"] == "take_profit_pct":
+            threshold = round(entry_price * (1 + exit_rule["pct"]), 4)
+            future_bars = [bar for bar in bars if date.fromisoformat(bar.trade_date) >= date.fromisoformat(entry_bar.trade_date)]
+            for bar in future_bars:
+                if float(bar.high) >= threshold:
+                    return {
+                        "exit_price": threshold,
+                        "exit_time": datetime.fromisoformat(f"{bar.trade_date}T15:00:00+00:00"),
+                        "pnl": threshold - entry_price,
+                        "note": f"按止盈阈值 {threshold:.4f} 触发卖出",
+                    }
+            fallback_bar = future_bars[min(4, len(future_bars) - 1)] if future_bars else entry_bar
+            fallback_price = float(fallback_bar.close)
+            return {
+                "exit_price": fallback_price,
+                "exit_time": datetime.fromisoformat(f"{fallback_bar.trade_date}T15:00:00+00:00"),
+                "pnl": fallback_price - entry_price,
+                "note": f"数据范围内未触发止盈阈值 {threshold:.4f}，已按后续可用收盘价补全",
+            }
+
+        if exit_rule["type"] == "stop_loss_pct":
+            threshold = round(entry_price * (1 - exit_rule["pct"]), 4)
+            future_bars = [bar for bar in bars if date.fromisoformat(bar.trade_date) >= date.fromisoformat(entry_bar.trade_date)]
+            for bar in future_bars:
+                if float(bar.low) <= threshold:
+                    return {
+                        "exit_price": threshold,
+                        "exit_time": datetime.fromisoformat(f"{bar.trade_date}T15:00:00+00:00"),
+                        "pnl": threshold - entry_price,
+                        "note": f"按止损阈值 {threshold:.4f} 触发卖出",
+                    }
+            fallback_bar = future_bars[min(4, len(future_bars) - 1)] if future_bars else entry_bar
+            fallback_price = float(fallback_bar.close)
+            return {
+                "exit_price": fallback_price,
+                "exit_time": datetime.fromisoformat(f"{fallback_bar.trade_date}T15:00:00+00:00"),
+                "pnl": fallback_price - entry_price,
+                "note": f"数据范围内未触发止损阈值 {threshold:.4f}，已按后续可用收盘价补全",
+            }
+
         target_bar = entry_bar
         exit_price = float(target_bar.close)
         return {
@@ -1876,10 +2133,16 @@ class TradeUploadService:
         return max(sum(recent) / len(recent), 0.01)
 
     def _extract_trade_date(self, text: str) -> date | None:
-        match = re.search(r"(20\d{2}-\d{2}-\d{2})", text)
+        match = re.search(r"(20\d{2}[-/]\d{2}[-/]\d{2})", text)
         if match is None:
             return None
-        return date.fromisoformat(match.group(1))
+        return date.fromisoformat(match.group(1).replace("/", "-"))
+
+    def _extract_labeled_trade_date(self, text: str, label: str) -> date | None:
+        match = re.search(rf"{label}[:：]?\s*(20\d{{2}}[-/]\d{{2}}[-/]\d{{2}})", text)
+        if match is None:
+            return None
+        return date.fromisoformat(match.group(1).replace("/", "-"))
 
     def _extract_symbols(self, text: str) -> list[str]:
         segment_match = re.search(r"买入[:：]\s*(.+?)(?:买入方式|卖出方式|$)", text, flags=re.S)
@@ -1985,8 +2248,19 @@ class TradeUploadService:
                 "offset": 0,
                 "explicit_price": explicit_price,
             }
+        offset_match = re.search(r"第([0-9]+)个交易日(开盘价|收盘价)买入", text)
+        if offset_match is not None:
+            offset = max(int(offset_match.group(1)) - 1, 0)
+            price_field = "open" if offset_match.group(2) == "开盘价" else "close"
+            return {
+                "label": f"第 {offset + 1} 个交易日{offset_match.group(2)}买入",
+                "price_field": price_field,
+                "offset": offset,
+            }
         if "次日开盘价买入" in text:
             return {"label": "次日开盘价买入", "price_field": "open", "offset": 1}
+        if "次日收盘价买入" in text:
+            return {"label": "次日收盘价买入", "price_field": "close", "offset": 1}
         if "当日收盘价买入" in text:
             return {"label": "当日收盘价买入", "price_field": "close", "offset": 0}
         return {"label": "当日开盘价买入", "price_field": "open", "offset": 0}
@@ -2003,6 +2277,28 @@ class TradeUploadService:
                 "type": "explicit_price",
                 "label": f"按卖出价 {explicit_price:g} 卖出",
                 "value": explicit_price,
+            }
+        offset_match = re.search(r"第([0-9]+)个交易日收盘价卖出", text)
+        if offset_match is not None:
+            offset = max(int(offset_match.group(1)) - 1, 0)
+            return {
+                "type": "offset_close",
+                "label": f"第 {offset + 1} 个交易日收盘价卖出",
+                "offset": offset,
+            }
+        take_profit_match = re.search(r"(?:止盈|高于买入价)([0-9]+(?:\.[0-9]+)?)%", text)
+        if take_profit_match is not None:
+            return {
+                "type": "take_profit_pct",
+                "label": f"上涨 {take_profit_match.group(1)}% 止盈卖出",
+                "pct": float(take_profit_match.group(1)) / 100,
+            }
+        stop_loss_match = re.search(r"(?:止损|低于买入价)([0-9]+(?:\.[0-9]+)?)%", text)
+        if stop_loss_match is not None:
+            return {
+                "type": "stop_loss_pct",
+                "label": f"下跌 {stop_loss_match.group(1)}% 止损卖出",
+                "pct": float(stop_loss_match.group(1)) / 100,
             }
         atr_match = re.search(
             r"最低价低于当日开盘价-([0-9]+(?:\.[0-9]+)?)倍atr",

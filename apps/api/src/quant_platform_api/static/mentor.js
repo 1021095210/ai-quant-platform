@@ -66,6 +66,7 @@ function renderAnswer(payload) {
   nodes.answer.innerHTML = `
     <div class="list-item mentor-answer-card">
       <strong>${payload.headline}</strong>
+      <div class="muted-note">当前模式：${payload.answer_mode_label || "平台导师兜底"}</div>
       <div class="muted-note">${payload.answer}</div>
     </div>
     <div class="list-item mentor-answer-card">

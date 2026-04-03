@@ -552,10 +552,12 @@ console.log('mentor-bootstrapped');
         self.assertIn("renderTopics", mentor_js)
         self.assertIn("conversation_history", mentor_js)
         self.assertIn("renderConversation", mentor_js)
+        self.assertIn("answer_mode_label", mentor_js)
+        self.assertIn("当前模式", mentor_js)
         self.assertIn("导师判断", mentor_html)
         self.assertIn("建议下一步", mentor_html)
         self.assertIn("继续追问导师", mentor_html)
-        self.assertIn('/assets/mentor.js?v=', mentor_html)
+        self.assertIn('/assets/mentor.js?v=20260403a', mentor_html)
         self.assertIn('from "/assets/shared.js?v=', mentor_js)
 
     def test_admin_and_shared_assets_include_error_logging_hooks(self) -> None:

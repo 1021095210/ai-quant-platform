@@ -24,6 +24,7 @@ class Settings:
     llm_api_key: str = ""
     llm_model_strategy: str = ""
     llm_model_summary: str = ""
+    llm_model_mentor: str = ""
     allowed_llm_export_fields: str = "symbol,side,entry_time,exit_time,pnl,feature_snapshot"
     backtest_engine_version: str = "engine_v1"
     strategy_prompt_version: str = "v1"
@@ -66,8 +67,17 @@ class Settings:
             minio_access_key=os.getenv("MINIO_ACCESS_KEY", defaults.minio_access_key),
             minio_secret_key=os.getenv("MINIO_SECRET_KEY", defaults.minio_secret_key),
             minio_bucket=os.getenv("MINIO_BUCKET", defaults.minio_bucket),
-            llm_base_url=os.getenv("LLM_BASE_URL", defaults.llm_base_url),
-            llm_api_key=os.getenv("LLM_API_KEY", defaults.llm_api_key),
+            llm_base_url=os.getenv(
+                "LLM_BASE_URL",
+                os.getenv(
+                    "OPENAI_BASE_URL",
+                    os.getenv("OPENAI_API_BASE", defaults.llm_base_url),
+                ),
+            ),
+            llm_api_key=os.getenv(
+                "LLM_API_KEY",
+                os.getenv("OPENAI_API_KEY", defaults.llm_api_key),
+            ),
             llm_model_strategy=os.getenv(
                 "LLM_MODEL_STRATEGY",
                 defaults.llm_model_strategy,
@@ -75,6 +85,10 @@ class Settings:
             llm_model_summary=os.getenv(
                 "LLM_MODEL_SUMMARY",
                 defaults.llm_model_summary,
+            ),
+            llm_model_mentor=os.getenv(
+                "LLM_MODEL_MENTOR",
+                os.getenv("OPENAI_MODEL", defaults.llm_model_mentor),
             ),
             allowed_llm_export_fields=os.getenv(
                 "ALLOWED_LLM_EXPORT_FIELDS",

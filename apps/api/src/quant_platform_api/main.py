@@ -158,7 +158,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         strategy_service=strategy_service,
         indicator_service=IndicatorService(indicator_repository),
         rule_service=RuleService(glossary_repository, default_rule_repository),
-        mentor_service=MentorService(),
+        mentor_service=MentorService(app_settings),
         trade_upload_service=TradeUploadService(
             trade_upload_repository,
             market_data_service=market_data_service,

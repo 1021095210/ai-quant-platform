@@ -8,6 +8,7 @@ import time
 import unittest
 from io import BytesIO
 from pathlib import Path
+from unittest.mock import Mock, patch
 
 
 WORKSPACE_ROOT = Path(__file__).resolve().parents[1]
@@ -27,12 +28,16 @@ try:
     from PIL import Image, ImageDraw
     from quant_platform_api.config import Settings
     from quant_platform_api.main import create_app
+    from quant_platform_api.models import MentorAskRequest
+    from quant_platform_api.services import MentorService
 except ModuleNotFoundError:  # pragma: no cover - handled by skip
     TestClient = None
     Image = None
     ImageDraw = None
     Settings = None
     create_app = None
+    MentorAskRequest = None
+    MentorService = None
 
 
 @unittest.skipIf(TestClient is None, "FastAPI dependencies are unavailable")
@@ -59,6 +64,9 @@ class QuantPlatformApiTests(unittest.TestCase):
         session_cookie_secure: bool = False,
         session_cookie_domain: str = "",
         session_cookie_samesite: str = "lax",
+        llm_base_url: str = "",
+        llm_api_key: str = "",
+        llm_model_mentor: str = "",
     ) -> TestClient:
         temp_dir = tempfile.TemporaryDirectory()
         self.addCleanup(temp_dir.cleanup)
@@ -80,6 +88,9 @@ class QuantPlatformApiTests(unittest.TestCase):
             session_cookie_secure=session_cookie_secure,
             session_cookie_domain=session_cookie_domain,
             session_cookie_samesite=session_cookie_samesite,
+            llm_base_url=llm_base_url,
+            llm_api_key=llm_api_key,
+            llm_model_mentor=llm_model_mentor,
         )
         return TestClient(create_app(settings))
 
@@ -1040,6 +1051,135 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertTrue(data["is_follow_up"])
         self.assertEqual("backtest_reading", data["topic"])
         self.assertIn("再具体一点", data["answer"])
+
+    def test_mentor_detailed_indicator_followup_is_not_mechanical_without_llm(self) -> None:
+        client = self._build_client()
+        self._login(client)
+
+        response = client.post(
+            "/api/v1/mentor/ask",
+            json={
+                "question": "能不能更详细精准地讲一下这些指标的具体含义、构造逻辑和为什么有效？",
+                "experience_level": "beginner",
+                "market_scope": "cn_equity",
+                "current_module": "mentor",
+                "conversation_history": [
+                    {"role": "user", "content": "均线、MACD、RSI 这些技术指标分别适合看什么？新手应该怎么学？"},
+                    {"role": "assistant", "content": "先分清趋势指标、动量指标和波动指标。"},
+                ],
+            },
+        )
+
+        self.assertEqual(200, response.status_code)
+        data = response.json()["data"]
+        self.assertEqual("fallback", data["answer_source"])
+        self.assertIn("均线的本质", data["answer"])
+        self.assertIn("MACD 的本质", data["answer"])
+        self.assertIn("RSI 的本质", data["answer"])
+        self.assertEqual("平台导师兜底", data["answer_mode_label"])
+
+    @patch("quant_platform_api.services.httpx.Client")
+    def test_mentor_can_use_llm_answer_when_configured(self, client_mock) -> None:
+        stream_response = Mock()
+        stream_response.iter_lines.return_value = [
+            'data: {"choices":[{"delta":{"content":"{\\"headline\\":\\"AI导师判断\\","}}]}',
+            'data: {"choices":[{"delta":{"content":"\\"answer\\":\\"这次我会按你的追问继续展开解释。\\","}}]}',
+            'data: {"choices":[{"delta":{"content":"\\"why_it_matters\\":\\"因为不同指标负责不同信息层。\\","}}]}',
+            'data: {"choices":[{"delta":{"content":"\\"action_plan\\":[\\"先看均线公式\\",\\"再看 MACD 背后的均值差\\",\\"最后把 RSI 放到趋势里用\\"],"}}]}',
+            'data: {"choices":[{"delta":{"content":"\\"glossary\\":[{\\"term\\":\\"均线\\",\\"meaning\\":\\"平均成本线\\"}]}"}}]}',
+            "data: [DONE]",
+        ]
+        stream_response.text = ""
+        stream_response.raise_for_status.return_value = None
+
+        stream_context = Mock()
+        stream_context.__enter__ = Mock(return_value=stream_response)
+        stream_context.__exit__ = Mock(return_value=None)
+
+        http_client = Mock()
+        http_client.stream.return_value = stream_context
+        http_context = Mock()
+        http_context.__enter__ = Mock(return_value=http_client)
+        http_context.__exit__ = Mock(return_value=None)
+        client_mock.return_value = http_context
+
+        service = MentorService(
+            Settings(
+                llm_base_url="https://llm.example.test/v1",
+                llm_api_key="sk-test",
+                llm_model_mentor="gpt-5-mini",
+            )
+        )
+        data = service.answer(
+            MentorAskRequest(
+                question="均线、MACD、RSI 这些技术指标分别适合看什么？新手应该怎么学？",
+                experience_level="beginner",
+                market_scope="cn_equity",
+                current_module="mentor",
+            )
+        )
+
+        self.assertEqual("llm", data["answer_source"])
+        self.assertEqual("AI 实时回答", data["answer_mode_label"])
+        self.assertEqual("AI导师判断", data["headline"])
+        self.assertIn("继续展开解释", data["answer"])
+        self.assertEqual(3, len(data["action_plan"]))
+
+    @patch("quant_platform_api.services.httpx.Client")
+    def test_mentor_retries_on_transient_llm_rate_limit(self, client_mock) -> None:
+        import httpx
+
+        retry_response = Mock()
+        retry_response.status_code = 429
+        retry_response.request = httpx.Request("POST", "https://llm.example.test/v1/chat/completions")
+        retry_response.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "rate limited",
+            request=retry_response.request,
+            response=retry_response,
+        )
+
+        ok_response = Mock()
+        ok_response.iter_lines.return_value = [
+            'data: {"choices":[{"delta":{"content":"{\\"headline\\":\\"重试后成功\\",\\"answer\\":\\"这次通过重试拿到了 AI 回答。\\",\\"why_it_matters\\":\\"避免首问偶发退回兜底。\\",\\"action_plan\\":[\\"先提问\\",\\"若限流则短重试\\",\\"再展示结构化答案\\"],\\"glossary\\":[{\\"term\\":\\"限流\\",\\"meaning\\":\\"请求过多时的短暂保护\\"}]}"}}]}',
+            "data: [DONE]",
+        ]
+        ok_response.text = ""
+        ok_response.raise_for_status.return_value = None
+
+        retry_context = Mock()
+        retry_context.__enter__ = Mock(return_value=retry_response)
+        retry_context.__exit__ = Mock(return_value=None)
+
+        ok_context = Mock()
+        ok_context.__enter__ = Mock(return_value=ok_response)
+        ok_context.__exit__ = Mock(return_value=None)
+
+        http_client = Mock()
+        http_client.stream.side_effect = [retry_context, ok_context]
+        http_context = Mock()
+        http_context.__enter__ = Mock(return_value=http_client)
+        http_context.__exit__ = Mock(return_value=None)
+        client_mock.return_value = http_context
+
+        service = MentorService(
+            Settings(
+                llm_base_url="https://llm.example.test/v1",
+                llm_api_key="sk-test",
+                llm_model_mentor="gpt-5-mini",
+            )
+        )
+        data = service.answer(
+            MentorAskRequest(
+                question="均线、MACD、RSI 这些技术指标分别适合看什么？新手应该怎么学？",
+                experience_level="beginner",
+                market_scope="cn_equity",
+                current_module="mentor",
+            )
+        )
+
+        self.assertEqual("llm", data["answer_source"])
+        self.assertEqual("重试后成功", data["headline"])
+        self.assertEqual(2, http_client.stream.call_count)
 
     def test_client_error_reports_are_visible_in_admin_app_logs(self) -> None:
         client = self._build_client()
@@ -2033,6 +2173,80 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertEqual(10.5, record["entry_price"])
         self.assertEqual(11.2, record["exit_price"])
         self.assertAlmostEqual(0.7, record["pnl"], places=4)
+
+    def test_manual_text_parse_endpoint_supports_plain_codes_and_explicit_dates(self) -> None:
+        client = self._build_client()
+        self._login(client)
+
+        response = client.post(
+            "/api/v1/trades/uploads/manual/parse-text",
+            json={
+                "text": (
+                    "买入日期：2025/07/25；买入：603590, 002225；"
+                    "买入方式：当日开盘价买入；卖出日期：2025/07/28"
+                ),
+                "market": "cn_equity",
+                "adjustment_mode": "qfq",
+            },
+        )
+
+        self.assertEqual(200, response.status_code)
+        data = response.json()["data"]
+        self.assertEqual(2, data["record_count"])
+        self.assertEqual("2025-07-25", data["trade_date"])
+        first = data["records"][0]
+        self.assertEqual("603590.SH", first["symbol"])
+        self.assertIsNotNone(first["exit_price"])
+        self.assertIn("按卖出日期 2025-07-28 的收盘价补全", first["notes"])
+
+    def test_manual_text_parse_endpoint_supports_offset_exit_rule(self) -> None:
+        client = self._build_client()
+        self._login(client)
+
+        response = client.post(
+            "/api/v1/trades/uploads/manual/parse-text",
+            json={
+                "text": (
+                    "2025-07-25 买入：603590.SH；"
+                    "买入方式：次日收盘价买入；"
+                    "卖出方式：第3个交易日收盘价卖出"
+                ),
+                "market": "cn_equity",
+                "adjustment_mode": "qfq",
+            },
+        )
+
+        self.assertEqual(200, response.status_code)
+        data = response.json()["data"]
+        self.assertIn("次日收盘价买入", data["entry_rule"])
+        self.assertIn("第 3 个交易日收盘价卖出", data["exit_rule"])
+        record = data["records"][0]
+        self.assertIsNotNone(record["exit_time"])
+        self.assertIn("卖出规则", record["notes"])
+
+    def test_manual_text_parse_endpoint_supports_stop_loss_pct_rule(self) -> None:
+        client = self._build_client()
+        self._login(client)
+
+        response = client.post(
+            "/api/v1/trades/uploads/manual/parse-text",
+            json={
+                "text": (
+                    "2025-07-25 买入：603590.SH；"
+                    "买入方式：当日开盘价买入；"
+                    "卖出方式：止损3%"
+                ),
+                "market": "cn_equity",
+                "adjustment_mode": "qfq",
+            },
+        )
+
+        self.assertEqual(200, response.status_code)
+        data = response.json()["data"]
+        self.assertIn("下跌 3% 止损卖出", data["exit_rule"])
+        record = data["records"][0]
+        self.assertIsNotNone(record["exit_price"])
+        self.assertIn("止损阈值", record["notes"])
 
     def test_screenshot_trade_upload_creates_structured_record(self) -> None:
         client = self._build_client()
