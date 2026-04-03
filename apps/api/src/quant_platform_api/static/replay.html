@@ -142,6 +142,47 @@
             </div>
 
             <div id="source-panel-manual" class="source-panel" hidden>
+              <section class="subpanel">
+                <div class="panel-header">
+                  <h4>长文字智能识别</h4>
+                  <span class="muted-note">把自然语言里的日期、股票代码、买卖规则直接转成结构化记录</span>
+                </div>
+                <div class="form-grid two">
+                  <label class="field">
+                    <span>市场</span>
+                    <select id="trade-manual-market">
+                      <option value="cn_equity">A股</option>
+                      <option value="us_equity">美股</option>
+                      <option value="crypto">加密货币</option>
+                      <option value="london_gold">伦敦金</option>
+                    </select>
+                  </label>
+                  <label class="field">
+                    <span>价格口径</span>
+                    <select id="trade-manual-adjustment">
+                      <option value="qfq">前复权</option>
+                      <option value="hfq">后复权</option>
+                      <option value="raw">原始价格</option>
+                    </select>
+                  </label>
+                </div>
+                <label class="field">
+                  <span>长文字输入</span>
+                  <textarea
+                    id="trade-manual-smart-text"
+                    placeholder="如：2025-07-25 买入：603590.SH, 002225.SZ；买入方式：当日开盘价买入；卖出方式：当最低价低于当日开盘价-0.5倍atr的值则卖出"
+                  ></textarea>
+                </label>
+                <div class="actions">
+                  <button id="parse-manual-text-btn" class="btn disabled" type="button" disabled>智能识别并加入记录</button>
+                </div>
+              </section>
+
+              <section class="subpanel">
+                <div class="panel-header">
+                  <h4>逐笔手动补录</h4>
+                  <span class="muted-note">适合你已经明确知道每笔交易的时间、方向和盈亏时，逐笔补进去。</span>
+                </div>
               <div class="form-grid two">
                 <label class="field">
                   <span>标的代码</span>
@@ -178,6 +219,7 @@
               <div class="actions">
                 <button id="add-manual-trade-btn" class="btn disabled" type="button" disabled>加入手动记录</button>
               </div>
+              </section>
               <div id="manual-trade-list" class="list empty-state">尚未加入手动记录。</div>
               <div class="actions">
                 <button id="upload-manual-btn" class="btn disabled" type="button" disabled>提交手动记录</button>

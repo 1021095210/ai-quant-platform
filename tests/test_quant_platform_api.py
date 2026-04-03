@@ -835,6 +835,22 @@ class QuantPlatformApiTests(unittest.TestCase):
             any(item["name"] == generated_payload["name"] for item in strategy_payload["matched_custom_indicators"])
         )
 
+    def test_builtin_indicator_endpoint_includes_common_indicators(self) -> None:
+        client = self._build_client()
+
+        response = client.get("/api/v1/indicators/builtin")
+
+        self.assertEqual(200, response.status_code)
+        items = response.json()["data"]["items"]
+        indicator_keys = {item["indicator_key"] for item in items}
+        self.assertIn("atr", indicator_keys)
+        self.assertIn("adx", indicator_keys)
+        self.assertIn("kdj", indicator_keys)
+        self.assertIn("cci", indicator_keys)
+        self.assertIn("williams_r", indicator_keys)
+        self.assertIn("obv", indicator_keys)
+        self.assertIn("vwap", indicator_keys)
+
     def test_rules_endpoints_return_defaults_and_accept_custom_terms(self) -> None:
         client = self._build_client()
 
@@ -1951,6 +1967,59 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertEqual("parsed", data["status"])
         self.assertEqual(1, data["record_count"])
 
+    def test_manual_text_parse_endpoint_recognizes_symbols_and_rules(self) -> None:
+        client = self._build_client()
+        self._login(client)
+
+        response = client.post(
+            "/api/v1/trades/uploads/manual/parse-text",
+            json={
+                "text": (
+                    "2025-07-25 买入：603590.SH, 002225.SZ；"
+                    "买入方式：当日开盘价买入；"
+                    "卖出方式：当最低价低于当日开盘价-0.5倍atr的值则卖出"
+                ),
+                "market": "cn_equity",
+                "adjustment_mode": "qfq",
+            },
+        )
+
+        self.assertEqual(200, response.status_code)
+        data = response.json()["data"]
+        self.assertEqual(2, data["record_count"])
+        self.assertEqual("2025-07-25", data["trade_date"])
+        self.assertIn("当日开盘价买入", data["entry_rule"])
+        self.assertIn("ATR", data["exit_rule"])
+        first = data["records"][0]
+        self.assertEqual("603590.SH", first["symbol"])
+        self.assertIsNotNone(first["entry_price"])
+        self.assertIsNotNone(first["exit_price"])
+        self.assertIsNotNone(first["exit_time"])
+        self.assertIn("长文字智能识别", first["notes"])
+
+    def test_manual_text_parse_endpoint_supports_explicit_prices(self) -> None:
+        client = self._build_client()
+        self._login(client)
+
+        response = client.post(
+            "/api/v1/trades/uploads/manual/parse-text",
+            json={
+                "text": (
+                    "2025-07-25 买入：603590.SH；"
+                    "买入价：10.5；"
+                    "卖出价：11.2"
+                ),
+                "market": "cn_equity",
+                "adjustment_mode": "qfq",
+            },
+        )
+
+        self.assertEqual(200, response.status_code)
+        record = response.json()["data"]["records"][0]
+        self.assertEqual(10.5, record["entry_price"])
+        self.assertEqual(11.2, record["exit_price"])
+        self.assertAlmostEqual(0.7, record["pnl"], places=4)
+
     def test_screenshot_trade_upload_creates_structured_record(self) -> None:
         client = self._build_client()
         self._login(client)
@@ -1990,6 +2059,9 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertIn("或直接粘贴 CSV", response.text)
         self.assertIn("登记截图并生成记录", response.text)
         self.assertIn("加入手动记录", response.text)
+        self.assertIn("长文字智能识别", response.text)
+        self.assertIn("智能识别并加入记录", response.text)
+        self.assertIn("价格口径", response.text)
 
     def test_replay_analysis_for_single_side_sample_uses_single_direction_summary(self) -> None:
         client = self._build_client()

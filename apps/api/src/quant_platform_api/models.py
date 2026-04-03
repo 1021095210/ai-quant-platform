@@ -232,6 +232,9 @@ class TradeRecordItem(BaseModel):
     entry_time: datetime
     exit_time: datetime | None
     pnl: float
+    entry_price: float | None = None
+    exit_price: float | None = None
+    notes: str | None = None
 
 
 class ManualTradeRecordInput(BaseModel):
@@ -240,6 +243,15 @@ class ManualTradeRecordInput(BaseModel):
     entry_time: datetime
     exit_time: datetime | None = None
     pnl: float = 0.0
+    entry_price: float | None = None
+    exit_price: float | None = None
+    notes: str | None = None
+
+
+class ManualTradeTextParseRequest(BaseModel):
+    text: str
+    market: str = "cn_equity"
+    adjustment_mode: str = "qfq"
 
 
 class TradeUploadManualCreateRequest(BaseModel):

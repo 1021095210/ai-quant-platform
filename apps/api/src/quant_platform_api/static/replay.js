@@ -30,10 +30,10 @@ const SOURCE_MODE_META = {
   },
   manual: {
     title: "手动录入",
-    intro: "适合没有交割单文件时，直接补录股票代码、买卖日期、方向和盈亏。可以连续录入多笔再一起复盘。",
+    intro: "适合没有交割单文件时，直接逐笔补录，或者把交易计划、群聊记录、复盘笔记整段贴进来让平台智能识别。",
     steps: [
-      "先补一笔交易的标的、时间、方向和盈亏。",
-      "点击加入手动记录，重复补录需要复盘的样本。",
+      "先选择市场，然后粘贴长文字智能识别，或逐笔手动补录。",
+      "确认自动识别或手动加入的记录没有明显错误。",
       "确认记录列表无误后，再提交并运行 AI 复盘。",
     ],
   },
@@ -56,6 +56,9 @@ const nodes = {
   manualExit: document.querySelector("#trade-manual-exit"),
   manualPnl: document.querySelector("#trade-manual-pnl"),
   manualNotes: document.querySelector("#trade-manual-notes"),
+  manualMarket: document.querySelector("#trade-manual-market"),
+  manualAdjustment: document.querySelector("#trade-manual-adjustment"),
+  manualSmartText: document.querySelector("#trade-manual-smart-text"),
   manualList: document.querySelector("#manual-trade-list"),
   uploadId: document.querySelector("#current-upload-id"),
   recordsBody: document.querySelector("#replay-records-body"),
@@ -65,6 +68,7 @@ const nodes = {
   uploadScreenshotButton: document.querySelector("#upload-screenshot-btn"),
   uploadManualButton: document.querySelector("#upload-manual-btn"),
   addManualTradeButton: document.querySelector("#add-manual-trade-btn"),
+  parseManualTextButton: document.querySelector("#parse-manual-text-btn"),
   replayButton: document.querySelector("#run-replay-btn"),
   sourceModeTitle: document.querySelector("#source-mode-title"),
   sourceModeIntro: document.querySelector("#source-mode-intro"),
@@ -165,7 +169,8 @@ async function uploadManualTrades() {
       source_type: "manual",
       source_file_name: "manual-entry.json",
       source_notes: state.manualTrades.map((item) => item.notes).filter(Boolean).join("；"),
-      records: state.manualTrades.map(({ notes, ...item }) => item),
+      market: nodes.manualMarket.value,
+      records: state.manualTrades,
     }),
   });
   state.uploadId = uploadPayload.data.upload_id;
@@ -175,6 +180,36 @@ async function uploadManualTrades() {
   state.replayReady = true;
   syncReplayActionState();
   setStatus("手动记录已提交，可以直接运行 AI 复盘。");
+}
+
+async function parseManualText() {
+  syncReplayActionState({ uploadBusy: true });
+  if (!nodes.manualSmartText.value.trim()) {
+    throw new Error("请先输入需要识别的长文字内容。");
+  }
+  setStatus("正在识别长文字中的股票代码、日期和买卖规则...");
+  const payload = await api("/api/v1/trades/uploads/manual/parse-text", {
+    method: "POST",
+    body: JSON.stringify({
+      text: nodes.manualSmartText.value,
+      market: nodes.manualMarket.value,
+      adjustment_mode: nodes.manualAdjustment.value,
+    }),
+  });
+  const items = payload.data.records || [];
+  state.manualTrades.push(...items.map((item) => ({
+    symbol: item.symbol,
+    side: item.side,
+    entry_time: item.entry_time,
+    exit_time: item.exit_time,
+    pnl: item.pnl,
+    entry_price: item.entry_price,
+    exit_price: item.exit_price,
+    notes: item.notes || "来源：长文字智能识别",
+  })));
+  renderManualTrades();
+  syncReplayActionState();
+  setStatus(payload.data.summary || "长文字智能识别完成，已加入手动记录。");
 }
 
 function renderRecords(items) {
@@ -203,7 +238,8 @@ function renderManualTrades() {
             <div class="list-item compact-item">
               <strong>${item.symbol} · ${item.side === "short" ? "反向 / 做空" : "买入后卖出 / 做多"}</strong>
               <div class="muted-note">买入 ${item.entry_time.slice(0, 16).replace("T", " ")} · 卖出 ${item.exit_time ? item.exit_time.slice(0, 16).replace("T", " ") : "未填写"}</div>
-              <div class="muted-note">盈亏 ${item.pnl} · ${item.notes || "无补充说明"}</div>
+              <div class="muted-note">买入价 ${item.entry_price ?? "-"} · 卖出价 ${item.exit_price ?? "-"} · 盈亏 ${item.pnl}</div>
+              <div class="muted-note">${item.notes || "无补充说明"}</div>
               <button class="btn ghost manual-remove-btn" type="button" data-manual-index="${index}">删除</button>
             </div>
           `,
@@ -301,6 +337,7 @@ function syncReplayActionState(options = {}) {
       nodes.screenshotSymbol.value.trim() &&
       nodes.screenshotEntry.value,
   );
+  const manualTextReady = Boolean(nodes.manualSmartText.value.trim());
   const manualDraftReady = Boolean(nodes.manualSymbol.value.trim() && nodes.manualEntry.value);
   const manualUploadReady = Boolean(state.manualTrades.length);
 
@@ -330,6 +367,14 @@ function syncReplayActionState(options = {}) {
   nodes.uploadManualButton.title = manualUploadReady
     ? "当前手动记录已准备好，可以提交并生成解析结果。"
     : "请先至少加入一笔手动记录。";
+
+  nodes.parseManualTextButton.disabled = uploadBusy || !manualTextReady;
+  nodes.parseManualTextButton.className =
+    manualTextReady && !uploadBusy ? "btn primary" : "btn disabled";
+  nodes.parseManualTextButton.textContent = uploadBusy ? "正在识别..." : "智能识别并加入记录";
+  nodes.parseManualTextButton.title = manualTextReady
+    ? "当前文字内容已准备好，可以识别日期、股票代码和买卖规则。"
+    : "请先输入包含日期、股票代码或买卖规则的长文字。";
 
   const replayReady = state.replayReady && !uploadBusy;
   nodes.replayButton.disabled = !replayReady || replayBusy;
@@ -380,6 +425,16 @@ document.querySelector("#upload-manual-btn").addEventListener(
 );
 
 document.querySelector("#add-manual-trade-btn").addEventListener("click", handle(addManualTrade));
+document.querySelector("#parse-manual-text-btn").addEventListener(
+  "click",
+  handle(async () => {
+    try {
+      await parseManualText();
+    } finally {
+      syncReplayActionState();
+    }
+  }),
+);
 
 nodes.sourceModeButtons.forEach((button) => {
   button.addEventListener("click", () => {
@@ -402,6 +457,7 @@ nodes.sourceModeButtons.forEach((button) => {
   nodes.manualExit,
   nodes.manualPnl,
   nodes.manualNotes,
+  nodes.manualSmartText,
 ].forEach((node) => {
   node.addEventListener("input", () => syncReplayActionState());
   node.addEventListener("change", () => syncReplayActionState());

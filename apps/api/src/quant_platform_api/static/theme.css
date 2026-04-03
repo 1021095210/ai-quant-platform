@@ -452,6 +452,15 @@ button:disabled:hover {
   box-shadow: 0 10px 22px rgba(36, 99, 235, 0.16);
 }
 
+.subpanel {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  border-radius: 18px;
+  border: 1px solid rgba(191, 212, 255, 0.56);
+  background: rgba(248, 251, 255, 0.88);
+}
+
 .source-mode-guide {
   display: grid;
   gap: 14px;

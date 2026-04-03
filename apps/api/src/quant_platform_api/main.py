@@ -36,6 +36,7 @@ from quant_platform_api.models import (
     ErrorPayload,
     MentorAskRequest,
     GlossaryTermCreateRequest,
+    ManualTradeTextParseRequest,
     TradeUploadManualCreateRequest,
     OptimizationCreateRequest,
     ProjectCreateRequest,
@@ -158,7 +159,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         indicator_service=IndicatorService(indicator_repository),
         rule_service=RuleService(glossary_repository, default_rule_repository),
         mentor_service=MentorService(),
-        trade_upload_service=TradeUploadService(trade_upload_repository),
+        trade_upload_service=TradeUploadService(
+            trade_upload_repository,
+            market_data_service=market_data_service,
+        ),
         workspace_service=WorkspaceService(
             strategy_service=strategy_service,
             task_repository=task_repository,
@@ -1285,6 +1289,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "record_count": len(upload.records),
             },
         )
+
+    @app.post(f"{app_settings.api_prefix}/trades/uploads/manual/parse-text")
+    def parse_manual_trade_text(
+        request: Request,
+        payload: ManualTradeTextParseRequest,
+    ) -> JSONResponse:
+        current_user = _require_current_user(request, services.auth_service)
+        parsed = services.trade_upload_service.parse_manual_trade_text(
+            text=payload.text,
+            market=payload.market,
+            adjustment_mode=payload.adjustment_mode,
+            user_id=current_user.user_id,
+            workspace_id=current_user.workspace_id,
+        )
+        return _success_response(request, data=parsed)
 
     @app.post(f"{app_settings.api_prefix}/trades/uploads/screenshot")
     async def upload_trade_screenshot(

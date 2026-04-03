@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 import csv
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 import hashlib
 from io import StringIO
 import json
@@ -99,6 +99,105 @@ BUILTIN_INDICATORS: list[dict[str, Any]] = [
         "usage_hint": "常见阈值 1.2 或 1.5，用来过滤无量信号。",
         "python_code": """volume_ma = volume.rolling(10).mean()\nvolume_ratio = volume / volume_ma.replace(0, 1e-9)\n""",
         "default_params": {"period": 10},
+    },
+    {
+        "indicator_key": "atr",
+        "title": "ATR 平均真实波幅",
+        "summary": "衡量一段时间内的真实波动范围，常用于止损、仓位和突破过滤。",
+        "formula_text": "ATR = MA(TR, 14), TR = max(high-low, abs(high-prev_close), abs(low-prev_close))",
+        "usage_hint": "适合用于波动止损、移动止损和“突破幅度是否足够”的确认。",
+        "python_code": """prev_close = close.shift(1)\ntrue_range = pd.concat([\n    high - low,\n    (high - prev_close).abs(),\n    (low - prev_close).abs(),\n], axis=1).max(axis=1)\natr = true_range.rolling(14).mean()\n""",
+        "default_params": {"period": 14},
+    },
+    {
+        "indicator_key": "adx",
+        "title": "ADX 趋势强度指标",
+        "summary": "衡量趋势是否足够强，而不是只判断涨跌方向。",
+        "formula_text": "ADX = MA(DX, 14), DX = abs(+DI - -DI) / (+DI + -DI) * 100",
+        "usage_hint": "常见用法是 ADX > 20 或 25 视为趋势开始增强。",
+        "python_code": """up_move = high.diff()\ndown_move = -low.diff()\nplus_dm = up_move.where((up_move > down_move) & (up_move > 0), 0.0)\nminus_dm = down_move.where((down_move > up_move) & (down_move > 0), 0.0)\nprev_close = close.shift(1)\ntr = pd.concat([(high - low), (high - prev_close).abs(), (low - prev_close).abs()], axis=1).max(axis=1)\natr = tr.rolling(14).mean().replace(0, 1e-9)\nplus_di = 100 * plus_dm.rolling(14).sum() / atr\nminus_di = 100 * minus_dm.rolling(14).sum() / atr\ndx = (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, 1e-9) * 100\nadx = dx.rolling(14).mean()\n""",
+        "default_params": {"period": 14},
+    },
+    {
+        "indicator_key": "kdj",
+        "title": "KDJ 随机指标",
+        "summary": "用价格在近期区间内的位置衡量超买超卖和拐点变化。",
+        "formula_text": "RSV = (close - LLV(low, 9)) / (HHV(high, 9) - LLV(low, 9)) * 100",
+        "usage_hint": "适合短线拐点观察，常用 K 上穿 D 作为金叉提示。",
+        "python_code": """low_n = low.rolling(9).min()\nhigh_n = high.rolling(9).max()\nrsv = (close - low_n) / (high_n - low_n).replace(0, 1e-9) * 100\nk = rsv.ewm(alpha=1/3, adjust=False).mean()\nd = k.ewm(alpha=1/3, adjust=False).mean()\nj = 3 * k - 2 * d\n""",
+        "default_params": {"period": 9},
+    },
+    {
+        "indicator_key": "cci",
+        "title": "CCI 顺势指标",
+        "summary": "比较典型价格与其均值偏离程度，常用于寻找强趋势或极端偏离。",
+        "formula_text": "CCI = (TP - MA(TP, 14)) / (0.015 * MeanDeviation)",
+        "usage_hint": "CCI > 100 常被视为强势，CCI < -100 常被视为弱势。",
+        "python_code": """tp = (high + low + close) / 3\nma = tp.rolling(14).mean()\nmean_dev = (tp - ma).abs().rolling(14).mean().replace(0, 1e-9)\ncci = (tp - ma) / (0.015 * mean_dev)\n""",
+        "default_params": {"period": 14},
+    },
+    {
+        "indicator_key": "williams_r",
+        "title": "WR 威廉指标",
+        "summary": "衡量收盘价在近期区间中的相对位置，常用于超买超卖判断。",
+        "formula_text": "WR = (HHV(high, 14) - close) / (HHV(high, 14) - LLV(low, 14)) * -100",
+        "usage_hint": "常见参考区间是 -20 以上偏强、-80 以下偏弱。",
+        "python_code": """highest_high = high.rolling(14).max()\nlowest_low = low.rolling(14).min()\nwr = (highest_high - close) / (highest_high - lowest_low).replace(0, 1e-9) * -100\n""",
+        "default_params": {"period": 14},
+    },
+    {
+        "indicator_key": "obv",
+        "title": "OBV 能量潮",
+        "summary": "把上涨日成交量记为正、下跌日成交量记为负，用于观察量价同步性。",
+        "formula_text": "OBV = cumulative(sum(sign(close-close_prev) * volume))",
+        "usage_hint": "适合观察价格创新高时，量能是否也在同步抬升。",
+        "python_code": """direction = close.diff().fillna(0).apply(lambda x: 1 if x > 0 else (-1 if x < 0 else 0))\nobv = (direction * volume).cumsum()\n""",
+        "default_params": {},
+    },
+    {
+        "indicator_key": "vwap",
+        "title": "VWAP 成交量加权平均价",
+        "summary": "反映成交量加权后的平均成交成本，常用于盘中强弱和机构成本观察。",
+        "formula_text": "VWAP = cumulative(sum(price * volume)) / cumulative(sum(volume))",
+        "usage_hint": "适合盘中策略，价格站稳 VWAP 常被视为资金承接较强。",
+        "python_code": """typical_price = (high + low + close) / 3\nvwap = (typical_price * volume).cumsum() / volume.cumsum().replace(0, 1e-9)\n""",
+        "default_params": {},
+    },
+    {
+        "indicator_key": "mfi",
+        "title": "MFI 资金流量指标",
+        "summary": "结合价格和成交量判断资金流入流出强度。",
+        "formula_text": "MFI = 100 - 100 / (1 + PositiveMoneyFlow / NegativeMoneyFlow)",
+        "usage_hint": "适合与 RSI 对照使用，过滤只有价格波动、没有量能支持的信号。",
+        "python_code": """tp = (high + low + close) / 3\nmoney_flow = tp * volume\ndirection = tp.diff().fillna(0)\npositive = money_flow.where(direction > 0, 0.0)\nnegative = money_flow.where(direction < 0, 0.0)\nmoney_ratio = positive.rolling(14).sum() / negative.rolling(14).sum().replace(0, 1e-9)\nmfi = 100 - 100 / (1 + money_ratio)\n""",
+        "default_params": {"period": 14},
+    },
+    {
+        "indicator_key": "roc",
+        "title": "ROC 变动率",
+        "summary": "比较当前价格与若干周期前价格的百分比变化，常用于动量判断。",
+        "formula_text": "ROC = close / REF(close, 12) - 1",
+        "usage_hint": "适合配合趋势指标使用，避免在无趋势区间盲目追涨。",
+        "python_code": """past_close = close.shift(12).replace(0, 1e-9)\nroc = close / past_close - 1\n""",
+        "default_params": {"period": 12},
+    },
+    {
+        "indicator_key": "bias",
+        "title": "BIAS 乖离率",
+        "summary": "观察价格偏离均线的程度，用来衡量短期过热或超跌。",
+        "formula_text": "BIAS = close / SMA(close, 20) - 1",
+        "usage_hint": "适合和均线趋势一起看，帮助识别是否偏离过大不宜追价。",
+        "python_code": """ma = close.rolling(20).mean().replace(0, 1e-9)\nbias = close / ma - 1\n""",
+        "default_params": {"period": 20},
+    },
+    {
+        "indicator_key": "sar",
+        "title": "SAR 抛物转向",
+        "summary": "通过追踪趋势中的潜在反转点，为止盈止损提供参考。",
+        "formula_text": "SAR 基于趋势极值和加速因子逐步上移或下移",
+        "usage_hint": "适合趋势跟踪和移动止损，但震荡行情中容易来回反复。",
+        "python_code": """# 伪代码：根据上一周期 SAR、极值 EP、加速因子 AF 递推\nsar = previous_sar + af * (ep - previous_sar)\n""",
+        "default_params": {"acceleration": 0.02, "max_acceleration": 0.2},
     },
 ]
 
@@ -295,6 +394,15 @@ def _timeframe_label(value: str) -> str:
 
 def _market_scope_label(value: str) -> str:
     return MARKET_SCOPE_LABELS.get(value, value)
+
+
+def _safe_number(value: Any) -> float | None:
+    if value in (None, "", "null"):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _extract_prompt_timeframes(prompt: str) -> list[str]:
@@ -1348,8 +1456,14 @@ class MentorService:
 
 
 class TradeUploadService:
-    def __init__(self, repository: TradeUploadRepository) -> None:
+    def __init__(
+        self,
+        repository: TradeUploadRepository,
+        *,
+        market_data_service: MarketDataService | None = None,
+    ) -> None:
         self._repository = repository
+        self._market_data_service = market_data_service
 
     def create_upload(
         self,
@@ -1393,6 +1507,9 @@ class TradeUploadService:
                 entry_time=item["entry_time"],
                 exit_time=item.get("exit_time"),
                 pnl=float(item.get("pnl", 0.0)),
+                entry_price=_safe_number(item.get("entry_price")),
+                exit_price=_safe_number(item.get("exit_price")),
+                notes=(str(item.get("notes", "")).strip() or None),
             )
             for index, item in enumerate(records)
         ]
@@ -1465,6 +1582,13 @@ class TradeUploadService:
                     entry_time=entry_time,
                     exit_time=exit_time,
                     pnl=pnl,
+                    entry_price=_safe_number(
+                        row.get(column_mapping.get("entry_price", ""), "")
+                    ),
+                    exit_price=_safe_number(
+                        row.get(column_mapping.get("exit_price", ""), "")
+                    ),
+                    notes=(row.get(column_mapping.get("notes", ""), "") or None),
                 )
             )
 
@@ -1480,6 +1604,303 @@ class TradeUploadService:
         except StopIteration:
             return []
         return [item.strip() for item in header]
+
+    def parse_manual_trade_text(
+        self,
+        *,
+        text: str,
+        market: str,
+        adjustment_mode: str,
+        user_id: str,
+        workspace_id: str,
+    ) -> dict[str, Any]:
+        normalized_text = text.strip()
+        if not normalized_text:
+            raise TaskExecutionError("INVALID_ARGUMENT", "请先输入需要识别的长文字内容。")
+
+        trade_date = self._extract_trade_date(normalized_text)
+        if trade_date is None:
+            raise TaskExecutionError("INVALID_ARGUMENT", "未识别到交易日期，请至少包含 YYYY-MM-DD。")
+
+        symbols = self._extract_symbols(normalized_text)
+        if not symbols:
+            raise TaskExecutionError("INVALID_ARGUMENT", "未识别到股票代码，请至少包含一个类似 600519.SH 的代码。")
+
+        entry_rule = self._extract_entry_rule(normalized_text)
+        exit_rule = self._extract_exit_rule(normalized_text)
+
+        records = [
+            self._build_text_trade_record(
+                trade_date=trade_date,
+                symbol=symbol,
+                market=market,
+                adjustment_mode=adjustment_mode,
+                entry_rule=entry_rule,
+                exit_rule=exit_rule,
+                index=index,
+            )
+            for index, symbol in enumerate(symbols, start=1)
+        ]
+
+        return {
+            "market": market,
+            "trade_date": trade_date.isoformat(),
+            "entry_rule": entry_rule["label"],
+            "exit_rule": exit_rule["label"] if exit_rule else "未提供卖出规则",
+            "record_count": len(records),
+            "records": [item.model_dump(mode="json") for item in records],
+            "summary": (
+                f"已识别 {len(records)} 笔交易，日期为 {trade_date.isoformat()}，"
+                f"买入规则按“{entry_rule['label']}”理解。"
+            ),
+        }
+
+    def _build_text_trade_record(
+        self,
+        *,
+        trade_date: date,
+        symbol: str,
+        market: str,
+        adjustment_mode: str,
+        entry_rule: dict[str, Any],
+        exit_rule: dict[str, Any] | None,
+        index: int,
+    ) -> TradeRecordItem:
+        bars, _ = self._load_trade_bars(
+            symbol=symbol,
+            trade_date=trade_date,
+            adjustment_mode=adjustment_mode,
+        )
+        entry_bar = self._find_bar_by_offset(
+            bars,
+            trade_date.isoformat(),
+            entry_rule.get("offset", 0),
+        ) or self._find_first_bar_on_or_after(bars, trade_date)
+        if entry_bar is None:
+            raise TaskExecutionError("NOT_FOUND", f"{symbol} 在 {trade_date.isoformat()} 附近没有可用行情。")
+
+        entry_price = self._resolve_entry_price(entry_bar, entry_rule)
+        entry_time = self._resolve_entry_time(entry_bar.trade_date, entry_rule)
+        exit_price = None
+        exit_time = None
+        pnl = 0.0
+        notes = f"来源：长文字智能识别；买入规则：{entry_rule['label']}"
+
+        if exit_rule is not None:
+            exit_match = self._resolve_exit_from_rule(
+                bars=bars,
+                entry_bar=entry_bar,
+                entry_price=entry_price,
+                entry_rule=entry_rule,
+                exit_rule=exit_rule,
+            )
+            exit_price = exit_match.get("exit_price")
+            exit_time = exit_match.get("exit_time")
+            pnl = exit_match.get("pnl", 0.0)
+            notes = f"{notes}；卖出规则：{exit_rule['label']}；{exit_match['note']}"
+
+        return TradeRecordItem(
+            trade_id=f"text_trade_{index:03d}",
+            symbol=symbol,
+            side="long" if market == "cn_equity" else "long",
+            entry_time=entry_time,
+            exit_time=exit_time,
+            pnl=round(pnl, 4),
+            entry_price=round(entry_price, 4),
+            exit_price=round(exit_price, 4) if exit_price is not None else None,
+            notes=notes,
+        )
+
+    def _load_trade_bars(
+        self,
+        *,
+        symbol: str,
+        trade_date: date,
+        adjustment_mode: str,
+    ) -> tuple[list[Any], dict[str, Any]]:
+        if self._market_data_service is None:
+            raise TaskExecutionError("INTERNAL_ERROR", "market data service unavailable")
+        start_date = trade_date - timedelta(days=40)
+        end_date = trade_date + timedelta(days=30)
+        return self._market_data_service.load_daily_bars(
+            ts_code=symbol,
+            start_date=start_date,
+            end_date=end_date,
+            adjustment_mode=adjustment_mode,
+        )
+
+    def _find_first_bar_on_or_after(self, bars: list[Any], trade_date: date) -> Any | None:
+        for bar in bars:
+            if date.fromisoformat(bar.trade_date) >= trade_date:
+                return bar
+        return None
+
+    def _resolve_entry_price(self, bar: Any, entry_rule: dict[str, Any]) -> float:
+        explicit_price = entry_rule.get("explicit_price")
+        if explicit_price is not None:
+            return float(explicit_price)
+        price_field = entry_rule["price_field"]
+        return float(getattr(bar, price_field))
+
+    def _resolve_entry_time(self, trade_date_text: str, entry_rule: dict[str, Any]) -> datetime:
+        time_text = "09:30:00" if entry_rule["price_field"] == "open" else "15:00:00"
+        return datetime.fromisoformat(f"{trade_date_text}T{time_text}+00:00")
+
+    def _resolve_exit_from_rule(
+        self,
+        *,
+        bars: list[Any],
+        entry_bar: Any,
+        entry_price: float,
+        entry_rule: dict[str, Any],
+        exit_rule: dict[str, Any],
+    ) -> dict[str, Any]:
+        if exit_rule["type"] == "atr_low_break":
+            atr_value = self._estimate_atr14(bars, entry_bar.trade_date)
+            threshold = round(entry_price - exit_rule["multiplier"] * atr_value, 4)
+            future_bars = [bar for bar in bars if date.fromisoformat(bar.trade_date) >= date.fromisoformat(entry_bar.trade_date)]
+            for bar in future_bars:
+                if float(bar.low) <= threshold:
+                    exit_time = datetime.fromisoformat(f"{bar.trade_date}T15:00:00+00:00")
+                    return {
+                        "exit_price": threshold,
+                        "exit_time": exit_time,
+                        "pnl": threshold - entry_price,
+                        "note": f"按 ATR 阈值 {threshold:.4f} 触发卖出",
+                    }
+            fallback_bar = future_bars[min(9, len(future_bars) - 1)] if future_bars else entry_bar
+            fallback_price = float(fallback_bar.close)
+            return {
+                "exit_price": fallback_price,
+                "exit_time": datetime.fromisoformat(f"{fallback_bar.trade_date}T15:00:00+00:00"),
+                "pnl": fallback_price - entry_price,
+                "note": "数据范围内未触发 ATR 阈值，已按后续可用收盘价补全",
+            }
+
+        if exit_rule["type"] == "explicit_price":
+            exit_price = float(exit_rule["value"])
+            target_bar = self._find_bar_by_offset(
+                bars,
+                entry_bar.trade_date,
+                exit_rule.get("offset", 0),
+            ) or entry_bar
+            return {
+                "exit_price": exit_price,
+                "exit_time": datetime.fromisoformat(f"{target_bar.trade_date}T15:00:00+00:00"),
+                "pnl": exit_price - entry_price,
+                "note": "按文字中给出的卖出价格补全",
+            }
+
+        if exit_rule["type"] == "next_close":
+            next_bar = self._find_bar_by_offset(bars, entry_bar.trade_date, 1)
+            target_bar = next_bar or entry_bar
+            exit_price = float(target_bar.close)
+            return {
+                "exit_price": exit_price,
+                "exit_time": datetime.fromisoformat(f"{target_bar.trade_date}T15:00:00+00:00"),
+                "pnl": exit_price - entry_price,
+                "note": "按次日收盘价卖出补全",
+            }
+
+        target_bar = entry_bar
+        exit_price = float(target_bar.close)
+        return {
+            "exit_price": exit_price,
+            "exit_time": datetime.fromisoformat(f"{target_bar.trade_date}T15:00:00+00:00"),
+            "pnl": exit_price - entry_price,
+            "note": "按当日收盘价卖出补全",
+        }
+
+    def _find_bar_by_offset(self, bars: list[Any], trade_date_text: str, offset: int) -> Any | None:
+        future_bars = [bar for bar in bars if date.fromisoformat(bar.trade_date) >= date.fromisoformat(trade_date_text)]
+        if len(future_bars) <= offset:
+            return None
+        return future_bars[offset]
+
+    def _estimate_atr14(self, bars: list[Any], entry_trade_date_text: str) -> float:
+        entry_trade_date = date.fromisoformat(entry_trade_date_text)
+        history = [bar for bar in bars if date.fromisoformat(bar.trade_date) <= entry_trade_date]
+        if not history:
+            return 1.0
+        true_ranges: list[float] = []
+        previous_close: float | None = None
+        for bar in history[-20:]:
+            high = float(bar.high)
+            low = float(bar.low)
+            if previous_close is None:
+                tr = high - low
+            else:
+                tr = max(high - low, abs(high - previous_close), abs(low - previous_close))
+            true_ranges.append(tr)
+            previous_close = float(bar.close)
+        recent = true_ranges[-14:] or true_ranges
+        return max(sum(recent) / len(recent), 0.01)
+
+    def _extract_trade_date(self, text: str) -> date | None:
+        match = re.search(r"(20\d{2}-\d{2}-\d{2})", text)
+        if match is None:
+            return None
+        return date.fromisoformat(match.group(1))
+
+    def _extract_symbols(self, text: str) -> list[str]:
+        segment_match = re.search(r"买入[:：]\s*(.+?)(?:买入方式|卖出方式|$)", text, flags=re.S)
+        target_text = segment_match.group(1) if segment_match else text
+        found = re.findall(r"\b\d{6}\.(?:SH|SZ)\b", target_text.upper())
+        deduped: list[str] = []
+        for symbol in found:
+            if symbol not in deduped:
+                deduped.append(symbol)
+        return deduped
+
+    def _extract_entry_rule(self, text: str) -> dict[str, Any]:
+        explicit_price_match = re.search(
+            r"买入(?:价|价格)[:：]?\s*([0-9]+(?:\.[0-9]+)?)",
+            text,
+            flags=re.I,
+        )
+        if explicit_price_match is not None:
+            explicit_price = float(explicit_price_match.group(1))
+            return {
+                "label": f"按买入价 {explicit_price:g} 买入",
+                "price_field": "open",
+                "offset": 0,
+                "explicit_price": explicit_price,
+            }
+        if "次日开盘价买入" in text:
+            return {"label": "次日开盘价买入", "price_field": "open", "offset": 1}
+        if "当日收盘价买入" in text:
+            return {"label": "当日收盘价买入", "price_field": "close", "offset": 0}
+        return {"label": "当日开盘价买入", "price_field": "open", "offset": 0}
+
+    def _extract_exit_rule(self, text: str) -> dict[str, Any] | None:
+        explicit_price_match = re.search(
+            r"卖出(?:价|价格)[:：]?\s*([0-9]+(?:\.[0-9]+)?)",
+            text,
+            flags=re.I,
+        )
+        if explicit_price_match is not None:
+            explicit_price = float(explicit_price_match.group(1))
+            return {
+                "type": "explicit_price",
+                "label": f"按卖出价 {explicit_price:g} 卖出",
+                "value": explicit_price,
+            }
+        atr_match = re.search(
+            r"最低价低于当日开盘价-([0-9]+(?:\.[0-9]+)?)倍atr",
+            text,
+            flags=re.I,
+        )
+        if atr_match is not None:
+            return {
+                "type": "atr_low_break",
+                "label": f"当最低价低于当日开盘价减去 {atr_match.group(1)} 倍 ATR 时卖出",
+                "multiplier": float(atr_match.group(1)),
+            }
+        if "次日收盘价卖出" in text:
+            return {"type": "next_close", "label": "次日收盘价卖出"}
+        if "当日收盘价卖出" in text:
+            return {"type": "same_close", "label": "当日收盘价卖出"}
+        return None
 
 
 class WorkspaceService:

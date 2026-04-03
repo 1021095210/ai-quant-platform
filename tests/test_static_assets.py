@@ -62,6 +62,32 @@ class StaticAssetTests(unittest.TestCase):
     def test_mentor_js_has_valid_module_syntax(self) -> None:
         self._assert_asset_has_valid_module_syntax("mentor.js")
 
+    def test_replay_assets_include_manual_text_parse_flow(self) -> None:
+        replay_html = (
+            WORKSPACE_ROOT
+            / "apps"
+            / "api"
+            / "src"
+            / "quant_platform_api"
+            / "static"
+            / "replay.html"
+        ).read_text(encoding="utf-8")
+        replay_js = (
+            WORKSPACE_ROOT
+            / "apps"
+            / "api"
+            / "src"
+            / "quant_platform_api"
+            / "static"
+            / "replay.js"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn('id="trade-manual-smart-text"', replay_html)
+        self.assertIn('id="parse-manual-text-btn"', replay_html)
+        self.assertIn("长文字智能识别", replay_html)
+        self.assertIn("/api/v1/trades/uploads/manual/parse-text", replay_js)
+        self.assertIn("智能识别并加入记录", replay_js)
+
     def test_rules_js_can_bootstrap_with_stubbed_dom(self) -> None:
         node = shutil.which("node")
         if node is None:
