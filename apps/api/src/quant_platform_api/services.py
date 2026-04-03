@@ -27,6 +27,7 @@ from quant_platform_api.models import (
     ErrorPayload,
     GlossaryTermCreateRequest,
     GlossaryTermRecord,
+    AssistantResearchRequest,
     MentorAskRequest,
     StrategyVersionRecord,
     StrategyGenerateRequest,
@@ -2316,6 +2317,315 @@ class TradeUploadService:
         if "当日收盘价卖出" in text:
             return {"type": "same_close", "label": "当日收盘价卖出"}
         return None
+
+
+class FinancialAssistantService(MentorService):
+    def list_workflows(self) -> list[dict[str, Any]]:
+        return [
+            {
+                "workflow_id": "market_map",
+                "title": "市场地图",
+                "summary": "快速收拢市场主线、风格、情绪与关键风险，适合盘前或盘后总览。",
+                "best_for": "盘前判断主线、盘后回顾当天结构变化",
+                "deliverables": ["市场主线摘要", "风格与情绪判断", "关键风险清单"],
+            },
+            {
+                "workflow_id": "company_deep_dive",
+                "title": "公司深研",
+                "summary": "围绕单一标的做基本面、预期差、催化剂和风险的结构化研究。",
+                "best_for": "研究个股、ETF 持仓映射、财报前准备",
+                "deliverables": ["核心观点", "多空分歧", "催化剂与风险"],
+            },
+            {
+                "workflow_id": "event_impact",
+                "title": "事件冲击",
+                "summary": "把政策、财报、宏观数据或行业事件拆成影响链，判断受益与受损方向。",
+                "best_for": "政策事件、行业会议、公司公告后的快速判断",
+                "deliverables": ["事件影响链", "受益/受损对象", "跟踪点"],
+            },
+            {
+                "workflow_id": "bull_bear_debate",
+                "title": "多空辩论",
+                "summary": "模拟多头与空头研究员辩论，避免单边确认偏误。",
+                "best_for": "准备建仓前做反方论证，或复核已有观点",
+                "deliverables": ["多头论点", "空头论点", "关键变量"],
+            },
+            {
+                "workflow_id": "risk_committee",
+                "title": "风险委员会",
+                "summary": "从仓位、波动、制度约束和数据可信度角度审视交易想法。",
+                "best_for": "准备回测、准备实盘执行、复核失败策略",
+                "deliverables": ["风险清单", "仓位建议", "执行前核对项"],
+            },
+            {
+                "workflow_id": "ic_memo",
+                "title": "投委会纪要",
+                "summary": "把研究结论压缩成机构可流转的结论、证据、反证和执行建议。",
+                "best_for": "向团队同步研究结论，沉淀正式研究输出",
+                "deliverables": ["执行摘要", "核心证据", "反证条件", "下一步动作"],
+            },
+        ]
+
+    def list_desks(self) -> list[dict[str, Any]]:
+        return [
+            {"desk_id": "macro_news", "title": "宏观与新闻台", "focus": "政策、宏观、事件与情绪催化"},
+            {"desk_id": "fundamental", "title": "基本面研究员", "focus": "商业模式、盈利驱动、估值与预期差"},
+            {"desk_id": "technical", "title": "技术与成交结构台", "focus": "趋势、节奏、成交密集区与风险位"},
+            {"desk_id": "sentiment", "title": "情绪与风格台", "focus": "市场风格轮动、拥挤度、强弱分布"},
+            {"desk_id": "bull", "title": "多头研究员", "focus": "寻找被低估的正面逻辑和催化兑现路径"},
+            {"desk_id": "bear", "title": "空头研究员", "focus": "寻找证据不足、估值透支和执行风险"},
+            {"desk_id": "risk_pm", "title": "风控与组合经理", "focus": "仓位、约束、回撤承受与执行顺序"},
+        ]
+
+    def analyze(self, request: AssistantResearchRequest) -> dict[str, Any]:
+        query = request.query.strip()
+        if not query:
+            raise TaskExecutionError("INVALID_ARGUMENT", "query is required")
+
+        workflow = self._resolve_workflow(request.workflow_id)
+        fallback = self._build_assistant_fallback(workflow=workflow, request=request)
+        response = {
+            "assistant_name": "金融助手",
+            "assistant_role": "机构研究协作台",
+            "query": query,
+            "workflow_id": workflow["workflow_id"],
+            "workflow_title": workflow["title"],
+            "market_scope": request.market_scope,
+            "research_depth": request.research_depth,
+            "target_symbol": request.target_symbol,
+            "current_module": request.current_module,
+            "workflow_steps": self._workflow_steps_for(workflow["workflow_id"]),
+            "desk_lineup": self.list_desks(),
+            **fallback,
+            "answer_source": "fallback",
+            "answer_mode_label": "平台研究模板",
+        }
+        if self._llm_ready():
+            try:
+                response.update(
+                    self._answer_with_assistant_llm(
+                        workflow=workflow,
+                        request=request,
+                        fallback=response,
+                    )
+                )
+                response["answer_source"] = "llm"
+                response["answer_mode_label"] = "AI 研究编组"
+            except Exception:
+                pass
+        return response
+
+    def _resolve_workflow(self, workflow_id: str) -> dict[str, Any]:
+        for item in self.list_workflows():
+            if item["workflow_id"] == workflow_id:
+                return item
+        return self.list_workflows()[0]
+
+    def _workflow_steps_for(self, workflow_id: str) -> list[str]:
+        mapping = {
+            "market_map": ["先收拢市场主线", "再判断风格与情绪", "最后列出明日优先跟踪项"],
+            "company_deep_dive": ["先明确研究对象与市场", "再拆核心驱动与风险", "最后沉淀验证清单与模块入口"],
+            "event_impact": ["先定义事件本身", "再拆影响链条", "最后判断受益、受损与验证点"],
+            "bull_bear_debate": ["先写多头逻辑", "再强制写空头反驳", "最后提炼需要继续验证的关键变量"],
+            "risk_committee": ["先列执行假设", "再审视仓位与约束", "最后给出执行前核对项"],
+            "ic_memo": ["先压缩结论", "再列支撑证据与反证条件", "最后沉淀动作建议和输出格式"],
+        }
+        return mapping.get(workflow_id, mapping["market_map"])
+
+    def _build_assistant_fallback(
+        self,
+        *,
+        workflow: dict[str, Any],
+        request: AssistantResearchRequest,
+    ) -> dict[str, Any]:
+        target = request.target_symbol or "当前研究对象"
+        workflow_id = workflow["workflow_id"]
+        summary_map = {
+            "market_map": f"先把 {request.market_scope} 市场主线、情绪、风格和关键风险梳理清楚，再决定当天研究优先级。",
+            "company_deep_dive": f"围绕 {target} 先拆盈利驱动、估值预期和催化剂，再判断研究是否值得继续加深。",
+            "event_impact": f"这次更适合先把事件影响链拆开，看它会如何传导到 {target} 或相关板块。",
+            "bull_bear_debate": f"对 {target} 不要只写单边理由，先把多头和空头都摆上桌，再决定是否值得下注。",
+            "risk_committee": "先把成交假设、市场制度和仓位边界写清楚，再进入回测或执行。",
+            "ic_memo": "先用投委会口径压缩观点，再补证据、反证和行动建议。",
+        }
+        desk_briefs = [
+            {
+                "desk": "宏观与新闻台",
+                "title": "外部驱动",
+                "summary": "先确认与你的问题相关的政策、宏观和新闻变量，避免只从价格本身下结论。",
+            },
+            {
+                "desk": "基本面研究员",
+                "title": "驱动与预期差",
+                "summary": f"围绕 {target} 拆收入、利润、现金流、估值和市场预期差，不要只写概念性逻辑。",
+            },
+            {
+                "desk": "技术与成交结构台",
+                "title": "价格与节奏",
+                "summary": "确认趋势环境、关键价位、放量/缩量关系和节奏位置，避免研究结论与执行节奏脱节。",
+            },
+            {
+                "desk": "风控与组合经理",
+                "title": "执行边界",
+                "summary": "把市场制度、持仓上限、回撤承受和数据可信度一起纳入结论，不做脱离执行条件的建议。",
+            },
+        ]
+        debate = [
+            {"side": "多头", "view": f"{target} 如果要成立多头逻辑，必须看到驱动、催化和市场承接三者同时成立。"},
+            {"side": "空头", "view": "如果核心证据只停留在想象或单一事件刺激，研究就还不够扎实，容易高估胜率。"},
+        ]
+        risk_checklist = [
+            "先确认市场制度边界，尤其是 T+1、可否做空、最小交易单位和流动性。",
+            "把数据口径、时间范围和快照来源写清楚，避免研究结论不可复现。",
+            "如果要进入回测或执行，先定义失败条件，而不是只定义成功剧本。",
+        ]
+        next_actions = [
+            "先把问题压缩成一个明确研究任务，不要把多个目标混在一句话里。",
+            "如果要落成策略，下一步去策略工坊整理成入场、出场和风控条件。",
+            "如果要验证执行，下一步去回测中心把成交与市场约束写进配置。",
+        ]
+        related_modules = [
+            {"label": "策略工坊", "path": "/strategy", "reason": "把研究结论转成可执行规则"},
+            {"label": "回测中心", "path": "/backtests", "reason": "验证执行假设和风险控制是否成立"},
+            {"label": "规则模块", "path": "/rules", "reason": "补市场制度与术语边界"},
+        ]
+        if workflow_id == "company_deep_dive":
+            related_modules.insert(0, {"label": "指标设置", "path": "/indicators", "reason": "从指标和因子层补研究抓手"})
+        return {
+            "executive_summary": summary_map.get(workflow_id, summary_map["market_map"]),
+            "desk_briefs": desk_briefs,
+            "debate": debate,
+            "risk_checklist": risk_checklist,
+            "deliverables": workflow["deliverables"],
+            "next_actions": next_actions,
+            "related_modules": related_modules,
+        }
+
+    def _answer_with_assistant_llm(
+        self,
+        *,
+        workflow: dict[str, Any],
+        request: AssistantResearchRequest,
+        fallback: dict[str, Any],
+    ) -> dict[str, Any]:
+        endpoint = self._settings.llm_base_url.rstrip("/")
+        if not endpoint.endswith("/chat/completions"):
+            endpoint = f"{endpoint}/chat/completions"
+
+        system_prompt = (
+            "你是一名机构级金融研究助手，模拟宏观、基本面、技术、情绪、多头、空头、风控与组合经理的协作。"
+            "请用中文输出结构化研究结果，不要写成泛泛聊天。"
+            "输出必须是 JSON，对象字段固定为：executive_summary、desk_briefs、debate、risk_checklist、deliverables、next_actions、related_modules。"
+            "desk_briefs 是 3 到 6 个对象数组，每个对象含 desk、title、summary。"
+            "debate 是 2 个对象数组，每个对象含 side、view。"
+            "risk_checklist、deliverables、next_actions 都是中文字符串数组。"
+            "related_modules 是对象数组，每个对象含 label、path、reason，路径仅限 /strategy /backtests /rules /indicators /replay /mentor /workspace。"
+        )
+        prompt_payload = {
+            "workflow": workflow,
+            "query": request.query,
+            "target_symbol": request.target_symbol,
+            "market_scope": request.market_scope,
+            "research_depth": request.research_depth,
+            "current_module": request.current_module,
+            "conversation_history": request.conversation_history,
+            "fallback": {
+                "executive_summary": fallback["executive_summary"],
+                "deliverables": fallback["deliverables"],
+                "risk_checklist": fallback["risk_checklist"],
+            },
+        }
+        request_payload = {
+            "model": self._settings.llm_model_mentor
+            or self._settings.llm_model_summary
+            or self._settings.llm_model_strategy
+            or "gpt-5-mini",
+            "temperature": 0.35,
+            "stream": True,
+            "response_format": {"type": "json_object"},
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": json.dumps(prompt_payload, ensure_ascii=False)},
+            ],
+        }
+        content = ""
+        for attempt in range(3):
+            try:
+                with httpx.Client(timeout=60) as client:
+                    with client.stream(
+                        "POST",
+                        endpoint,
+                        headers={
+                            "Authorization": f"Bearer {self._settings.llm_api_key}",
+                            "Content-Type": "application/json",
+                        },
+                        json=request_payload,
+                    ) as response:
+                        response.raise_for_status()
+                        content = self._extract_stream_content(response)
+                break
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code in {429, 500, 502, 503, 504} and attempt < 2:
+                    sleep(1.2 * (attempt + 1))
+                    continue
+                raise
+
+        parsed = self._extract_json_object(content)
+        return {
+            "executive_summary": str(parsed.get("executive_summary") or fallback["executive_summary"]),
+            "desk_briefs": self._normalize_assistant_desks(parsed.get("desk_briefs") or fallback["desk_briefs"]),
+            "debate": self._normalize_debate(parsed.get("debate") or fallback["debate"]),
+            "risk_checklist": self._normalize_string_list(parsed.get("risk_checklist") or fallback["risk_checklist"]),
+            "deliverables": self._normalize_string_list(parsed.get("deliverables") or fallback["deliverables"]),
+            "next_actions": self._normalize_string_list(parsed.get("next_actions") or fallback["next_actions"]),
+            "related_modules": self._normalize_related_modules(parsed.get("related_modules") or fallback["related_modules"]),
+        }
+
+    def _normalize_assistant_desks(self, value: Any) -> list[dict[str, str]]:
+        if not isinstance(value, list):
+            return []
+        items: list[dict[str, str]] = []
+        for item in value[:6]:
+            if not isinstance(item, dict):
+                continue
+            desk = str(item.get("desk", "")).strip()
+            title = str(item.get("title", "")).strip()
+            summary = str(item.get("summary", "")).strip()
+            if desk and title and summary:
+                items.append({"desk": desk, "title": title, "summary": summary})
+        return items
+
+    def _normalize_debate(self, value: Any) -> list[dict[str, str]]:
+        if not isinstance(value, list):
+            return []
+        items: list[dict[str, str]] = []
+        for item in value[:4]:
+            if not isinstance(item, dict):
+                continue
+            side = str(item.get("side", "")).strip()
+            view = str(item.get("view", "")).strip()
+            if side and view:
+                items.append({"side": side, "view": view})
+        return items
+
+    def _normalize_string_list(self, value: Any) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        return [str(item).strip() for item in value if str(item).strip()][:6]
+
+    def _normalize_related_modules(self, value: Any) -> list[dict[str, str]]:
+        if not isinstance(value, list):
+            return []
+        items: list[dict[str, str]] = []
+        for item in value[:6]:
+            if not isinstance(item, dict):
+                continue
+            label = str(item.get("label", "")).strip()
+            path = str(item.get("path", "")).strip()
+            reason = str(item.get("reason", "")).strip()
+            if label and path.startswith("/") and reason:
+                items.append({"label": label, "path": path, "reason": reason})
+        return items
 
 
 class WorkspaceService:

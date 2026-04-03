@@ -189,6 +189,16 @@ class MentorAskRequest(BaseModel):
     conversation_history: list[dict[str, str]] = Field(default_factory=list)
 
 
+class AssistantResearchRequest(BaseModel):
+    query: str
+    workflow_id: str = "market_map"
+    target_symbol: str | None = None
+    market_scope: str = "cn_equity"
+    research_depth: str = "standard"
+    current_module: str | None = None
+    conversation_history: list[dict[str, str]] = Field(default_factory=list)
+
+
 class ClientErrorReportRequest(BaseModel):
     message: str
     source: str = "web"
