@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>量化研究平台 · 金融助手</title>
+    <link rel="stylesheet" href="/assets/theme.css" />
+  </head>
+  <body>
+    <div class="layout">
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand-mark">Q</div>
+          <div>
+            <h1>金融助手</h1>
+            <p>面向研究员与机构投研流程的多专家研究协作台</p>
+          </div>
+        </div>
+        <nav class="nav">
+          <a class="nav-link" data-nav href="/">首页</a>
+          <a class="nav-link" data-nav href="/workspace">工作台</a>
+          <a class="nav-link" data-nav href="/strategy">策略工坊</a>
+          <a class="nav-link" data-nav href="/indicators">指标设置</a>
+          <a class="nav-link" data-nav href="/rules">规则模块</a>
+          <a class="nav-link" data-nav href="/mentor">金融导师</a>
+          <a class="nav-link" data-nav href="/assistant">金融助手</a>
+          <a class="nav-link" data-nav href="/backtests">回测中心</a>
+          <a class="nav-link" data-nav href="/replay">交易复盘</a>
+        </nav>
+      </header>
+
+      <div id="status-banner" class="status-banner">金融助手正在准备研究工作流与专家编组。</div>
+
+      <section class="hero assistant-hero">
+        <div>
+          <p class="eyebrow">Research Copilot</p>
+          <h2>把“想法”拆成机构级研究任务，再由多专家编组给出结构化输出。</h2>
+          <p>
+            金融助手不只回答概念，而是按市场地图、公司深研、事件冲击、多空辩论、风险委员会和投委会纪要等工作流，
+            帮你组织宏观、基本面、技术、情绪、多空与风控视角。
+          </p>
+          <div class="actions" style="margin-top: 18px">
+            <a class="btn primary" href="#assistant-composer">开始研究任务</a>
+            <a class="btn secondary" href="/mentor">先问金融导师</a>
+            <a class="btn ghost" href="/workspace">回工作台</a>
+          </div>
+        </div>
+        <div class="hero-panel">
+          <div class="card muted">
+            <span class="mini-label">默认模式</span>
+            <strong class="metric-value">机构研究协作台</strong>
+          </div>
+          <div class="card muted">
+            <span class="mini-label">核心输出</span>
+            <strong class="metric-value">研究摘要 + 多空分歧 + 风险清单</strong>
+          </div>
+        </div>
+      </section>
+
+      <section class="grid two stretch" style="margin-top: 22px">
+        <section class="card equal-panel">
+          <div class="panel-header">
+            <h3>研究工作流</h3>
+            <span class="muted-note">先选当前最接近的研究任务模板。</span>
+          </div>
+          <div id="assistant-workflows" class="assistant-workflows empty-state">正在加载研究工作流。</div>
+        </section>
+        <section class="card equal-panel">
+          <div class="panel-header">
+            <h3>专家编组</h3>
+            <span class="muted-note">当前助手默认调动这些研究角色。</span>
+          </div>
+          <div id="assistant-desks" class="assistant-desk-grid empty-state">正在加载专家编组。</div>
+        </section>
+      </section>
+
+      <section id="assistant-composer" class="card" style="margin-top: 22px">
+        <div class="panel-header">
+          <h3>发起研究任务</h3>
+          <span class="muted-note">把问题写成清晰任务，金融助手会按工作流给出结构化输出。</span>
+        </div>
+        <div class="form-grid">
+          <div class="form-grid two">
+            <label class="field">
+              <span>当前工作流</span>
+              <div id="assistant-selected-workflow" class="selected-mode-display">尚未选择，默认使用市场地图。</div>
+            </label>
+            <label class="field">
+              <span>研究深度</span>
+              <select id="assistant-depth">
+                <option value="fast">快速判断</option>
+                <option value="standard" selected>标准研究</option>
+                <option value="deep">深度研究</option>
+              </select>
+            </label>
+          </div>
+          <div class="form-grid two">
+            <label class="field">
+              <span>目标市场</span>
+              <select id="assistant-market">
+                <option value="cn_equity">A股</option>
+                <option value="us_equity">美股</option>
+                <option value="crypto">加密货币</option>
+                <option value="london_gold">伦敦金</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>研究对象</span>
+              <input id="assistant-target" type="text" placeholder="如 600519.SH / AAPL / BTCUSDT" />
+            </label>
+          </div>
+          <label class="field">
+            <span>研究任务</span>
+            <textarea id="assistant-query" placeholder="例如：请按公司深研模式，梳理 600519.SH 当前的盈利驱动、估值预期差、潜在催化剂与关键风险。"></textarea>
+          </label>
+          <div class="actions">
+            <button id="assistant-run-btn" class="btn disabled" disabled>开始研究</button>
+            <a class="btn secondary" href="/backtests">去回测中心</a>
+          </div>
+        </div>
+      </section>
+
+      <section class="grid two stretch" style="margin-top: 22px">
+        <section class="card equal-panel">
+          <div class="panel-header">
+            <h3>执行摘要与专家观点</h3>
+          </div>
+          <div id="assistant-summary" class="list empty-state">完成研究任务后，这里会展示摘要与专家拆解结果。</div>
+        </section>
+        <section class="card equal-panel">
+          <div class="panel-header">
+            <h3>多空分歧与风险核对</h3>
+          </div>
+          <div id="assistant-risk-panel" class="list empty-state">这里会展示多空辩论、风险清单和交付物。</div>
+        </section>
+      </section>
+
+      <section class="card" style="margin-top: 22px">
+        <div class="panel-header">
+          <h3>继续细化研究</h3>
+          <span class="muted-note">如果第一轮还不够精确，可以继续追加问题，让研究助手沿原工作流深化。</span>
+        </div>
+        <div id="assistant-conversation" class="mentor-conversation empty-state">先完成一次研究任务后，这里会保留你的任务和助手返回结果。</div>
+        <div class="form-grid" style="margin-top: 16px">
+          <label class="field">
+            <span>继续细化</span>
+            <textarea id="assistant-followup" placeholder="例如：请把多头和空头研究员的分歧再展开，并说明最需要继续验证的变量。"></textarea>
+          </label>
+          <div class="actions">
+            <button id="assistant-followup-btn" class="btn disabled" disabled>继续深化研究</button>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <script type="module" src="/assets/assistant.js?v=20260403a"></script>
+  </body>
+</html>

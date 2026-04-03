@@ -560,6 +560,40 @@ console.log('mentor-bootstrapped');
         self.assertIn('/assets/mentor.js?v=20260403a', mentor_html)
         self.assertIn('from "/assets/shared.js?v=', mentor_js)
 
+    def test_assistant_assets_expose_workflows_and_structured_research_sections(self) -> None:
+        assistant_html_path = (
+            WORKSPACE_ROOT
+            / "apps"
+            / "api"
+            / "src"
+            / "quant_platform_api"
+            / "static"
+            / "assistant.html"
+        )
+        assistant_js_path = (
+            WORKSPACE_ROOT
+            / "apps"
+            / "api"
+            / "src"
+            / "quant_platform_api"
+            / "static"
+            / "assistant.js"
+        )
+
+        assistant_html = assistant_html_path.read_text(encoding="utf-8")
+        assistant_js = assistant_js_path.read_text(encoding="utf-8")
+
+        self.assertIn("金融助手", assistant_html)
+        self.assertIn('id="assistant-workflows"', assistant_html)
+        self.assertIn('id="assistant-desks"', assistant_html)
+        self.assertIn('id="assistant-run-btn" class="btn disabled" disabled', assistant_html)
+        self.assertIn('id="assistant-followup-btn" class="btn disabled" disabled', assistant_html)
+        self.assertIn("/api/v1/assistant/workflows", assistant_js)
+        self.assertIn("/api/v1/assistant/analyze", assistant_js)
+        self.assertIn("renderWorkflows", assistant_js)
+        self.assertIn("assistant-selected-workflow", assistant_html)
+        self.assertIn("/assets/assistant.js?v=20260403a", assistant_html)
+
     def test_admin_and_shared_assets_include_error_logging_hooks(self) -> None:
         admin_html_path = (
             WORKSPACE_ROOT

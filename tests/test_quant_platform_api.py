@@ -26,17 +26,20 @@ if VENV_LIB.exists():
 try:
     from fastapi.testclient import TestClient
     from PIL import Image, ImageDraw
+    from quant_platform_api.models import AssistantResearchRequest
     from quant_platform_api.config import Settings
     from quant_platform_api.main import create_app
     from quant_platform_api.models import MentorAskRequest
-    from quant_platform_api.services import MentorService
+    from quant_platform_api.services import FinancialAssistantService, MentorService
 except ModuleNotFoundError:  # pragma: no cover - handled by skip
     TestClient = None
     Image = None
     ImageDraw = None
+    AssistantResearchRequest = None
     Settings = None
     create_app = None
     MentorAskRequest = None
+    FinancialAssistantService = None
     MentorService = None
 
 
@@ -239,7 +242,7 @@ class QuantPlatformApiTests(unittest.TestCase):
     def test_protected_pages_redirect_to_login_when_unauthenticated(self) -> None:
         client = self._build_client()
 
-        for path in ["/workspace", "/admin", "/strategy", "/indicators", "/rules", "/mentor", "/backtests", "/replay"]:
+        for path in ["/workspace", "/admin", "/strategy", "/indicators", "/rules", "/mentor", "/assistant", "/backtests", "/replay"]:
             response = client.get(path, follow_redirects=False)
             self.assertEqual(302, response.status_code)
             self.assertEqual(f"/login?next={path}", response.headers["location"])
@@ -387,7 +390,19 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertIn("先把交易逻辑讲明白，再带你用平台做验证", response.text)
         self.assertIn('id="mentor-ask-btn" class="btn disabled" disabled', response.text)
         self.assertIn('id="mentor-followup-btn" class="btn disabled" disabled', response.text)
-        self.assertIn("继续追问导师", response.text)
+
+    def test_assistant_page_is_available_after_login(self) -> None:
+        client = self._build_client()
+        self._login(client)
+
+        response = client.get("/assistant")
+
+        self.assertEqual(200, response.status_code)
+        self.assertIn("金融助手", response.text)
+        self.assertIn("多专家研究协作台", response.text)
+        self.assertIn('id="assistant-run-btn" class="btn disabled" disabled', response.text)
+        self.assertIn('id="assistant-followup-btn" class="btn disabled" disabled', response.text)
+        self.assertIn("继续细化研究", response.text)
 
     def test_admin_can_login_and_access_workspace(self) -> None:
         client = self._build_client()
@@ -1078,6 +1093,36 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertIn("RSI 的本质", data["answer"])
         self.assertEqual("平台导师兜底", data["answer_mode_label"])
 
+    def test_assistant_endpoints_return_workflows_and_structured_analysis(self) -> None:
+        client = self._build_client()
+        self._login(client)
+
+        workflows_response = client.get("/api/v1/assistant/workflows")
+        analyze_response = client.post(
+            "/api/v1/assistant/analyze",
+            json={
+                "query": "请按公司深研模式梳理 600519.SH 的盈利驱动、潜在催化剂与关键风险。",
+                "workflow_id": "company_deep_dive",
+                "target_symbol": "600519.SH",
+                "market_scope": "cn_equity",
+                "research_depth": "standard",
+                "current_module": "assistant",
+            },
+        )
+
+        self.assertEqual(200, workflows_response.status_code)
+        workflows = workflows_response.json()["data"]
+        self.assertTrue(workflows["items"])
+        self.assertTrue(workflows["desks"])
+        self.assertEqual(200, analyze_response.status_code)
+        data = analyze_response.json()["data"]
+        self.assertEqual("金融助手", data["assistant_name"])
+        self.assertEqual("company_deep_dive", data["workflow_id"])
+        self.assertTrue(data["desk_briefs"])
+        self.assertTrue(data["debate"])
+        self.assertTrue(data["risk_checklist"])
+        self.assertTrue(data["related_modules"])
+
     @patch("quant_platform_api.services.httpx.Client")
     def test_mentor_can_use_llm_answer_when_configured(self, client_mock) -> None:
         stream_response = Mock()
@@ -1180,6 +1225,50 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertEqual("llm", data["answer_source"])
         self.assertEqual("重试后成功", data["headline"])
         self.assertEqual(2, http_client.stream.call_count)
+
+    @patch("quant_platform_api.services.httpx.Client")
+    def test_assistant_can_use_llm_answer_when_configured(self, client_mock) -> None:
+        stream_response = Mock()
+        stream_response.iter_lines.return_value = [
+            'data: {"choices":[{"delta":{"content":"{\\"executive_summary\\":\\"先做驱动拆解，再看多空分歧。\\",\\"desk_briefs\\":[{\\"desk\\":\\"基本面研究员\\",\\"title\\":\\"盈利驱动\\",\\"summary\\":\\"先看收入、利润和预期差。\\"}],\\"debate\\":[{\\"side\\":\\"多头\\",\\"view\\":\\"催化剂足够强。\\"},{\\"side\\":\\"空头\\",\\"view\\":\\"估值已经透支。\\"}],\\"risk_checklist\\":[\\"先核对市场制度\\"],\\"deliverables\\":[\\"执行摘要\\"],\\"next_actions\\":[\\"继续验证核心变量\\"],\\"related_modules\\":[{\\"label\\":\\"策略工坊\\",\\"path\\":\\"/strategy\\",\\"reason\\":\\"把研究转成规则\\"}]}"}}]}',
+            "data: [DONE]",
+        ]
+        stream_response.text = ""
+        stream_response.raise_for_status.return_value = None
+
+        stream_context = Mock()
+        stream_context.__enter__ = Mock(return_value=stream_response)
+        stream_context.__exit__ = Mock(return_value=None)
+
+        http_client = Mock()
+        http_client.stream.return_value = stream_context
+        http_context = Mock()
+        http_context.__enter__ = Mock(return_value=http_client)
+        http_context.__exit__ = Mock(return_value=None)
+        client_mock.return_value = http_context
+
+        service = FinancialAssistantService(
+            Settings(
+                llm_base_url="https://llm.example.test/v1",
+                llm_api_key="sk-test",
+                llm_model_mentor="gpt-5-mini",
+            )
+        )
+        data = service.analyze(
+            AssistantResearchRequest(
+                query="请按公司深研模式梳理 600519.SH 的盈利驱动、潜在催化剂与关键风险。",
+                workflow_id="company_deep_dive",
+                target_symbol="600519.SH",
+                market_scope="cn_equity",
+                research_depth="standard",
+                current_module="assistant",
+            )
+        )
+
+        self.assertEqual("llm", data["answer_source"])
+        self.assertEqual("AI 研究编组", data["answer_mode_label"])
+        self.assertIn("驱动拆解", data["executive_summary"])
+        self.assertEqual("基本面研究员", data["desk_briefs"][0]["desk"])
 
     def test_client_error_reports_are_visible_in_admin_app_logs(self) -> None:
         client = self._build_client()

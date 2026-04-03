@@ -34,6 +34,7 @@ from quant_platform_api.models import (
     DatasetSnapshotRecord,
     ErrorEnvelope,
     ErrorPayload,
+    AssistantResearchRequest,
     MentorAskRequest,
     GlossaryTermCreateRequest,
     ManualTradeTextParseRequest,
@@ -68,6 +69,7 @@ from quant_platform_api.services import (
     AuthService,
     AdminService,
     AppLogService,
+    FinancialAssistantService,
     IndicatorService,
     MentorService,
     RuleService,
@@ -93,6 +95,7 @@ class AppServices:
     indicator_service: IndicatorService
     rule_service: RuleService
     mentor_service: MentorService
+    assistant_service: FinancialAssistantService
     trade_upload_service: TradeUploadService
     workspace_service: WorkspaceService
     market_data_service: MarketDataService
@@ -159,6 +162,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         indicator_service=IndicatorService(indicator_repository),
         rule_service=RuleService(glossary_repository, default_rule_repository),
         mentor_service=MentorService(app_settings),
+        assistant_service=FinancialAssistantService(app_settings),
         trade_upload_service=TradeUploadService(
             trade_upload_repository,
             market_data_service=market_data_service,
@@ -338,6 +342,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if _get_current_user(request, services.auth_service) is None:
             return _login_redirect("/mentor")
         return FileResponse(static_dir / "mentor.html")
+
+    @app.get("/assistant")
+    def assistant_page(request: Request):
+        if _get_current_user(request, services.auth_service) is None:
+            return _login_redirect("/assistant")
+        return FileResponse(static_dir / "assistant.html")
 
     @app.get(f"{app_settings.api_prefix}/auth/me")
     def get_current_user(request: Request) -> JSONResponse:
@@ -703,6 +713,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     ) -> JSONResponse:
         _require_current_user(request, services.auth_service)
         answer = services.mentor_service.answer(payload)
+        return _success_response(request, data=answer)
+
+    @app.get(f"{app_settings.api_prefix}/assistant/workflows")
+    def list_assistant_workflows(request: Request) -> JSONResponse:
+        _require_current_user(request, services.auth_service)
+        return _success_response(
+            request,
+            data={
+                "items": services.assistant_service.list_workflows(),
+                "desks": services.assistant_service.list_desks(),
+            },
+        )
+
+    @app.post(f"{app_settings.api_prefix}/assistant/analyze")
+    def analyze_with_assistant(
+        request: Request,
+        payload: AssistantResearchRequest,
+    ) -> JSONResponse:
+        _require_current_user(request, services.auth_service)
+        answer = services.assistant_service.analyze(payload)
         return _success_response(request, data=answer)
 
     @app.post(f"{app_settings.api_prefix}/strategies/projects")

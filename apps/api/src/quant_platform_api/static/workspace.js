@@ -113,7 +113,7 @@ function renderSnapshots(items) {
 
 function chooseNextStep(summary) {
   if (!summary.recent_projects.length) {
-    return "如果你还不确定该从哪里开始，先去金融导师或指标设置理清概念，再在策略工坊创建第一个策略项目。";
+    return "如果你还不确定该从哪里开始，先去金融导师理清概念，或去金融助手按研究任务拆框架，再在策略工坊创建第一个策略项目。";
   }
   if (!summary.recent_backtests.length) {
     return "你已经有策略项目，下一步建议运行一轮带明确成交假设和风险参数的回测。";

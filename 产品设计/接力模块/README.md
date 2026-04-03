@@ -21,4 +21,5 @@
 - [回测中心模块.md](/workspace/ai-quant-platform/产品设计/接力模块/回测中心模块.md)
 - [交易复盘模块.md](/workspace/ai-quant-platform/产品设计/接力模块/交易复盘模块.md)
 - [金融导师模块.md](/workspace/ai-quant-platform/产品设计/接力模块/金融导师模块.md)
+- [金融助手模块.md](/workspace/ai-quant-platform/产品设计/接力模块/金融助手模块.md)
 - [平台基础设施与部署模块.md](/workspace/ai-quant-platform/产品设计/接力模块/平台基础设施与部署模块.md)
