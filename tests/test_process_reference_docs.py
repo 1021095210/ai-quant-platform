@@ -39,6 +39,7 @@ class ProcessReferenceDocsTests(unittest.TestCase):
         self.assertIn("必须提供的资源", text)
         self.assertIn("验收标准", text)
         self.assertIn("已提供资源登记", text)
+        self.assertIn("ClickHouse", text)
 
         recommendation_text = recommendation.read_text(encoding="utf-8")
         self.assertIn("按预算给你的最优建议", recommendation_text)
@@ -51,6 +52,7 @@ class ProcessReferenceDocsTests(unittest.TestCase):
         self.assertIn("用户请求不直连上游数据源", data_hub_text)
         self.assertIn("平台统一拉取并保存", data_hub_text)
         self.assertIn("增量更新", data_hub_text)
+        self.assertIn("优先读取内部数据仓库", data_hub_text)
 
         one_pager_text = one_pager.read_text(encoding="utf-8")
         self.assertIn("我们需要什么资源", one_pager_text)
