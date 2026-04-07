@@ -24,15 +24,22 @@ class ProcessReferenceDocsTests(unittest.TestCase):
         folder = ROOT / "产品设计" / "实战落地参考"
         readme = folder / "README.md"
         checklist = folder / "AI量化交易平台_实战落地资源清单与验收标准.md"
+        recommendation = folder / "AI量化交易平台_资源源选型建议_2026-04-07.md"
 
         self.assertTrue(folder.exists())
         self.assertTrue(readme.exists())
         self.assertTrue(checklist.exists())
+        self.assertTrue(recommendation.exists())
 
         text = checklist.read_text(encoding="utf-8")
         self.assertIn("必须提供的资源", text)
         self.assertIn("验收标准", text)
         self.assertIn("已提供资源登记", text)
+
+        recommendation_text = recommendation.read_text(encoding="utf-8")
+        self.assertIn("按预算给你的最优建议", recommendation_text)
+        self.assertIn("Tushare Pro", recommendation_text)
+        self.assertIn("SEC EDGAR", recommendation_text)
 
 
 if __name__ == "__main__":
