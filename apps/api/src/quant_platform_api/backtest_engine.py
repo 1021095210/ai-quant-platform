@@ -27,6 +27,7 @@ def run_backtest(
             },
             "equity_curve": [],
             "trades": [],
+            "execution_summary": _build_execution_summary(),
         }
 
     data_frame = pd.DataFrame([asdict(item) for item in bars]).sort_values("trade_date")
@@ -82,35 +83,49 @@ def run_backtest(
     peak_equity = initial_capital
     max_drawdown_pct = 0.0
     halted_by_drawdown = False
+    execution_summary = _build_execution_summary(
+        settlement_policy=execution_contract.get("settlement_policy"),
+        market_constraint_text=execution_contract.get("market_constraint_text"),
+        adjustment_mode=execution_contract.get("adjustment_mode"),
+        provider=execution_contract.get("data_provider"),
+    )
 
     for index, row in data_frame.iterrows():
         trade_date = row["trade_date"]
         close_price = float(row["close"])
         open_price = float(row["open"])
+        is_suspended = bool(row.get("is_suspended", False))
+        is_limit_up = bool(row.get("is_limit_up", False))
+        is_limit_down = bool(row.get("is_limit_down", False))
 
         if pending_entry is not None and current_trade is None and not halted_by_drawdown:
-            entry_price = _apply_slippage(open_price, slippage_rate, side="entry")
-            quantity = _resolve_quantity(
-                cash=cash,
-                equity=cash,
-                entry_price=entry_price,
-                position_sizing=position_sizing,
-            )
-            entry_notional = quantity * entry_price
-            entry_fee = entry_notional * fee_rate
-            if quantity > 0 and entry_notional + entry_fee <= cash:
-                cash -= entry_notional + entry_fee
-                current_trade = {
-                    "entry_time": _format_trade_timestamp(trade_date),
-                    "entry_signal_time": pending_entry["signal_time"],
-                    "entry_price": entry_price,
-                    "quantity": quantity,
-                    "entry_notional": round(entry_notional, 2),
-                    "symbol": strategy_spec.get("market"),
-                    "side": strategy_spec.get("position", {}).get("side", "long"),
-                    "entry_index": index,
-                    "entry_timestamp": trade_date,
-                }
+            if is_suspended:
+                execution_summary["blocked_entries_suspended"] += 1
+            elif is_limit_up:
+                execution_summary["blocked_entries_limit_up"] += 1
+            else:
+                entry_price = _apply_slippage(open_price, slippage_rate, side="entry")
+                quantity = _resolve_quantity(
+                    cash=cash,
+                    equity=cash,
+                    entry_price=entry_price,
+                    position_sizing=position_sizing,
+                )
+                entry_notional = quantity * entry_price
+                entry_fee = entry_notional * fee_rate
+                if quantity > 0 and entry_notional + entry_fee <= cash:
+                    cash -= entry_notional + entry_fee
+                    current_trade = {
+                        "entry_time": _format_trade_timestamp(trade_date),
+                        "entry_signal_time": pending_entry["signal_time"],
+                        "entry_price": entry_price,
+                        "quantity": quantity,
+                        "entry_notional": round(entry_notional, 2),
+                        "symbol": strategy_spec.get("market"),
+                        "side": strategy_spec.get("position", {}).get("side", "long"),
+                        "entry_index": index,
+                        "entry_timestamp": trade_date,
+                    }
             pending_entry = None
 
         if current_trade is not None:
@@ -165,20 +180,25 @@ def run_backtest(
             if exit_reason is None and can_exit_today and holding_bars >= max_holding_bars:
                 exit_reason = "max_holding_bars"
             if exit_reason is not None:
-                if exit_reason not in {"take_profit_intrabar", "stop_loss_intrabar"}:
-                    exit_price = _apply_slippage(close_price, slippage_rate, side="exit")
-                trade_result = _close_trade(
-                    trade=current_trade,
-                    exit_price=exit_price,
-                    exit_time=_format_trade_timestamp(trade_date),
-                    exit_reason=exit_reason,
-                    fee_rate=fee_rate,
-                    holding_bars=holding_bars,
-                )
-                cash += trade_result["cash_delta"]
-                trades.append(trade_result["trade"])
-                current_trade = None
-                continue
+                if is_suspended:
+                    execution_summary["blocked_exits_suspended"] += 1
+                elif is_limit_down:
+                    execution_summary["blocked_exits_limit_down"] += 1
+                else:
+                    if exit_reason not in {"take_profit_intrabar", "stop_loss_intrabar"}:
+                        exit_price = _apply_slippage(close_price, slippage_rate, side="exit")
+                    trade_result = _close_trade(
+                        trade=current_trade,
+                        exit_price=exit_price,
+                        exit_time=_format_trade_timestamp(trade_date),
+                        exit_reason=exit_reason,
+                        fee_rate=fee_rate,
+                        holding_bars=holding_bars,
+                    )
+                    cash += trade_result["cash_delta"]
+                    trades.append(trade_result["trade"])
+                    current_trade = None
+                    continue
 
         if (
             current_trade is None
@@ -188,47 +208,60 @@ def run_backtest(
             and bool(row["entry_signal"])
         ):
             if fill_price_rule == "same_bar_close":
-                entry_price = _apply_slippage(close_price, slippage_rate, side="entry")
-                quantity = _resolve_quantity(
-                    cash=cash,
-                    equity=current_equity,
-                    entry_price=entry_price,
-                    position_sizing=position_sizing,
-                )
-                entry_notional = quantity * entry_price
-                entry_fee = entry_notional * fee_rate
-                if quantity > 0 and entry_notional + entry_fee <= cash:
-                    cash -= entry_notional + entry_fee
-                    current_trade = {
-                        "entry_time": _format_trade_timestamp(trade_date),
-                        "entry_signal_time": _format_trade_timestamp(trade_date),
-                        "entry_price": entry_price,
-                        "quantity": quantity,
-                        "entry_notional": round(entry_notional, 2),
-                        "symbol": strategy_spec.get("market"),
-                        "side": strategy_spec.get("position", {}).get("side", "long"),
-                        "entry_index": index,
-                        "entry_timestamp": trade_date,
-                    }
+                if is_suspended:
+                    execution_summary["blocked_entries_suspended"] += 1
+                elif is_limit_up:
+                    execution_summary["blocked_entries_limit_up"] += 1
+                else:
+                    entry_price = _apply_slippage(close_price, slippage_rate, side="entry")
+                    quantity = _resolve_quantity(
+                        cash=cash,
+                        equity=current_equity,
+                        entry_price=entry_price,
+                        position_sizing=position_sizing,
+                    )
+                    entry_notional = quantity * entry_price
+                    entry_fee = entry_notional * fee_rate
+                    if quantity > 0 and entry_notional + entry_fee <= cash:
+                        cash -= entry_notional + entry_fee
+                        current_trade = {
+                            "entry_time": _format_trade_timestamp(trade_date),
+                            "entry_signal_time": _format_trade_timestamp(trade_date),
+                            "entry_price": entry_price,
+                            "quantity": quantity,
+                            "entry_notional": round(entry_notional, 2),
+                            "symbol": strategy_spec.get("market"),
+                            "side": strategy_spec.get("position", {}).get("side", "long"),
+                            "entry_index": index,
+                            "entry_timestamp": trade_date,
+                        }
             elif index < len(data_frame.index) - 1:
                 pending_entry = {"signal_time": _format_trade_timestamp(trade_date)}
 
+    final_capital = cash
     if current_trade is not None:
         final_row = data_frame.iloc[-1]
-        trade_result = _close_trade(
-            trade=current_trade,
-            exit_price=_apply_slippage(float(final_row["close"]), slippage_rate, side="exit"),
-            exit_time=_format_trade_timestamp(final_row["trade_date"]),
-            exit_reason="end_of_range",
-            fee_rate=fee_rate,
-            holding_bars=len(data_frame.index) - current_trade["entry_index"],
-        )
-        cash += trade_result["cash_delta"]
-        trades.append(trade_result["trade"])
+        if bool(final_row.get("is_suspended", False)) or bool(final_row.get("is_limit_down", False)):
+            execution_summary["marked_to_market_unclosed_positions"] += 1
+            final_capital = cash + current_trade["quantity"] * float(final_row["close"])
+        else:
+            trade_result = _close_trade(
+                trade=current_trade,
+                exit_price=_apply_slippage(float(final_row["close"]), slippage_rate, side="exit"),
+                exit_time=_format_trade_timestamp(final_row["trade_date"]),
+                exit_reason="end_of_range",
+                fee_rate=fee_rate,
+                holding_bars=len(data_frame.index) - current_trade["entry_index"],
+            )
+            cash += trade_result["cash_delta"]
+            trades.append(trade_result["trade"])
+            final_capital = cash
+    else:
+        final_capital = cash
 
     metrics = _build_metrics(
         initial_capital,
-        cash,
+        final_capital,
         trades,
         max_drawdown_pct,
         halted_by_drawdown=halted_by_drawdown,
@@ -237,6 +270,27 @@ def run_backtest(
         "metrics": metrics,
         "equity_curve": equity_curve,
         "trades": trades,
+        "execution_summary": execution_summary,
+    }
+
+
+def _build_execution_summary(
+    *,
+    settlement_policy: str | None = None,
+    market_constraint_text: str | None = None,
+    adjustment_mode: str | None = None,
+    provider: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "settlement_policy": settlement_policy,
+        "market_constraint_text": market_constraint_text,
+        "adjustment_mode": adjustment_mode,
+        "provider": provider,
+        "blocked_entries_suspended": 0,
+        "blocked_entries_limit_up": 0,
+        "blocked_exits_suspended": 0,
+        "blocked_exits_limit_down": 0,
+        "marked_to_market_unclosed_positions": 0,
     }
 
 

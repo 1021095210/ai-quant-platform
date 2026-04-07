@@ -1926,6 +1926,10 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertTrue(data["recent_backtests"])
         self.assertTrue(data["snapshot_states"])
         self.assertEqual("workspace_snapshot", data["snapshot_states"][0]["dataset_snapshot_ref"])
+        self.assertIn("data_hub_status", data)
+        self.assertIn("focus_cards", data)
+        self.assertTrue(data["focus_cards"])
+        self.assertEqual("demo", data["data_hub_status"]["fallback_provider"])
 
     def test_optimization_job_completes_and_returns_best_metrics(self) -> None:
         client = self._build_client()
@@ -2319,6 +2323,7 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertIsNotNone(first["exit_price"])
         self.assertIsNotNone(first["exit_time"])
         self.assertIn("长文字智能识别", first["notes"])
+        self.assertIn("补价来源", first["notes"])
 
     def test_manual_text_parse_endpoint_supports_explicit_prices(self) -> None:
         client = self._build_client()

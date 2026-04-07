@@ -412,9 +412,14 @@ function renderBacktestDetail(data) {
   nodes.latestProvider.textContent = data.data_source?.provider || "未知";
   renderConfigList(data.backtest_config || {});
   renderSnapshotList(data.data_snapshot_summary || {});
-  renderAssumptionList(data.backtest_config || {}, data.data_snapshot_summary || {});
+  renderAssumptionList(
+    data.backtest_config || {},
+    data.data_snapshot_summary || {},
+    data.execution_summary || {},
+  );
   nodes.sourcePills.innerHTML = [
     `数据源：${data.data_source?.provider || "未知"}`,
+    `优先链路：${data.data_source?.preferred_provider || data.data_source?.provider || "未知"}`,
     `缓存命中：${data.data_source?.served_from_cache ? "是" : "否"}`,
     `K线数量：${data.data_source?.bar_count || 0}`,
     `快照：${data.dataset_snapshot_ref || "未标记"}`,
@@ -504,7 +509,7 @@ function renderSnapshotList(summary) {
     .join("");
 }
 
-function renderAssumptionList(config, summary) {
+function renderAssumptionList(config, summary, executionSummary = {}) {
   const execution = config || {};
   const assumptions = [
     [
@@ -539,7 +544,17 @@ function renderAssumptionList(config, summary) {
       "市场约束提醒",
       execution.market_constraint_text || "请结合市场制度、最小交易单位和可卖规则理解本次结果。",
     ],
+    [
+      "执行约束回放",
+      `停牌挡住入场 ${executionSummary.blocked_entries_suspended ?? 0} 次，涨停挡住入场 ${executionSummary.blocked_entries_limit_up ?? 0} 次，停牌挡住退出 ${executionSummary.blocked_exits_suspended ?? 0} 次，跌停挡住退出 ${executionSummary.blocked_exits_limit_down ?? 0} 次。`,
+    ],
   ];
+  if ((executionSummary.marked_to_market_unclosed_positions ?? 0) > 0) {
+    assumptions.push([
+      "区间末未平仓提醒",
+      `有 ${executionSummary.marked_to_market_unclosed_positions} 笔仓位在区间末因停牌或跌停未能按可成交逻辑平仓，结果按期末市值标记处理。`,
+    ]);
+  }
   nodes.assumptionList.innerHTML = assumptions
     .map(
       ([label, value]) => `

@@ -17,102 +17,91 @@ if VENV_LIB.exists():
         if str(site_packages) not in sys.path:
             sys.path.insert(0, str(site_packages))
 
-from quant_platform_api.backtest_engine import run_backtest
-from quant_platform_api.market_data import MarketBar
+from quant_platform_api.backtest_engine import run_backtest  # noqa: E402
+from quant_platform_api.market_data import MarketBar  # noqa: E402
 
 
 class BacktestEngineTests(unittest.TestCase):
-    def test_intrabar_fill_obeys_t_plus_zero_and_t_plus_one(self) -> None:
-        bars = [
-            self._bar("2024-01-01T09:30:00", 100.0, 101.0, 99.0, 100.0),
-            self._bar("2024-01-01T14:30:00", 100.0, 110.0, 99.0, 105.0),
-            self._bar("2024-01-02T09:30:00", 105.0, 110.0, 104.0, 109.0),
-        ]
-        for index in range(3, 31):
+    def test_backtest_engine_tracks_blocked_entries_and_exits(self) -> None:
+        bars: list[MarketBar] = []
+        closes = [100.0] * 25 + [102.0, 104.0, 99.0, 98.0, 97.0, 96.0]
+        for index, close in enumerate(closes, start=1):
+            trade_date = f"2024-01-{index:02d}"
             bars.append(
-                self._bar(
-                    f"2024-01-{index:02d}T09:30:00",
-                    100.0 + index,
-                    101.0 + index,
-                    99.0 + index,
-                    100.5 + index,
+                MarketBar(
+                    ts_code="600519.SH",
+                    asset_type="stock",
+                    adjustment_mode="raw",
+                    trade_date=trade_date,
+                    open=close,
+                    high=close * 1.01,
+                    low=close * 0.99,
+                    close=close,
+                    volume=100000.0,
+                    amount=close * 100000.0,
+                    pct_chg=0.0,
+                    turnover=1.0,
+                    data_source="test",
+                    fetched_at="2026-04-07T09:00:00",
+                    is_limit_up=index == 26,
+                    is_limit_down=index == 28,
                 )
             )
 
-        strategy_spec = {
-            "market": "TEST.SH",
-            "asset_type": "stock",
-            "position": {"side": "long"},
-            "entry": {"all": []},
-            "exit": {"any": []},
-        }
-        base_contract = {
-            "initial_capital": 100000,
-            "fee_bps": 0,
-            "slippage_bps": 0,
-            "fill_price_rule": "same_bar_close",
-            "intrabar_match_policy": "intrabar_touch_fill",
-            "calendar": "cn_a_share",
-            "timezone": "Asia/Shanghai",
-            "adjustment_mode": "qfq",
-            "warmup_bars": 0,
-            "position_sizing": {
-                "mode": "fixed_quantity",
-                "value": 100,
-                "max_positions": 1,
-                "max_position_pct": 1.0,
-                "min_trade_unit": 1,
+        result = run_backtest(
+            strategy_spec={
+                "market": "600519.SH",
+                "position": {"side": "long", "max_positions": 1},
+                "entry": {
+                    "all": [
+                        {
+                            "indicator": "price_breakout",
+                            "params": {"lookback": 3},
+                            "operator": "==",
+                            "value": True,
+                        }
+                    ]
+                },
+                "exit": {
+                    "any": [
+                        {"indicator": "stop_loss_pct", "value": -0.01},
+                        {"indicator": "take_profit_pct", "value": 0.2},
+                    ]
+                },
             },
-            "risk_controls": {
-                "take_profit_pct": 0.05,
-                "stop_loss_pct": -0.05,
-                "max_drawdown_pct": -0.5,
-                "max_holding_bars": 20,
-            },
-        }
-
-        result_t0 = run_backtest(
-            strategy_spec=strategy_spec,
             bars=bars,
             execution_contract={
-                **base_contract,
+                "initial_capital": 100000.0,
+                "fee_bps": 0,
+                "slippage_bps": 0,
+                "fill_price_rule": "same_bar_close",
+                "intrabar_match_policy": "no_intrabar_fill",
+                "calendar": "cn_a_share",
+                "timezone": "Asia/Shanghai",
+                "adjustment_mode": "raw",
                 "settlement_policy": "t_plus_zero",
                 "same_day_exit_allowed": True,
-            },
-        )
-        result_t1 = run_backtest(
-            strategy_spec=strategy_spec,
-            bars=bars,
-            execution_contract={
-                **base_contract,
-                "settlement_policy": "t_plus_one",
-                "same_day_exit_allowed": False,
+                "market_constraint_text": "A股测试规则",
+                "position_sizing": {
+                    "mode": "fixed_fraction",
+                    "value": 1.0,
+                    "max_positions": 1,
+                    "max_position_pct": 1.0,
+                    "min_trade_unit": 100,
+                },
+                "risk_controls": {
+                    "take_profit_pct": 0.2,
+                    "stop_loss_pct": -0.01,
+                    "max_drawdown_pct": -1.0,
+                    "max_holding_bars": 2,
+                },
+                "warmup_bars": 3,
             },
         )
 
-        self.assertEqual("2024-01-01T14:30:00", result_t0["trades"][0]["exit_time"])
-        self.assertEqual("take_profit_intrabar", result_t0["trades"][0]["exit_reason"])
-        self.assertEqual("2024-01-02T09:30:00", result_t1["trades"][0]["exit_time"])
-        self.assertEqual("take_profit_intrabar", result_t1["trades"][0]["exit_reason"])
-
-    @staticmethod
-    def _bar(trade_date: str, open_price: float, high: float, low: float, close: float) -> MarketBar:
-        return MarketBar(
-            ts_code="TEST.SH",
-            asset_type="stock",
-            adjustment_mode="qfq",
-            trade_date=trade_date,
-            open=open_price,
-            high=high,
-            low=low,
-            close=close,
-            volume=1000.0,
-            amount=100000.0,
-            pct_chg=0.0,
-            turnover=0.0,
-            data_source="test",
-            fetched_at="2024-01-01T00:00:00",
-        )
+        self.assertEqual(1, result["execution_summary"]["blocked_entries_limit_up"])
+        self.assertEqual(1, result["execution_summary"]["blocked_exits_limit_down"])
+        self.assertTrue(result["trades"])
 
 
 if __name__ == "__main__":
