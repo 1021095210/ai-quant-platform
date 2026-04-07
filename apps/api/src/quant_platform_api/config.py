@@ -38,6 +38,11 @@ class Settings:
     session_cookie_secure: bool = False
     session_cookie_domain: str = ""
     session_cookie_samesite: str = "lax"
+    clickhouse_host: str = ""
+    clickhouse_port: int = 8123
+    clickhouse_username: str = ""
+    clickhouse_password: str = ""
+    clickhouse_secure: bool = False
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -139,6 +144,22 @@ class Settings:
             session_cookie_samesite=os.getenv(
                 "SESSION_COOKIE_SAMESITE",
                 defaults.session_cookie_samesite,
+            ),
+            clickhouse_host=os.getenv("CLICKHOUSE_HOST", defaults.clickhouse_host),
+            clickhouse_port=int(
+                os.getenv("CLICKHOUSE_PORT", str(defaults.clickhouse_port))
+            ),
+            clickhouse_username=os.getenv(
+                "CLICKHOUSE_USERNAME",
+                os.getenv("CLICKHOUSE_USER", defaults.clickhouse_username),
+            ),
+            clickhouse_password=os.getenv(
+                "CLICKHOUSE_PASSWORD",
+                defaults.clickhouse_password,
+            ),
+            clickhouse_secure=_env_bool(
+                "CLICKHOUSE_SECURE",
+                defaults.clickhouse_secure,
             ),
         )
 

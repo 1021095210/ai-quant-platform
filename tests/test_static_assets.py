@@ -159,6 +159,45 @@ class StaticAssetTests(unittest.TestCase):
         self.assertIn("/api/v1/platform/capabilities", backtests_js)
         self.assertIn("当前暂不开放真实回测", backtests_js)
 
+    def test_workspace_assets_include_focus_and_data_hub_sections(self) -> None:
+        workspace_html = (
+            WORKSPACE_ROOT
+            / "apps"
+            / "api"
+            / "src"
+            / "quant_platform_api"
+            / "static"
+            / "workspace.html"
+        ).read_text(encoding="utf-8")
+        workspace_js = (
+            WORKSPACE_ROOT
+            / "apps"
+            / "api"
+            / "src"
+            / "quant_platform_api"
+            / "static"
+            / "workspace.js"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn('id="workspace-focus-cards"', workspace_html)
+        self.assertIn('id="workspace-data-hub"', workspace_html)
+        self.assertIn("renderFocusCards", workspace_js)
+        self.assertIn("renderDataHubStatus", workspace_js)
+
+    def test_backtests_and_replay_assets_include_data_source_guidance(self) -> None:
+        backtests_js = (
+            WORKSPACE_ROOT
+            / "apps"
+            / "api"
+            / "src"
+            / "quant_platform_api"
+            / "static"
+            / "backtests.js"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("优先链路", backtests_js)
+        self.assertIn("执行约束回放", backtests_js)
+
     def test_rules_js_can_bootstrap_with_stubbed_dom(self) -> None:
         node = shutil.which("node")
         if node is None:

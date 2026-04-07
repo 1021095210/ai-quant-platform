@@ -3,12 +3,16 @@ from __future__ import annotations
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import dataclass
 from datetime import date, datetime
+import base64
 import hashlib
 from io import StringIO
+import json
 import sqlite3
 from pathlib import Path
 from time import sleep
 from typing import Any, Protocol
+import urllib.parse
+import urllib.request
 
 
 @dataclass(slots=True)
@@ -27,6 +31,11 @@ class MarketBar:
     turnover: float | None
     data_source: str
     fetched_at: str
+    is_suspended: bool = False
+    is_limit_up: bool = False
+    is_limit_down: bool = False
+    limit_up_price: float | None = None
+    limit_down_price: float | None = None
 
 
 class MarketDataProvider(Protocol):
@@ -45,6 +54,183 @@ class MarketDataProvider(Protocol):
 
 class TusharePermissionError(RuntimeError):
     pass
+
+
+class ClickHouseMarketDataProvider:
+    name = "internal_clickhouse_dwd"
+
+    def __init__(
+        self,
+        *,
+        host: str,
+        port: int,
+        username: str,
+        password: str,
+        secure: bool = False,
+    ) -> None:
+        self._host = host.strip()
+        self._port = int(port)
+        self._username = username.strip()
+        self._password = password
+        self._secure = secure
+
+    def is_ready(self) -> bool:
+        return bool(self._host and self._username)
+
+    def fetch_daily_bars(
+        self,
+        *,
+        ts_code: str,
+        asset_type: str,
+        start_date: str,
+        end_date: str,
+        adjustment_mode: str,
+    ) -> list[MarketBar]:
+        if not self.is_ready():
+            raise RuntimeError("clickhouse provider is not configured")
+        if asset_type not in {"stock", "etf"}:
+            raise RuntimeError(f"clickhouse provider does not support asset_type={asset_type}")
+
+        rows = self._query_daily_rows(
+            ts_code=ts_code,
+            start_date=start_date,
+            end_date=end_date,
+        )
+        if not rows:
+            raise RuntimeError(f"no clickhouse rows returned for {ts_code}")
+        transformed_rows = self._apply_adjustment(rows=rows, adjustment_mode=adjustment_mode)
+        return [
+            MarketBar(
+                ts_code=ts_code,
+                asset_type=asset_type,
+                adjustment_mode=adjustment_mode,
+                trade_date=_format_trade_date(item["trade_date"]),
+                open=float(item["open"]),
+                high=float(item["high"]),
+                low=float(item["low"]),
+                close=float(item["close"]),
+                volume=float(item.get("volume") or 0.0),
+                amount=float(item.get("amount") or 0.0),
+                pct_chg=_safe_float(item.get("pct_change")),
+                turnover=_safe_float(item.get("turnover_rate")),
+                data_source=self.name,
+                fetched_at=str(item.get("sync_time") or datetime.utcnow().isoformat()),
+                is_suspended=bool(int(item.get("is_suspended") or 0)),
+                is_limit_up=bool(int(item.get("is_limit_up") or 0)),
+                is_limit_down=bool(int(item.get("is_limit_down") or 0)),
+                limit_up_price=_safe_float(item.get("limit_up_price")),
+                limit_down_price=_safe_float(item.get("limit_down_price")),
+            )
+            for item in transformed_rows
+        ]
+
+    def describe_market_feed(self) -> dict[str, Any]:
+        if not self.is_ready():
+            return {"provider": self.name, "configured": False}
+        daily_query = (
+            "SELECT max(trade_date) AS max_trade_date FROM quant_dwd.dwd_mkt_kline_daily FORMAT JSONEachRow"
+        )
+        response = self._run_query(daily_query)
+        latest_trade_date = None
+        if response:
+            latest_trade_date = response[0].get("max_trade_date")
+        return {
+            "provider": self.name,
+            "configured": True,
+            "preferred_layer": "dwd",
+            "latest_trade_date": latest_trade_date,
+            "supports_asset_types": ["stock", "etf"],
+            "supported_adjustment_modes": ["raw", "qfq", "hfq"],
+        }
+
+    def _apply_adjustment(
+        self,
+        *,
+        rows: list[dict[str, Any]],
+        adjustment_mode: str,
+    ) -> list[dict[str, Any]]:
+        normalized_mode = adjustment_mode.strip().lower()
+        if normalized_mode in {"raw", "bfq"}:
+            return rows
+        adjusted = [dict(item) for item in rows]
+        if normalized_mode == "hfq":
+            for item in adjusted:
+                factor = float(item.get("adj_factor") or 0.0)
+                if factor <= 0:
+                    continue
+                for field in ("open", "high", "low", "close", "pre_close", "limit_up_price", "limit_down_price"):
+                    value = item.get(field)
+                    if value is not None:
+                        item[field] = float(value) * factor
+            return adjusted
+        if normalized_mode == "qfq":
+            latest_factor = next(
+                (float(item.get("adj_factor") or 0.0) for item in reversed(adjusted) if float(item.get("adj_factor") or 0.0) > 0),
+                0.0,
+            )
+            if latest_factor <= 0:
+                raise RuntimeError("clickhouse qfq adjustment is unavailable because adj_factor is missing")
+            for item in adjusted:
+                factor = float(item.get("adj_factor") or 0.0)
+                if factor <= 0:
+                    continue
+                ratio = factor / latest_factor
+                for field in ("open", "high", "low", "close", "pre_close", "limit_up_price", "limit_down_price"):
+                    value = item.get(field)
+                    if value is not None:
+                        item[field] = float(value) * ratio
+            return adjusted
+        raise RuntimeError(f"unsupported adjustment mode: {adjustment_mode}")
+
+    def _query_daily_rows(
+        self,
+        *,
+        ts_code: str,
+        start_date: str,
+        end_date: str,
+    ) -> list[dict[str, Any]]:
+        query = f"""
+        SELECT
+            ts_code,
+            trade_date,
+            open,
+            high,
+            low,
+            close,
+            pre_close,
+            pct_change,
+            volume,
+            amount,
+            turnover_rate,
+            adj_factor,
+            limit_up_price,
+            limit_down_price,
+            is_suspended,
+            is_limit_up,
+            is_limit_down,
+            data_source,
+            sync_time
+        FROM quant_dwd.dwd_mkt_kline_daily FINAL
+        WHERE ts_code = {_quote_clickhouse_string(ts_code)}
+          AND trade_date >= toDate({_quote_clickhouse_string(_format_clickhouse_date(start_date))})
+          AND trade_date <= toDate({_quote_clickhouse_string(_format_clickhouse_date(end_date))})
+        ORDER BY trade_date ASC
+        FORMAT JSONEachRow
+        """
+        return self._run_query(query)
+
+    def _run_query(self, query: str) -> list[dict[str, Any]]:
+        scheme = "https" if self._secure else "http"
+        encoded_query = urllib.parse.quote(query.strip())
+        url = f"{scheme}://{self._host}:{self._port}/?query={encoded_query}"
+        request = urllib.request.Request(url)
+        credentials = base64.b64encode(f"{self._username}:{self._password}".encode("utf-8")).decode("ascii")
+        request.add_header("Authorization", f"Basic {credentials}")
+        with urllib.request.urlopen(request, timeout=20) as response:
+            body = response.read().decode("utf-8").strip()
+        if not body:
+            return []
+        return [json.loads(line) for line in body.splitlines() if line.strip()]
 
 
 class TushareMarketDataProvider:
@@ -713,6 +899,24 @@ class MarketDataService:
         self._primary_provider = primary_provider
         self._fallback_provider = fallback_provider
 
+    def describe_pipeline(self) -> dict[str, Any]:
+        primary = self._primary_provider
+        pipeline = {
+            "preferred_provider": getattr(primary, "name", getattr(self._fallback_provider, "name", "unknown")),
+            "fallback_provider": getattr(self._fallback_provider, "name", "unknown"),
+            "cache_database_path": str(Path(self._cache_repository._database_path).resolve()),
+        }
+        if primary is not None and hasattr(primary, "describe_market_feed"):
+            try:
+                pipeline["primary_feed"] = primary.describe_market_feed()
+            except Exception as exc:  # pragma: no cover - diagnostic path
+                pipeline["primary_feed"] = {
+                    "provider": getattr(primary, "name", "unknown"),
+                    "configured": False,
+                    "error": str(exc),
+                }
+        return pipeline
+
     def load_daily_bars(
         self,
         *,
@@ -761,6 +965,8 @@ class MarketDataService:
             "ts_code": ts_code,
             "asset_type": actual_asset_type,
             "adjustment_mode": adjustment_mode,
+            "preferred_provider": getattr(self._primary_provider, "name", getattr(self._fallback_provider, "name", "unknown")),
+            "cache_database_path": str(Path(self._cache_repository._database_path).resolve()),
         }
         return bars, metadata
 
@@ -848,3 +1054,13 @@ def _to_prefixed_symbol(ts_code: str) -> str:
     if exchange in {"bj"}:
         return f"bj{symbol}"
     return f"sh{symbol}"
+
+
+def _format_clickhouse_date(value: str) -> str:
+    if len(value) == 8 and value.isdigit():
+        return f"{value[:4]}-{value[4:6]}-{value[6:]}"
+    return value
+
+
+def _quote_clickhouse_string(value: str) -> str:
+    return "'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'"

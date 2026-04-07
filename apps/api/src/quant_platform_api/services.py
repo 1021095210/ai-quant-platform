@@ -2060,7 +2060,7 @@ class TradeUploadService:
         explicit_exit_date: date | None,
         index: int,
     ) -> TradeRecordItem:
-        bars, _ = self._load_trade_bars(
+        bars, data_source = self._load_trade_bars(
             symbol=symbol,
             trade_date=trade_date,
             adjustment_mode=adjustment_mode,
@@ -2078,7 +2078,8 @@ class TradeUploadService:
         exit_price = None
         exit_time = None
         pnl = 0.0
-        notes = f"来源：长文字智能识别；买入规则：{entry_rule['label']}"
+        source_label = data_source.get("provider") or "未知数据源"
+        notes = f"来源：长文字智能识别；补价来源：{source_label}；买入规则：{entry_rule['label']}"
 
         if exit_rule is not None:
             exit_match = self._resolve_exit_from_rule(
@@ -2791,9 +2792,11 @@ class WorkspaceService:
         *,
         strategy_service: StrategyService,
         task_repository: TaskRepository,
+        market_data_service: MarketDataService | None = None,
     ) -> None:
         self._strategy_service = strategy_service
         self._task_repository = task_repository
+        self._market_data_service = market_data_service
 
     def build_summary(self, *, user_id: str, workspace_id: str) -> dict[str, Any]:
         projects = self._strategy_service.list_projects(
@@ -2856,6 +2859,14 @@ class WorkspaceService:
             "recent_replays": [self._summarize_task(item) for item in replays[:4]],
             "recent_failures": [self._summarize_task(item) for item in failed_tasks],
             "snapshot_states": self._collect_snapshot_states(backtests),
+            "data_hub_status": self._market_data_service.describe_pipeline()
+            if self._market_data_service is not None
+            else {},
+            "focus_cards": self._build_focus_cards(
+                projects=projects,
+                backtests=backtests,
+                replays=replays,
+            ),
         }
 
     def _summarize_task(self, record: TaskRecord) -> dict[str, Any]:
@@ -2909,6 +2920,62 @@ class WorkspaceService:
             if len(items) >= 4:
                 break
         return items
+
+    def _build_focus_cards(
+        self,
+        *,
+        projects: list[StrategyVersionRecord],
+        backtests: list[TaskRecord],
+        replays: list[TaskRecord],
+    ) -> list[dict[str, str]]:
+        cards: list[dict[str, str]] = []
+        if projects:
+            latest_project = projects[0]
+            cards.append(
+                {
+                    "title": "继续当前策略版本",
+                    "summary": f"{latest_project.title} · {latest_project.version_label or latest_project.version_id}",
+                    "action_label": "回到策略工坊",
+                    "path": "/strategy",
+                }
+            )
+        if backtests:
+            latest_backtest = backtests[0]
+            metrics = latest_backtest.result.get("metrics", {})
+            cards.append(
+                {
+                    "title": "先看最近一次回测",
+                    "summary": (
+                        f"收益 {round(float(metrics.get('total_return_pct', 0.0) or 0.0), 2)}%，"
+                        f" 交易 {int(metrics.get('trade_count', 0) or 0)} 笔。"
+                    ),
+                    "action_label": "打开回测中心",
+                    "path": "/backtests",
+                }
+            )
+        if replays:
+            latest_replay = replays[0]
+            cards.append(
+                {
+                    "title": "把复盘结论回灌到规则",
+                    "summary": latest_replay.result.get(
+                        "summary",
+                        "最近一轮复盘已完成，可把建议规则回写到下一版策略。",
+                    ),
+                    "action_label": "进入交易复盘",
+                    "path": "/replay",
+                }
+            )
+        if not cards:
+            cards.append(
+                {
+                    "title": "先跑通第一条研究闭环",
+                    "summary": "先问金融导师，再去策略工坊生成第一版策略，之后运行回测并做复盘。",
+                    "action_label": "打开金融导师",
+                    "path": "/mentor",
+                }
+            )
+        return cards[:3]
 
 
 class AdminService:
@@ -3590,6 +3657,7 @@ def build_backtest_result(
             payload["execution_contract"],
             project.strategy_dsl,
         )
+        normalized_contract["data_provider"] = data_source.get("provider")
         backtest = run_backtest(
             strategy_spec={**project.strategy_dsl, "market": dataset["market"]},
             bars=bars,
@@ -3614,6 +3682,7 @@ def build_backtest_result(
             "metrics": backtest["metrics"],
             "equity_curve": backtest["equity_curve"],
             "trades": backtest["trades"],
+            "execution_summary": backtest.get("execution_summary", {}),
             "strategy_python": project.strategy_python,
             "strategy_title": project.title,
         }

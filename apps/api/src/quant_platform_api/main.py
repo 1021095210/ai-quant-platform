@@ -14,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 
 from quant_platform_api.market_data import (
     AkshareMarketDataProvider,
+    ClickHouseMarketDataProvider,
     DemoMarketDataProvider,
     MarketDataCacheRepository,
     MarketDataService,
@@ -124,7 +125,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     admin_audit_log_repository = SQLAlchemyAdminAuditLogRepository(session_factory)
     application_log_repository = SQLAlchemyApplicationLogRepository(session_factory)
     primary_market_provider = None
-    if app_settings.market_data_provider in {"auto", "tushare"}:
+    if app_settings.clickhouse_host and app_settings.market_data_provider in {"auto", "clickhouse"}:
+        primary_market_provider = ClickHouseMarketDataProvider(
+            host=app_settings.clickhouse_host,
+            port=app_settings.clickhouse_port,
+            username=app_settings.clickhouse_username,
+            password=app_settings.clickhouse_password,
+            secure=app_settings.clickhouse_secure,
+        )
+    elif app_settings.market_data_provider in {"auto", "tushare"}:
         primary_market_provider = TushareMarketDataProvider(app_settings.tushare_token)
 
     fallback_market_provider = (
@@ -173,6 +182,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         workspace_service=WorkspaceService(
             strategy_service=strategy_service,
             task_repository=task_repository,
+            market_data_service=market_data_service,
         ),
         market_data_service=market_data_service,
         backtest_service=AsyncTaskService(
@@ -606,6 +616,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 ),
                 "default_accounts_enabled": app_settings.enable_default_accounts,
                 "session_cookie_secure": app_settings.session_cookie_secure,
+                "clickhouse_configured": bool(app_settings.clickhouse_host),
             },
         )
 

@@ -30,6 +30,48 @@ function renderProjects(items) {
     .join("");
 }
 
+function renderFocusCards(items) {
+  const node = document.querySelector("#workspace-focus-cards");
+  if (!items.length) {
+    node.textContent = "当前还没有形成明确的下一步建议。";
+    return;
+  }
+  node.innerHTML = items
+    .map(
+      (item) => `
+        <a class="list-item" href="${item.path}">
+          <strong>${item.title}</strong>
+          <div class="muted-note">${item.summary}</div>
+          <div class="muted-note">${item.action_label}</div>
+        </a>
+      `,
+    )
+    .join("");
+}
+
+function renderDataHubStatus(status) {
+  const node = document.querySelector("#workspace-data-hub");
+  if (!status || !Object.keys(status).length) {
+    node.textContent = "当前没有可展示的数据中心状态。";
+    return;
+  }
+  const primaryFeed = status.primary_feed || {};
+  node.innerHTML = `
+    <div class="list-item">
+      <strong>优先数据来源</strong>
+      <div class="muted-note">${status.preferred_provider || "未知"} / 回退 ${status.fallback_provider || "未知"}</div>
+    </div>
+    <div class="list-item">
+      <strong>内部数据仓库状态</strong>
+      <div class="muted-note">${primaryFeed.configured ? "已配置" : "未配置"}${primaryFeed.latest_trade_date ? ` · 最新交易日 ${primaryFeed.latest_trade_date}` : ""}</div>
+    </div>
+    <div class="list-item">
+      <strong>默认读取层</strong>
+      <div class="muted-note">${primaryFeed.preferred_layer ? `${String(primaryFeed.preferred_layer).toUpperCase()} 优先` : "内部数仓未启用"}${primaryFeed.configured ? " · 用户侧默认优先读取 DWD/ADS" : ""}</div>
+    </div>
+  `;
+}
+
 function renderBacktests(items) {
   const node = document.querySelector("#recent-backtests");
   document.querySelector("#backtest-count").textContent = `${items.length}`;
@@ -158,10 +200,12 @@ async function loadWorkspace() {
 
   const summary = (await api("/api/v1/workspace/summary")).data;
   renderProjects(summary.recent_projects || []);
+  renderFocusCards(summary.focus_cards || []);
   renderBacktests(summary.recent_backtests || []);
   renderReplays(summary.recent_replays || []);
   renderFailures(summary.recent_failures || []);
   renderSnapshots(summary.snapshot_states || []);
+  renderDataHubStatus(summary.data_hub_status || {});
   document.querySelector("#workspace-next-step").textContent = chooseNextStep(summary);
   setStatus(`工作台已刷新，当前账户：${user.username}。`);
 }

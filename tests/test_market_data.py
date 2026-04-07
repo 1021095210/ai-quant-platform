@@ -24,6 +24,7 @@ if VENV_LIB.exists():
 
 from quant_platform_api.market_data import (  # noqa: E402
     AkshareMarketDataProvider,
+    ClickHouseMarketDataProvider,
     MarketBar,
     MarketDataCacheRepository,
     MarketDataService,
@@ -80,6 +81,18 @@ class _StubProvider:
                 fetched_at="2026-03-30T10:00:00",
             ),
         ]
+
+
+class _PrimaryFeedStub:
+    name = "internal_clickhouse_dwd"
+
+    def describe_market_feed(self) -> dict[str, object]:
+        return {
+            "provider": self.name,
+            "configured": True,
+            "preferred_layer": "dwd",
+            "latest_trade_date": "2026-04-03",
+        }
 
 
 class MarketDataTests(unittest.TestCase):
@@ -249,3 +262,84 @@ class MarketDataTests(unittest.TestCase):
         self.assertEqual("akshare_sina_etf", rows[0].data_source)
         self.assertEqual(9429306.0, rows[0].volume)
         self.assertEqual("2024-01-03", rows[1].trade_date)
+
+    def test_clickhouse_provider_can_build_qfq_prices_from_dwd_rows(self) -> None:
+        provider = ClickHouseMarketDataProvider(
+            host="127.0.0.1",
+            port=8123,
+            username="root",
+            password="secret",
+        )
+        sample_rows = [
+            {
+                "trade_date": "2024-01-02",
+                "open": 10.0,
+                "high": 11.0,
+                "low": 9.5,
+                "close": 10.5,
+                "pre_close": 10.0,
+                "pct_change": 5.0,
+                "volume": 1000.0,
+                "amount": 10000.0,
+                "turnover_rate": 1.2,
+                "adj_factor": 2.0,
+                "limit_up_price": 11.0,
+                "limit_down_price": 9.0,
+                "is_suspended": 0,
+                "is_limit_up": 0,
+                "is_limit_down": 0,
+                "sync_time": "2026-04-07T09:00:00",
+            },
+            {
+                "trade_date": "2024-01-03",
+                "open": 12.0,
+                "high": 13.0,
+                "low": 11.0,
+                "close": 12.0,
+                "pre_close": 10.5,
+                "pct_change": 14.2,
+                "volume": 1200.0,
+                "amount": 14400.0,
+                "turnover_rate": 1.3,
+                "adj_factor": 4.0,
+                "limit_up_price": 13.2,
+                "limit_down_price": 10.8,
+                "is_suspended": 0,
+                "is_limit_up": 1,
+                "is_limit_down": 0,
+                "sync_time": "2026-04-07T09:00:00",
+            },
+        ]
+
+        with patch.object(provider, "_query_daily_rows", return_value=sample_rows):
+            rows = provider.fetch_daily_bars(
+                ts_code="600519.SH",
+                asset_type="stock",
+                start_date="20240102",
+                end_date="20240103",
+                adjustment_mode="qfq",
+            )
+
+        self.assertEqual(2, len(rows))
+        self.assertAlmostEqual(5.0, rows[0].open)
+        self.assertAlmostEqual(5.5, rows[0].high)
+        self.assertAlmostEqual(5.25, rows[0].close)
+        self.assertAlmostEqual(12.0, rows[1].close)
+        self.assertTrue(rows[1].is_limit_up)
+        self.assertEqual("internal_clickhouse_dwd", rows[0].data_source)
+
+    def test_market_data_service_describe_pipeline_exposes_primary_feed(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            service = MarketDataService(
+                cache_repository=MarketDataCacheRepository(
+                    str(Path(temp_dir) / "market_data.db")
+                ),
+                primary_provider=_PrimaryFeedStub(),
+                fallback_provider=_StubProvider(),
+            )
+
+            pipeline = service.describe_pipeline()
+
+        self.assertEqual("internal_clickhouse_dwd", pipeline["preferred_provider"])
+        self.assertEqual("dwd", pipeline["primary_feed"]["preferred_layer"])
+        self.assertEqual("2026-04-03", pipeline["primary_feed"]["latest_trade_date"])
