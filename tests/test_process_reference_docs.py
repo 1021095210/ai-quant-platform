@@ -26,12 +26,14 @@ class ProcessReferenceDocsTests(unittest.TestCase):
         checklist = folder / "AI量化交易平台_实战落地资源清单与验收标准.md"
         recommendation = folder / "AI量化交易平台_资源源选型建议_2026-04-07.md"
         data_hub = folder / "AI量化交易平台_数据中心与增量同步设计.md"
+        one_pager = folder / "AI量化交易平台_资源部门单页说明.md"
 
         self.assertTrue(folder.exists())
         self.assertTrue(readme.exists())
         self.assertTrue(checklist.exists())
         self.assertTrue(recommendation.exists())
         self.assertTrue(data_hub.exists())
+        self.assertTrue(one_pager.exists())
 
         text = checklist.read_text(encoding="utf-8")
         self.assertIn("必须提供的资源", text)
@@ -49,6 +51,11 @@ class ProcessReferenceDocsTests(unittest.TestCase):
         self.assertIn("用户请求不直连上游数据源", data_hub_text)
         self.assertIn("平台统一拉取并保存", data_hub_text)
         self.assertIn("增量更新", data_hub_text)
+
+        one_pager_text = one_pager.read_text(encoding="utf-8")
+        self.assertIn("我们需要什么资源", one_pager_text)
+        self.assertIn("这些资源怎么用", one_pager_text)
+        self.assertIn("资源提供部门需要重点确认什么", one_pager_text)
 
 
 if __name__ == "__main__":
