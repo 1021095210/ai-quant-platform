@@ -113,6 +113,52 @@ class StaticAssetTests(unittest.TestCase):
         self.assertIn("/api/v1/trades/uploads/screenshot/ocr", replay_js)
         self.assertIn("智能识别截图内容", replay_js)
 
+    def test_strategy_and_backtests_assets_include_capability_guidance(self) -> None:
+        strategy_html = (
+            WORKSPACE_ROOT
+            / "apps"
+            / "api"
+            / "src"
+            / "quant_platform_api"
+            / "static"
+            / "strategy.html"
+        ).read_text(encoding="utf-8")
+        strategy_js = (
+            WORKSPACE_ROOT
+            / "apps"
+            / "api"
+            / "src"
+            / "quant_platform_api"
+            / "static"
+            / "strategy.js"
+        ).read_text(encoding="utf-8")
+        backtests_html = (
+            WORKSPACE_ROOT
+            / "apps"
+            / "api"
+            / "src"
+            / "quant_platform_api"
+            / "static"
+            / "backtests.html"
+        ).read_text(encoding="utf-8")
+        backtests_js = (
+            WORKSPACE_ROOT
+            / "apps"
+            / "api"
+            / "src"
+            / "quant_platform_api"
+            / "static"
+            / "backtests.js"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn('id="strategy-capability-summary"', strategy_html)
+        self.assertIn('id="strategy-capability-matrix"', strategy_html)
+        self.assertIn("/api/v1/platform/capabilities", strategy_js)
+        self.assertIn('id="backtest-support-summary"', backtests_html)
+        self.assertIn('id="backtest-capability-matrix"', backtests_html)
+        self.assertIn("/api/v1/platform/capabilities", backtests_js)
+        self.assertIn("当前暂不开放真实回测", backtests_js)
+
     def test_rules_js_can_bootstrap_with_stubbed_dom(self) -> None:
         node = shutil.which("node")
         if node is None:

@@ -13,6 +13,7 @@ activateNav("/strategy");
 const state = {
   strategySpec: null,
   strategyPython: "",
+  platformCapabilities: [],
 };
 
 const nodes = {
@@ -34,6 +35,8 @@ const nodes = {
   goBacktestsLink: document.querySelector("#go-backtests-link"),
   customIndicatorLibrary: document.querySelector("#custom-indicator-library"),
   glossaryPreview: document.querySelector("#glossary-preview"),
+  capabilitySummary: document.querySelector("#strategy-capability-summary"),
+  capabilityMatrix: document.querySelector("#strategy-capability-matrix"),
 };
 
 const MARKET_PRESETS = {
@@ -68,6 +71,7 @@ function applyMarketPreset() {
   }
   nodes.market.value = preset.symbol;
   nodes.assetType.value = preset.assetType;
+  syncStrategyCapabilityState();
 }
 
 function syncStrategyActionState() {
@@ -76,6 +80,103 @@ function syncStrategyActionState() {
   nodes.saveProjectButton.className = canProceed ? "btn primary" : "btn disabled";
   nodes.goBacktestsLink.className = canProceed ? "btn primary" : "btn disabled";
   nodes.goBacktestsLink.setAttribute("aria-disabled", canProceed ? "false" : "true");
+}
+
+function getCapabilityBase(marketScope) {
+  return (
+    state.platformCapabilities.find((item) => item.market_scope === marketScope) || {
+      market_scope: marketScope,
+      market_scope_label: marketScope,
+      strategy_label: "可生成并保存策略语义",
+      backtest_label: "当前暂不开放真实回测",
+      replay_label: "复盘支持有限",
+      data_label: "数据接入尚未开放",
+      backtest_status: "unsupported",
+      notes: [],
+    }
+  );
+}
+
+function summarizeSelectedCapability() {
+  const marketScope = nodes.marketScope.value;
+  const selectedTimeframes = getSelectedTimeframes();
+  const primaryTimeframe = nodes.timeframe.value;
+  const base = getCapabilityBase(marketScope);
+  const isLimited =
+    marketScope === "cn_equity" &&
+    (primaryTimeframe !== "1d" || selectedTimeframes.length > 1);
+  const backtestLabel =
+    marketScope !== "cn_equity"
+      ? base.backtest_label
+      : isLimited
+        ? "仅支持日线兼容层回测"
+        : "可直接运行真实日线回测";
+  const warning =
+    marketScope !== "cn_equity"
+      ? `${base.market_scope_label} 当前仅支持策略语义与规则研究，回测中心会阻止发起真实回测。`
+      : isLimited
+        ? "当前策略包含非日线或混合周期条件。保存与研究语义正常，但真实回测仍按日线兼容层执行。"
+        : "当前组合处于平台真实回测主链路内，可直接进入回测中心验证。";
+  return {
+    ...base,
+    timeframes: selectedTimeframes,
+    primaryTimeframe,
+    backtest_mode_label: backtestLabel,
+    backtest_warning: warning,
+    requiresCompatibilityNotice: isLimited,
+  };
+}
+
+function renderCapabilitySummary(summary) {
+  const noteItems = [
+    `策略生成：${summary.strategy_label}`,
+    `真实回测：${summary.backtest_mode_label}`,
+    `交易复盘：${summary.replay_label}`,
+    `数据链路：${summary.data_label}`,
+  ];
+  const detail = summary.requiresCompatibilityNotice
+    ? `当前选择的是 ${summary.market_scope_label} / ${summary.timeframes.join(" / ")}，需要按“日线兼容层”理解回测结果。`
+    : `当前选择的是 ${summary.market_scope_label} / ${summary.timeframes.join(" / ")}。`;
+  nodes.capabilitySummary.innerHTML = `
+    <div class="capability-status capability-${summary.backtest_status}">
+      <strong>${summary.market_scope_label}</strong>
+      <span>${summary.backtest_mode_label}</span>
+    </div>
+    <div class="muted-note">${detail}</div>
+    <div class="muted-note">${summary.backtest_warning}</div>
+    <div class="pill-row" style="margin-top: 12px">
+      ${noteItems.map((item) => `<span class="pill">${item}</span>`).join("")}
+    </div>
+  `;
+}
+
+function renderCapabilityMatrix() {
+  if (!state.platformCapabilities.length) {
+    nodes.capabilityMatrix.textContent = "当前无法读取市场支持状态。";
+    return;
+  }
+  nodes.capabilityMatrix.innerHTML = state.platformCapabilities
+    .map(
+      (item) => `
+        <div class="capability-row">
+          <div>
+            <strong>${item.market_scope_label}</strong>
+            <div class="muted-note">${item.strategy_label}</div>
+          </div>
+          <div class="capability-tags">
+            <span class="capability-chip capability-${item.backtest_status}">回测：${item.backtest_label}</span>
+            <span class="capability-chip capability-${item.replay_status}">复盘：${item.replay_label}</span>
+            <span class="capability-chip capability-${item.data_status}">数据：${item.data_label}</span>
+          </div>
+        </div>
+      `,
+    )
+    .join("");
+}
+
+function syncStrategyCapabilityState(summary = summarizeSelectedCapability()) {
+  renderCapabilitySummary(summary);
+  renderCapabilityMatrix();
 }
 
 async function generateStrategy() {
@@ -110,6 +211,13 @@ async function generateStrategy() {
     nodes.ambiguities.innerHTML += payload.data.matched_terms
       .map((item) => `<span class="pill">术语已识别：${item.term}</span>`)
       .join("");
+  }
+  if (payload.data.capability_summary) {
+    renderCapabilitySummary({
+      ...payload.data.capability_summary,
+      requiresCompatibilityNotice:
+        payload.data.capability_summary.requires_compatibility_notice || false,
+    });
   }
   syncStrategyActionState();
   setStatus("策略生成完成。");
@@ -155,12 +263,14 @@ function restoreSelection() {
 }
 
 async function loadKnowledgePreview() {
-  const [indicatorPayload, glossaryPayload] = await Promise.all([
+  const [indicatorPayload, glossaryPayload, capabilityPayload] = await Promise.all([
     api("/api/v1/indicators/custom"),
     api("/api/v1/rules/glossary"),
+    api("/api/v1/platform/capabilities"),
   ]);
   const indicators = indicatorPayload.data.items;
   const glossary = glossaryPayload.data.items.slice(0, 8);
+  state.platformCapabilities = capabilityPayload.data.items || [];
 
   nodes.customIndicatorLibrary.innerHTML = indicators.length
     ? indicators
@@ -183,6 +293,7 @@ async function loadKnowledgePreview() {
         )
         .join("")
     : '<span class="pill">暂无术语，去规则模块补充</span>';
+  syncStrategyCapabilityState();
 }
 
 document
@@ -197,7 +308,11 @@ nodes.goBacktestsLink.addEventListener("click", (event) => {
   }
 });
 nodes.timeframe.addEventListener("change", syncTimeframeSelection);
+nodes.timeframe.addEventListener("change", () => syncStrategyCapabilityState());
 nodes.marketScope.addEventListener("change", applyMarketPreset);
+nodes.timeframeOptions.forEach((node) =>
+  node.addEventListener("change", () => syncStrategyCapabilityState()),
+);
 
 restoreSelection();
 syncTimeframeSelection();

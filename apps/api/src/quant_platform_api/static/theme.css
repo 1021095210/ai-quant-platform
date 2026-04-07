@@ -1301,6 +1301,74 @@ th {
   line-height: 1.6;
 }
 
+.capability-callout,
+.capability-matrix {
+  display: grid;
+  gap: 12px;
+}
+
+.capability-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  width: fit-content;
+  padding: 10px 14px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.capability-status strong {
+  margin: 0;
+}
+
+.capability-status.capability-supported,
+.capability-chip.capability-supported {
+  color: var(--success);
+  background: rgba(15, 155, 109, 0.12);
+}
+
+.capability-status.capability-limited,
+.capability-chip.capability-limited {
+  color: var(--warning);
+  background: rgba(204, 122, 0, 0.12);
+}
+
+.capability-status.capability-unsupported,
+.capability-chip.capability-unsupported {
+  color: var(--danger);
+  background: rgba(204, 67, 89, 0.12);
+}
+
+.capability-row {
+  display: grid;
+  gap: 10px;
+  padding: 14px 16px;
+  border-radius: 16px;
+  border: 1px solid rgba(191, 212, 255, 0.52);
+  background: var(--surface-muted);
+}
+
+.capability-row strong {
+  display: block;
+  margin-bottom: 4px;
+}
+
+.capability-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.capability-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 8px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
 @media (max-width: 960px) {
   .auth-card,
   .kpi-row,

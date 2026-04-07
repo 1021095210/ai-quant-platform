@@ -35,7 +35,7 @@
         <div>
           <p class="eyebrow">Backtest Center</p>
           <h2>先定清成交和风控假设，再运行可追踪、可复现的回测。</h2>
-          <p>这里会把成交方式、复权、费用、仓位和风控一起固化进回测配置，并把数据快照摘要写进结果，方便你之后复盘和对比。</p>
+          <p>这里会把成交方式、复权、费用、仓位和风控一起固化进回测配置，并把数据快照摘要写进结果，方便你之后复盘和对比。不同市场和周期的真实回测支持范围不同，发起前会先给出能力说明。</p>
         </div>
         <div class="hero-panel">
           <div class="card muted">
@@ -47,6 +47,23 @@
             <strong id="latest-provider" class="metric-value">待回测</strong>
           </div>
         </div>
+      </section>
+
+      <section class="grid two" style="margin-top: 22px">
+        <section class="card">
+          <div class="panel-header">
+            <h3>本次回测支持范围</h3>
+            <span class="muted-note">回测前先确认真实可执行边界</span>
+          </div>
+          <div id="backtest-support-summary" class="capability-callout empty-state">请选择策略版本后查看当前支持范围。</div>
+        </section>
+        <section class="card">
+          <div class="panel-header">
+            <h3>市场支持状态</h3>
+            <span class="muted-note">平台当前已开放与未开放能力</span>
+          </div>
+          <div id="backtest-capability-matrix" class="capability-matrix empty-state">正在加载市场支持状态。</div>
+        </section>
       </section>
 
       <section class="grid two stretch" style="margin-top: 22px">

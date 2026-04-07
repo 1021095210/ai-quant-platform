@@ -398,6 +398,156 @@ def _market_scope_label(value: str) -> str:
     return MARKET_SCOPE_LABELS.get(value, value)
 
 
+PLATFORM_CAPABILITY_MATRIX = {
+    "cn_equity": {
+        "market_scope": "cn_equity",
+        "market_scope_label": "A股",
+        "strategy_status": "supported",
+        "strategy_label": "可生成并保存策略",
+        "backtest_status": "supported",
+        "backtest_label": "支持真实日线回测",
+        "replay_status": "supported",
+        "replay_label": "支持 CSV / 截图 / 手动复盘，当前以 A 股语义最完整",
+        "data_status": "supported",
+        "data_label": "已接入 A 股日线缓存与快照摘要",
+        "notes": [
+            "当前真实回测主链路优先覆盖 A 股日线。",
+            "混合周期策略会保留为 DSL 上下文，回测兼容层仍按日线执行。",
+        ],
+        "supported_backtest_timeframes": ["1d"],
+        "supported_asset_types": ["stock", "etf"],
+    },
+    "us_equity": {
+        "market_scope": "us_equity",
+        "market_scope_label": "美股",
+        "strategy_status": "supported",
+        "strategy_label": "可生成并保存策略语义",
+        "backtest_status": "unsupported",
+        "backtest_label": "当前暂不开放真实回测",
+        "replay_status": "limited",
+        "replay_label": "可手动导入复盘，但自动识别与制度适配仍有限",
+        "data_status": "unsupported",
+        "data_label": "数据接入与快照链路尚未正式开放",
+        "notes": [
+            "当前支持市场语义、规则与研究提示，不支持真实回测执行。",
+        ],
+        "supported_backtest_timeframes": [],
+        "supported_asset_types": ["stock", "etf"],
+    },
+    "crypto": {
+        "market_scope": "crypto",
+        "market_scope_label": "加密货币",
+        "strategy_status": "supported",
+        "strategy_label": "可生成并保存策略语义",
+        "backtest_status": "unsupported",
+        "backtest_label": "当前暂不开放真实回测",
+        "replay_status": "limited",
+        "replay_label": "支持手动复盘，自动识别仍以 A 股样本优先",
+        "data_status": "unsupported",
+        "data_label": "数据接入与快照链路尚未正式开放",
+        "notes": [
+            "当前支持研究语义与 7x24 市场规则提示，不支持真实回测执行。",
+        ],
+        "supported_backtest_timeframes": [],
+        "supported_asset_types": ["crypto"],
+    },
+    "london_gold": {
+        "market_scope": "london_gold",
+        "market_scope_label": "伦敦金",
+        "strategy_status": "supported",
+        "strategy_label": "可生成并保存策略语义",
+        "backtest_status": "unsupported",
+        "backtest_label": "当前暂不开放真实回测",
+        "replay_status": "limited",
+        "replay_label": "支持手动复盘，自动识别与行情联动仍有限",
+        "data_status": "unsupported",
+        "data_label": "数据接入与快照链路尚未正式开放",
+        "notes": [
+            "当前支持研究语义与连续交易时段提示，不支持真实回测执行。",
+        ],
+        "supported_backtest_timeframes": [],
+        "supported_asset_types": ["commodity"],
+    },
+}
+
+
+def list_platform_capabilities() -> list[dict[str, Any]]:
+    return [dict(item) for item in PLATFORM_CAPABILITY_MATRIX.values()]
+
+
+def summarize_strategy_capability(
+    *,
+    market_scope: str,
+    primary_timeframe: str,
+    timeframes: list[str] | None = None,
+    analysis_mode: str = "single_timeframe",
+) -> dict[str, Any]:
+    base = dict(
+        PLATFORM_CAPABILITY_MATRIX.get(
+            market_scope,
+            {
+                "market_scope": market_scope,
+                "market_scope_label": _market_scope_label(market_scope),
+                "strategy_status": "supported",
+                "strategy_label": "可生成并保存策略语义",
+                "backtest_status": "unsupported",
+                "backtest_label": "当前暂不开放真实回测",
+                "replay_status": "limited",
+                "replay_label": "复盘支持有限",
+                "data_status": "unsupported",
+                "data_label": "数据接入尚未开放",
+                "notes": [],
+                "supported_backtest_timeframes": [],
+                "supported_asset_types": [],
+            },
+        )
+    )
+    selected_timeframes = list(dict.fromkeys(timeframes or [primary_timeframe]))
+    summary = {
+        **base,
+        "primary_timeframe": primary_timeframe,
+        "timeframes": selected_timeframes,
+        "analysis_mode": analysis_mode,
+        "backtest_mode_label": base["backtest_label"],
+        "backtest_warning": "",
+        "requires_compatibility_notice": False,
+    }
+    if market_scope == "cn_equity":
+        if (
+            _canonicalize_timeframe(primary_timeframe) != "1d"
+            or len(selected_timeframes) > 1
+            or analysis_mode == "multi_timeframe"
+        ):
+            summary["backtest_status"] = "limited"
+            summary["backtest_mode_label"] = "仅支持日线兼容层回测"
+            summary["backtest_warning"] = (
+                "当前策略包含非日线或混合周期条件。保存和研究语义正常，但真实回测仍按日线兼容层执行。"
+            )
+            summary["requires_compatibility_notice"] = True
+        else:
+            summary["backtest_mode_label"] = "可直接运行真实日线回测"
+            summary["backtest_warning"] = "当前组合处于平台真实回测主链路内。"
+    else:
+        summary["backtest_warning"] = (
+            f"{base['market_scope_label']} 当前仅支持策略语义与规则研究，回测中心会阻止发起真实回测。"
+        )
+    return summary
+
+
+def validate_backtest_capability(strategy_dsl: dict[str, Any]) -> None:
+    summary = summarize_strategy_capability(
+        market_scope=strategy_dsl.get("market_scope", "cn_equity"),
+        primary_timeframe=strategy_dsl.get("timeframe", "1d"),
+        timeframes=strategy_dsl.get("timeframes") or [strategy_dsl.get("timeframe", "1d")],
+        analysis_mode=strategy_dsl.get("analysis_mode", "single_timeframe"),
+    )
+    if summary["backtest_status"] == "unsupported":
+        raise TaskExecutionError(
+            "INVALID_ARGUMENT",
+            f"{summary['market_scope_label']} 当前仅支持策略语义和规则研究，暂不开放真实回测。",
+        )
+
+
 def _safe_number(value: Any) -> float | None:
     if value in (None, "", "null"):
         return None
@@ -713,6 +863,12 @@ class StrategyService:
             },
             "position": {"side": side, "max_positions": 1},
         }
+        capability_summary = summarize_strategy_capability(
+            market_scope=request.market_scope,
+            primary_timeframe=primary_timeframe,
+            timeframes=selected_timeframes,
+            analysis_mode=strategy_dsl["analysis_mode"],
+        )
         strategy_python = _render_strategy_python(
             strategy_dsl,
             teaching_mode=request.teaching_mode,
@@ -747,6 +903,7 @@ class StrategyService:
         return {
             "strategy_dsl": strategy_dsl,
             "strategy_python": strategy_python,
+            "capability_summary": capability_summary,
             "human_summary": " ".join(summary_parts),
             "ambiguities": ambiguities,
             "matched_custom_indicators": [
@@ -3443,6 +3600,7 @@ def build_backtest_result(
             "backtest_run_id": task_id,
             "dataset_snapshot_ref": dataset_snapshot_ref,
             "engine_version": settings.backtest_engine_version,
+            "strategy_spec": project.strategy_dsl,
             "backtest_config": normalized_contract,
             "data_snapshot_summary": _build_data_snapshot_summary(
                 dataset_snapshot_ref=dataset_snapshot_ref,
