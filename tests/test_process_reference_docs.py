@@ -42,6 +42,8 @@ class ProcessReferenceDocsTests(unittest.TestCase):
         self.assertIn("按预算给你的最优建议", recommendation_text)
         self.assertIn("Tushare Pro", recommendation_text)
         self.assertIn("SEC EDGAR", recommendation_text)
+        self.assertIn("市场规则与制度资料", recommendation_text)
+        self.assertIn("历史真值样本", recommendation_text)
 
         data_hub_text = data_hub.read_text(encoding="utf-8")
         self.assertIn("用户请求不直连上游数据源", data_hub_text)
