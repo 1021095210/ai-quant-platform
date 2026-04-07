@@ -12,9 +12,15 @@ import {
 
 activateNav("/backtests");
 
+const platformState = {
+  capabilities: [],
+};
+
 const nodes = {
   runPanel: document.querySelector("#run-backtest-panel"),
   historyPanel: document.querySelector("#backtest-history-panel"),
+  supportSummary: document.querySelector("#backtest-support-summary"),
+  capabilityMatrix: document.querySelector("#backtest-capability-matrix"),
   projectSelect: document.querySelector("#project-version-select"),
   market: document.querySelector("#backtest-market"),
   assetType: document.querySelector("#backtest-asset-type"),
@@ -38,6 +44,7 @@ const nodes = {
   stopLoss: document.querySelector("#backtest-stop-loss"),
   maxDrawdown: document.querySelector("#backtest-max-drawdown"),
   maxHoldingBars: document.querySelector("#backtest-max-holding-bars"),
+  runBacktestButton: document.querySelector("#run-backtest-btn"),
   selectedVersion: document.querySelector("#selected-version"),
   latestProvider: document.querySelector("#latest-provider"),
   history: document.querySelector("#backtest-history"),
@@ -60,14 +67,136 @@ const nodes = {
 const compareSelection = new Set();
 let currentBacktestRunId = "";
 
+function getCapabilityBase(marketScope) {
+  return (
+    platformState.capabilities.find((item) => item.market_scope === marketScope) || {
+      market_scope: marketScope,
+      market_scope_label: marketScope,
+      backtest_status: "unsupported",
+      backtest_label: "当前暂不开放真实回测",
+      replay_label: "复盘支持有限",
+      data_label: "数据接入尚未开放",
+      notes: [],
+    }
+  );
+}
+
+function summarizeSelectedBacktestCapability() {
+  const option = nodes.projectSelect.selectedOptions[0];
+  if (!option || !option.value) {
+    return null;
+  }
+  const marketScope = option.dataset.marketScope || "cn_equity";
+  const base = getCapabilityBase(marketScope);
+  const selectedTimeframes = (option.dataset.timeframes || option.dataset.timeframe || "1d")
+    .split(",")
+    .filter(Boolean);
+  const primaryTimeframe = option.dataset.timeframe || "1d";
+  const isLimited =
+    marketScope === "cn_equity" &&
+    (primaryTimeframe !== "1d" ||
+      selectedTimeframes.length > 1 ||
+      option.dataset.analysisMode === "multi_timeframe");
+  const backtestStatus =
+    marketScope !== "cn_equity" ? "unsupported" : isLimited ? "limited" : "supported";
+  return {
+    ...base,
+    market_scope: marketScope,
+    market_scope_label: option.dataset.marketScopeLabel || base.market_scope_label,
+    primary_timeframe: primaryTimeframe,
+    timeframes: selectedTimeframes,
+    backtest_status: backtestStatus,
+    backtest_mode_label:
+      marketScope !== "cn_equity"
+        ? base.backtest_label
+        : isLimited
+          ? "仅支持日线兼容层回测"
+          : "可直接运行真实日线回测",
+    backtest_warning:
+      marketScope !== "cn_equity"
+        ? `${option.dataset.marketScopeLabel || base.market_scope_label} 当前仅支持策略语义与规则研究，回测中心会阻止发起真实回测。`
+        : isLimited
+          ? "当前策略包含非日线或混合周期条件。回测结果会按日线兼容层执行，请把跨周期条件理解为研究上下文。"
+          : "当前所选策略处于平台真实回测主链路内。",
+    requiresCompatibilityNotice: isLimited,
+  };
+}
+
+function renderCapabilityMatrix() {
+  if (!platformState.capabilities.length) {
+    nodes.capabilityMatrix.textContent = "当前无法读取市场支持状态。";
+    return;
+  }
+  nodes.capabilityMatrix.innerHTML = platformState.capabilities
+    .map(
+      (item) => `
+        <div class="capability-row">
+          <div>
+            <strong>${item.market_scope_label}</strong>
+            <div class="muted-note">${item.strategy_label}</div>
+          </div>
+          <div class="capability-tags">
+            <span class="capability-chip capability-${item.backtest_status}">回测：${item.backtest_label}</span>
+            <span class="capability-chip capability-${item.replay_status}">复盘：${item.replay_label}</span>
+            <span class="capability-chip capability-${item.data_status}">数据：${item.data_label}</span>
+          </div>
+        </div>
+      `,
+    )
+    .join("");
+}
+
+function renderSupportSummary(summary) {
+  if (!summary) {
+    nodes.supportSummary.textContent = "请选择策略版本后查看当前支持范围。";
+    return;
+  }
+  const details = [
+    `策略市场：${summary.market_scope_label}`,
+    `策略周期：${summary.timeframes.join(" / ")}`,
+    `真实回测：${summary.backtest_mode_label}`,
+    `数据链路：${summary.data_label}`,
+  ];
+  nodes.supportSummary.innerHTML = `
+    <div class="capability-status capability-${summary.backtest_status}">
+      <strong>${summary.market_scope_label}</strong>
+      <span>${summary.backtest_mode_label}</span>
+    </div>
+    <div class="muted-note">${summary.backtest_warning}</div>
+    <div class="pill-row" style="margin-top: 12px">
+      ${details.map((item) => `<span class="pill">${item}</span>`).join("")}
+    </div>
+  `;
+}
+
+function syncRunAvailability() {
+  const summary = summarizeSelectedBacktestCapability();
+  renderSupportSummary(summary);
+  if (!summary) {
+    nodes.runBacktestButton.disabled = true;
+    nodes.runBacktestButton.className = "btn disabled";
+    return;
+  }
+  const unsupported = summary.backtest_status === "unsupported";
+  nodes.runBacktestButton.disabled = unsupported;
+  nodes.runBacktestButton.className = unsupported ? "btn disabled" : "btn primary";
+  if (unsupported) {
+    setStatus(summary.backtest_warning);
+  }
+}
+
 async function loadProjects() {
-  const payload = await api("/api/v1/strategies/projects");
+  const [payload, capabilityPayload] = await Promise.all([
+    api("/api/v1/strategies/projects"),
+    api("/api/v1/platform/capabilities"),
+  ]);
   const items = payload.data.items;
+  platformState.capabilities = capabilityPayload.data.items || [];
   nodes.projectSelect.innerHTML = items.length
     ? items
         .map(
           (item) =>
-            `<option value="${item.version_id}" data-market="${item.strategy_dsl.market}" data-asset="${item.strategy_dsl.asset_type || "stock"}" data-timeframe="${item.strategy_dsl.timeframe || "1d"}" data-backtest-timeframe="${item.strategy_dsl.backtest_timeframe || "1d"}" data-analysis-mode="${item.strategy_dsl.analysis_mode || "single_timeframe"}" data-timeframes="${(item.strategy_dsl.timeframes || []).join(",")}">${item.title} · ${(item.strategy_dsl.timeframes || [item.strategy_dsl.timeframe || "1d"]).join("/")} · ${item.version_label || item.version_id}</option>`,
+            `<option value="${item.version_id}" data-market="${item.strategy_dsl.market}" data-market-scope="${item.strategy_dsl.market_scope || "cn_equity"}" data-market-scope-label="${item.strategy_dsl.market_scope_label || "A股"}" data-asset="${item.strategy_dsl.asset_type || "stock"}" data-timeframe="${item.strategy_dsl.timeframe || "1d"}" data-backtest-timeframe="${item.strategy_dsl.backtest_timeframe || "1d"}" data-analysis-mode="${item.strategy_dsl.analysis_mode || "single_timeframe"}" data-timeframes="${(item.strategy_dsl.timeframes || []).join(",")}">${item.title} · ${(item.strategy_dsl.timeframes || [item.strategy_dsl.timeframe || "1d"]).join("/")} · ${item.version_label || item.version_id}</option>`,
         )
         .join("")
     : '<option value="">请先去策略工坊保存策略</option>';
@@ -76,17 +205,21 @@ async function loadProjects() {
   if (selected && items.some((item) => item.version_id === selected)) {
     nodes.projectSelect.value = selected;
   }
+  renderCapabilityMatrix();
   applySelectedProjectDefaults();
+  syncRunAvailability();
 }
 
 function applySelectedProjectDefaults() {
   const option = nodes.projectSelect.selectedOptions[0];
   if (!option) {
+    syncRunAvailability();
     return;
   }
   nodes.selectedVersion.textContent = option.value || "未选择";
   nodes.market.value = option.dataset.market || nodes.market.value;
   nodes.assetType.value = option.dataset.asset || "stock";
+  const marketScope = option.dataset.marketScope || "cn_equity";
   if (option.dataset.analysisMode === "multi_timeframe") {
     const executionTimeframe = option.dataset.backtestTimeframe || "1d";
     setStatus(
@@ -95,30 +228,36 @@ function applySelectedProjectDefaults() {
   }
   const assetType = option.dataset.asset || "stock";
   nodes.minTradeUnit.value = assetType === "stock" || assetType === "etf" ? "100" : "1";
-  const market = (option.dataset.market || "").toLowerCase();
-  if (assetType === "stock" || assetType === "etf") {
-    if (market.includes(".sh") || market.includes(".sz")) {
-      nodes.calendar.value = "cn_a_share";
-      nodes.timezone.value = "Asia/Shanghai";
-      nodes.marketConstraint.value = "A股按 T+1 卖出，股票 / ETF 最小单位 100 股";
-    } else {
-      nodes.calendar.value = "us_equity";
-      nodes.timezone.value = "America/New_York";
-      nodes.marketConstraint.value = "美股默认按 T+0 语义处理，最小交易单位可按券商模型调整";
-    }
+  if (marketScope === "cn_equity") {
+    nodes.calendar.value = "cn_a_share";
+    nodes.timezone.value = "Asia/Shanghai";
+    nodes.marketConstraint.value = "A股按 T+1 卖出，股票 / ETF 最小单位 100 股";
+  } else if (marketScope === "us_equity") {
+    nodes.calendar.value = "us_equity";
+    nodes.timezone.value = "America/New_York";
+    nodes.marketConstraint.value = "美股默认按 T+0 语义处理，最小交易单位可按券商模型调整";
+  } else if (marketScope === "crypto") {
+    nodes.calendar.value = "crypto_24x7";
+    nodes.timezone.value = "UTC";
+    nodes.marketConstraint.value = "加密货币默认按 7x24 连续交易处理";
   } else {
-    nodes.calendar.value = assetType === "crypto" ? "crypto_24x7" : "london_gold";
-    nodes.timezone.value = assetType === "crypto" ? "UTC" : "Europe/London";
-    nodes.marketConstraint.value =
-      assetType === "crypto"
-        ? "加密货币默认按 7x24 连续交易处理"
-        : "伦敦金按全球连续报价时段处理";
+    nodes.calendar.value = "london_gold";
+    nodes.timezone.value = "Europe/London";
+    nodes.marketConstraint.value = "伦敦金按全球连续报价时段处理";
   }
+  syncRunAvailability();
 }
 
 async function runBacktest() {
   if (!nodes.projectSelect.value) {
     throw new Error("请先选择策略版本。");
+  }
+  const capabilitySummary = summarizeSelectedBacktestCapability();
+  if (!capabilitySummary) {
+    throw new Error("请先选择策略版本。");
+  }
+  if (capabilitySummary.backtest_status === "unsupported") {
+    throw new Error(capabilitySummary.backtest_warning);
   }
   setStatus("正在运行真实日线回测...");
   const created = await api("/api/v1/backtests/runs", {

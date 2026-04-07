@@ -6,6 +6,7 @@ import sqlite3
 import tempfile
 import time
 import unittest
+from datetime import datetime, timedelta
 from io import BytesIO
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -305,6 +306,9 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertIn('id="project-version-label"', response.text)
         self.assertIn('id="project-title"', response.text)
         self.assertIn("系统版本ID将在保存后生成", response.text)
+        self.assertIn("当前能力声明", response.text)
+        self.assertIn("市场支持状态", response.text)
+        self.assertIn("区分“可描述”和“可真实执行”", response.text)
         self.assertIn('id="save-project-btn" class="btn disabled" disabled', response.text)
         self.assertIn('id="go-backtests-link" class="btn disabled"', response.text)
 
@@ -328,6 +332,8 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertIn("回测配置摘要", response.text)
         self.assertIn("数据快照摘要", response.text)
         self.assertIn("执行可信度说明", response.text)
+        self.assertIn("本次回测支持范围", response.text)
+        self.assertIn("平台当前已开放与未开放能力", response.text)
         self.assertIn("仓位模式", response.text)
         self.assertIn("最大回撤保护", response.text)
         self.assertIn("盘中撮合策略", response.text)
@@ -347,6 +353,75 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertIn('id="backtest-history-panel"', response.text)
         self.assertLess(response.text.index("回测曲线"), response.text.index("成交明细"))
         self.assertLess(response.text.index("成交明细"), response.text.index("回测配置摘要"))
+
+    def test_platform_capabilities_endpoint_returns_market_matrix(self) -> None:
+        client = self._build_client()
+
+        response = client.get("/api/v1/platform/capabilities")
+
+        self.assertEqual(200, response.status_code)
+        items = response.json()["data"]["items"]
+        self.assertEqual(4, len(items))
+        cn_equity = next(item for item in items if item["market_scope"] == "cn_equity")
+        us_equity = next(item for item in items if item["market_scope"] == "us_equity")
+        self.assertEqual("supported", cn_equity["backtest_status"])
+        self.assertEqual("unsupported", us_equity["backtest_status"])
+        self.assertIn("真实日线回测", cn_equity["backtest_label"])
+
+    def test_backtest_run_rejects_market_scope_without_real_backtest_support(self) -> None:
+        client = self._build_client()
+        self._login(client)
+        version_id = client.post(
+            "/api/v1/strategies/projects",
+            json={
+                "title": "美股研究策略",
+                "version_label": "语义研究版",
+                "natural_language_prompt": "美股日线突破时买入",
+                "strategy_dsl": {
+                    "market_scope": "us_equity",
+                    "market_scope_label": "美股",
+                    "market": "AAPL",
+                    "timeframe": "1d",
+                    "timeframes": ["1d"],
+                    "analysis_mode": "single_timeframe",
+                    "asset_type": "stock",
+                    "entry": {"all": []},
+                    "exit": {"any": []},
+                    "position": {"side": "long", "max_positions": 1},
+                },
+                "strategy_python": "def build_strategy():\n    return {}",
+            },
+        ).json()["data"]["version_id"]
+
+        response = client.post(
+            "/api/v1/backtests/runs",
+            json={
+                "strategy_version_id": version_id,
+                "dataset": {
+                    "market": "AAPL",
+                    "timeframe": "1d",
+                    "asset_type": "stock",
+                    "from": "2024-01-01T00:00:00Z",
+                    "to": "2024-12-31T00:00:00Z",
+                },
+                "execution_contract": {
+                    "initial_capital": 100000,
+                    "fee_bps": 3,
+                    "slippage_bps": 2,
+                    "fill_price_rule": "next_bar_open",
+                    "intrabar_match_policy": "no_intrabar_fill",
+                    "calendar": "us_equity",
+                    "timezone": "America/New_York",
+                    "adjustment_mode": "raw",
+                },
+                "data_snapshot": {"dataset_snapshot_ref": "aapl_2024_daily"},
+            },
+        )
+
+        self.assertEqual(400, response.status_code)
+        payload = response.json()
+        self.assertEqual("INVALID_ARGUMENT", payload["error"]["code"])
+        self.assertIn("暂不开放真实回测", payload["error"]["message"])
 
     def test_rules_page_uses_collapsible_default_rule_container(self) -> None:
         client = self._build_client()
@@ -540,14 +615,19 @@ class QuantPlatformApiTests(unittest.TestCase):
             },
         )
 
+        legacy_recent_timestamp = (
+            datetime.now() - timedelta(hours=1)
+        ).strftime("%Y-%m-%d %H:%M:%S.%f")
+
         with sqlite3.connect(database_path) as connection:
             connection.execute("update tasks set status = 'completed' where kind = 'backtest'")
             connection.execute(
-                "update auth_events set created_at = '2026-04-02 12:00:00.000000' where event_type = 'login'"
+                "update auth_events set created_at = ? where event_type = 'login'",
+                (legacy_recent_timestamp,),
             )
             connection.execute(
-                "update application_logs set created_at = '2026-04-02 12:00:00.000000' where message = ?",
-                ("旧时间格式兼容验证",),
+                "update application_logs set created_at = ? where message = ?",
+                (legacy_recent_timestamp, "旧时间格式兼容验证"),
             )
             connection.commit()
 

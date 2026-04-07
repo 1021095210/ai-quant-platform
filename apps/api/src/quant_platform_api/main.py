@@ -80,6 +80,9 @@ from quant_platform_api.services import (
     build_backtest_result,
     build_optimization_result,
     build_replay_result,
+    list_platform_capabilities,
+    summarize_strategy_capability,
+    validate_backtest_capability,
 )
 
 SESSION_COOKIE_NAME = "quant_session"
@@ -614,6 +617,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         generated = services.strategy_service.generate_strategy(payload)
         return _success_response(request, data=generated)
 
+    @app.get(f"{app_settings.api_prefix}/platform/capabilities")
+    def get_platform_capabilities(request: Request) -> JSONResponse:
+        return _success_response(
+            request,
+            data={"items": list_platform_capabilities()},
+        )
+
     @app.get(f"{app_settings.api_prefix}/indicators/builtin")
     def list_builtin_indicators(request: Request) -> JSONResponse:
         return _success_response(
@@ -840,6 +850,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     message="strategy project not found",
                 ).model_dump(),
             )
+        try:
+            validate_backtest_capability(strategy.strategy_dsl)
+        except Exception as exc:
+            if hasattr(exc, "code") and hasattr(exc, "message"):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=ErrorPayload(code=exc.code, message=exc.message).model_dump(),
+                ) from exc
+            raise
         payload_dict = payload.model_dump(by_alias=True, mode="json")
         payload_dict["execution_contract"] = _normalize_execution_contract(
             payload_dict["execution_contract"],
@@ -907,6 +926,29 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         "strategy_title": record.result.get("strategy_title", ""),
                         "market": record.payload.get("dataset", {}).get("market"),
                         "timeframe": record.payload.get("dataset", {}).get("timeframe"),
+                        "capability_summary": summarize_strategy_capability(
+                            market_scope=record.result.get("strategy_spec", {}).get(
+                                "market_scope",
+                                "cn_equity",
+                            )
+                            if record.result.get("strategy_spec")
+                            else "cn_equity",
+                            primary_timeframe=record.result.get("strategy_spec", {}).get(
+                                "timeframe",
+                                "1d",
+                            )
+                            if record.result.get("strategy_spec")
+                            else "1d",
+                            timeframes=record.result.get("strategy_spec", {}).get("timeframes")
+                            if record.result.get("strategy_spec")
+                            else ["1d"],
+                            analysis_mode=record.result.get("strategy_spec", {}).get(
+                                "analysis_mode",
+                                "single_timeframe",
+                            )
+                            if record.result.get("strategy_spec")
+                            else "single_timeframe",
+                        ),
                         "metrics": record.result.get("metrics", {}),
                         "backtest_config": record.result.get("backtest_config", {}),
                         "data_snapshot_summary": record.result.get(
