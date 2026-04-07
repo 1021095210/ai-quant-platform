@@ -40,6 +40,8 @@ class ProcessReferenceDocsTests(unittest.TestCase):
         self.assertIn("验收标准", text)
         self.assertIn("已提供资源登记", text)
         self.assertIn("ClickHouse", text)
+        self.assertIn("quant_ads / quant_dwd", text)
+        self.assertIn("quant_ods", text)
 
         recommendation_text = recommendation.read_text(encoding="utf-8")
         self.assertIn("按预算给你的最优建议", recommendation_text)
@@ -47,17 +49,21 @@ class ProcessReferenceDocsTests(unittest.TestCase):
         self.assertIn("SEC EDGAR", recommendation_text)
         self.assertIn("市场规则与制度资料", recommendation_text)
         self.assertIn("历史真值样本", recommendation_text)
+        self.assertIn("默认优先读 `ADS / DWD`", recommendation_text)
 
         data_hub_text = data_hub.read_text(encoding="utf-8")
         self.assertIn("用户请求不直连上游数据源", data_hub_text)
         self.assertIn("平台统一拉取并保存", data_hub_text)
         self.assertIn("增量更新", data_hub_text)
         self.assertIn("优先读取内部数据仓库", data_hub_text)
+        self.assertIn("用户侧默认优先读取 `ADS / DWD`", data_hub_text)
+        self.assertIn("`ODS` 只保留给原始回查、补数、审计、问题排查和重新加工", data_hub_text)
 
         one_pager_text = one_pager.read_text(encoding="utf-8")
         self.assertIn("我们需要什么资源", one_pager_text)
         self.assertIn("这些资源怎么用", one_pager_text)
         self.assertIn("资源提供部门需要重点确认什么", one_pager_text)
+        self.assertIn("平台默认优先读取 `ADS / DWD`", one_pager_text)
 
 
 if __name__ == "__main__":
