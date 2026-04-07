@@ -20,6 +20,20 @@ class ProcessReferenceDocsTests(unittest.TestCase):
         self.assertIn("固定检查清单", text)
         self.assertIn("主接力文档", text)
 
+    def test_reliability_reference_folder_and_resource_checklist_exist(self):
+        folder = ROOT / "产品设计" / "实战落地参考"
+        readme = folder / "README.md"
+        checklist = folder / "AI量化交易平台_实战落地资源清单与验收标准.md"
+
+        self.assertTrue(folder.exists())
+        self.assertTrue(readme.exists())
+        self.assertTrue(checklist.exists())
+
+        text = checklist.read_text(encoding="utf-8")
+        self.assertIn("必须提供的资源", text)
+        self.assertIn("验收标准", text)
+        self.assertIn("已提供资源登记", text)
+
 
 if __name__ == "__main__":
     unittest.main()
