@@ -30,13 +30,15 @@ try:
     from quant_platform_api.models import AssistantResearchRequest
     from quant_platform_api.config import Settings
     from quant_platform_api.main import create_app
-    from quant_platform_api.models import MentorAskRequest
+    from quant_platform_api.market_data import MarketBar
+    from quant_platform_api.models import MentorAskRequest, TradeRecordItem
     from quant_platform_api.services import (
         FinancialAssistantService,
         MentorService,
         _build_replay_context_suggestions,
         _build_replay_fundamental_features,
         _build_replay_minute_context_features,
+        _rerun_replay_records_on_market_data,
     )
 except ModuleNotFoundError:  # pragma: no cover - handled by skip
     TestClient = None
@@ -45,12 +47,15 @@ except ModuleNotFoundError:  # pragma: no cover - handled by skip
     AssistantResearchRequest = None
     Settings = None
     create_app = None
+    MarketBar = None
     MentorAskRequest = None
+    TradeRecordItem = None
     FinancialAssistantService = None
     MentorService = None
     _build_replay_context_suggestions = None
     _build_replay_minute_context_features = None
     _build_replay_fundamental_features = None
+    _rerun_replay_records_on_market_data = None
 
 
 @unittest.skipIf(TestClient is None, "FastAPI dependencies are unavailable")
@@ -2443,6 +2448,101 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertIn("intraday_entry_timing", intraday_rule["dsl_patch"]["filters"])
         quality_rule = next(item for item in suggestions if item["title"] == "加入基本面质量过滤")
         self.assertIn("quality_filter", quality_rule["dsl_patch"]["filters"])
+
+    def test_replay_market_rerun_uses_real_daily_bars_when_available(self) -> None:
+        class FakeMarketDataService:
+            def load_daily_bars(self, *, ts_code, start_date, end_date, adjustment_mode):
+                return (
+                    [
+                        MarketBar(
+                            ts_code=ts_code,
+                            asset_type="stock",
+                            adjustment_mode="qfq",
+                            trade_date="2024-05-01",
+                            open=10.0,
+                            high=10.2,
+                            low=9.9,
+                            close=10.1,
+                            volume=1000,
+                            amount=10000,
+                            pct_chg=0.0,
+                            turnover=1.0,
+                            data_source="internal_clickhouse_dwd",
+                            fetched_at="2026-04-09T00:00:00",
+                        ),
+                        MarketBar(
+                            ts_code=ts_code,
+                            asset_type="stock",
+                            adjustment_mode="qfq",
+                            trade_date="2024-05-02",
+                            open=10.1,
+                            high=10.6,
+                            low=10.0,
+                            close=10.5,
+                            volume=1200,
+                            amount=11000,
+                            pct_chg=0.0,
+                            turnover=1.2,
+                            data_source="internal_clickhouse_dwd",
+                            fetched_at="2026-04-09T00:00:00",
+                        ),
+                        MarketBar(
+                            ts_code=ts_code,
+                            asset_type="stock",
+                            adjustment_mode="qfq",
+                            trade_date="2024-05-03",
+                            open=10.5,
+                            high=10.8,
+                            low=10.4,
+                            close=10.7,
+                            volume=1100,
+                            amount=12000,
+                            pct_chg=0.0,
+                            turnover=1.1,
+                            data_source="internal_clickhouse_dwd",
+                            fetched_at="2026-04-09T00:00:00",
+                        ),
+                    ],
+                    {"provider": "internal_clickhouse_dwd", "status": "ready"},
+                )
+
+        trade = TradeRecordItem(
+            trade_id="trade_1",
+            symbol="600519.SH",
+            side="long",
+            entry_time=datetime.fromisoformat("2024-05-01T09:30:00+00:00"),
+            exit_time=datetime.fromisoformat("2024-05-03T15:00:00+00:00"),
+            pnl=700.0,
+            entry_price=10.0,
+            exit_price=10.7,
+        )
+        rerun = _rerun_replay_records_on_market_data(
+            records=[trade],
+            replay_market="cn_a_share",
+            objective="sharpe_max",
+            market_data_service=FakeMarketDataService(),
+            suggestion_rules=[
+                {
+                    "title": "只在趋势环境里保留开仓",
+                    "dsl_patch": {
+                        "filters": {
+                            "market_regime": {"enabled": True, "preferred": "trend"},
+                            "trend_confirmation": {"enabled": True, "timeframe": "1d"},
+                        },
+                        "risk": {"max_holding_bars": 2, "stop_loss_pct": -0.02},
+                    },
+                }
+            ],
+            minute_context_by_trade_id={"trade_1": {"first_15m_return_pct": 0.2, "close_position_pct": 72.0, "up_bar_ratio": 0.65}},
+            fundamental_context_by_trade_id={"trade_1": {"pe_ttm": 18.0, "pb": 2.1, "roe": 15.0, "grossprofit_margin": 35.0, "op_yoy": 12.0, "debt_to_assets": 32.0}},
+        )
+
+        self.assertIsNotNone(rerun)
+        assert rerun is not None
+        self.assertEqual(1, rerun["metrics"]["trade_count"])
+        self.assertTrue(rerun["equity_curve"])
+        self.assertEqual("max_holding_bars", rerun["trade_records"][0]["exit_reason"])
+        self.assertGreater(rerun["trade_records"][0]["pnl"], 0)
 
     def test_manual_trade_upload_creates_parsed_records(self) -> None:
         client = self._build_client()

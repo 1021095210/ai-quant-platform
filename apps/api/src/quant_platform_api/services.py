@@ -4167,6 +4167,8 @@ def build_replay_result(
             daily_contexts=daily_contexts,
             minute_contexts=minute_contexts,
             fundamental_contexts=fundamental_contexts,
+            replay_market=replay_market,
+            market_data_service=market_data_service,
         )
         concise_summary = _build_replay_concise_summary(
             total_count=total_count,
@@ -5060,6 +5062,8 @@ def _build_replay_objective_versions(
     daily_contexts: list[dict[str, Any]],
     minute_contexts: list[dict[str, Any]],
     fundamental_contexts: list[dict[str, Any]],
+    replay_market: str,
+    market_data_service: MarketDataService | None,
 ) -> list[dict[str, Any]]:
     suggestion_titles = [item.get("title", "") for item in suggestion_rules if item.get("title")]
     baseline_metrics = _build_replay_sample_metrics(records)
@@ -5111,18 +5115,321 @@ def _build_replay_objective_versions(
             minute_context_by_trade_id=minute_context_by_trade_id,
             fundamental_context_by_trade_id=fundamental_context_by_trade_id,
         )
-        selected_trade_rows = _build_replay_trade_records(selected_records)
+        rerun_result = _rerun_replay_records_on_market_data(
+            records=selected_records,
+            replay_market=replay_market,
+            objective=spec["objective"],
+            market_data_service=market_data_service,
+            suggestion_rules=suggestion_rules,
+            minute_context_by_trade_id=minute_context_by_trade_id,
+            fundamental_context_by_trade_id=fundamental_context_by_trade_id,
+        )
+        if rerun_result is not None:
+            selected_trade_rows = rerun_result["trade_records"]
+            version_metrics = rerun_result["metrics"]
+            version_equity_curve = rerun_result["equity_curve"]
+            comparison_note = (
+                f"{comparison_note} 当前版本已基于真实日线行情重放生成结果。"
+            )
+            simulation_mode = "market_rerun"
+        else:
+            selected_trade_rows = _build_replay_trade_records(selected_records)
+            version_metrics = _build_replay_sample_metrics(selected_records)
+            version_equity_curve = _build_replay_equity_curve(selected_records)
+            simulation_mode = "sample_scored_replay"
         items.append(
             {
                 **spec,
                 "comparison_note": comparison_note,
-                "metrics": _build_replay_sample_metrics(selected_records),
+                "metrics": version_metrics,
                 "baseline_metrics": baseline_metrics,
-                "equity_curve": _build_replay_equity_curve(selected_records),
+                "equity_curve": version_equity_curve,
                 "trade_records": selected_trade_rows[:10] or trade_records[:10],
+                "simulation_mode": simulation_mode,
             }
         )
     return items
+
+
+def _rerun_replay_records_on_market_data(
+    *,
+    records: list[TradeRecordItem],
+    replay_market: str,
+    objective: str,
+    market_data_service: MarketDataService | None,
+    suggestion_rules: list[dict[str, Any]],
+    minute_context_by_trade_id: dict[str, dict[str, Any]],
+    fundamental_context_by_trade_id: dict[str, dict[str, Any]],
+) -> dict[str, Any] | None:
+    if market_data_service is None or replay_market != "cn_a_share" or not records:
+        return None
+
+    combined_patch = _merge_replay_rule_patches(
+        suggestion_rules=suggestion_rules,
+        objective=objective,
+    )
+    rerun_trade_rows: list[dict[str, Any]] = []
+    cumulative_pnl = 0.0
+    equity_curve: list[dict[str, Any]] = []
+
+    for item in sorted(records, key=lambda row: row.exit_time or row.entry_time):
+        rerun_trade = _rerun_single_replay_trade(
+            item=item,
+            market_data_service=market_data_service,
+            rule_patch=combined_patch,
+            minute_context=minute_context_by_trade_id.get(item.trade_id),
+            fundamental_context=fundamental_context_by_trade_id.get(item.trade_id),
+        )
+        if rerun_trade is None:
+            continue
+        rerun_trade_rows.append(rerun_trade)
+        cumulative_pnl += float(rerun_trade["pnl"])
+        equity_curve.append(
+            {
+                "index": len(equity_curve) + 1,
+                "timestamp": rerun_trade["exit_time"],
+                "symbol": rerun_trade["symbol"],
+                "pnl": round(float(rerun_trade["pnl"]), 2),
+                "equity": round(cumulative_pnl, 2),
+            }
+        )
+
+    if not rerun_trade_rows:
+        return None
+    return {
+        "trade_records": rerun_trade_rows,
+        "equity_curve": equity_curve,
+        "metrics": _build_replay_trade_rows_metrics(rerun_trade_rows),
+    }
+
+
+def _merge_replay_rule_patches(
+    *,
+    suggestion_rules: list[dict[str, Any]],
+    objective: str,
+) -> dict[str, Any]:
+    merged: dict[str, Any] = {"filters": {}, "risk": {}}
+    for rule in suggestion_rules:
+        patch = rule.get("dsl_patch") or {}
+        for key in ("filters", "risk"):
+            section = patch.get(key) or {}
+            if isinstance(section, dict):
+                merged[key].update(section)
+    risk = merged["risk"]
+    if objective == "sharpe_max":
+        risk.setdefault("stop_loss_pct", -0.02)
+        risk.setdefault("max_holding_bars", 8)
+    elif objective == "win_rate_max":
+        risk.setdefault("stop_loss_pct", -0.015)
+        risk.setdefault("max_holding_bars", 6)
+    elif objective == "max_drawdown_min":
+        risk.setdefault("stop_loss_pct", -0.015)
+        risk.setdefault("max_holding_bars", 5)
+    elif objective == "total_return_max":
+        risk.setdefault("stop_loss_pct", -0.03)
+        risk.setdefault("max_holding_bars", 12)
+    return merged
+
+
+def _rerun_single_replay_trade(
+    *,
+    item: TradeRecordItem,
+    market_data_service: MarketDataService,
+    rule_patch: dict[str, Any],
+    minute_context: dict[str, Any] | None,
+    fundamental_context: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if not item.symbol.endswith((".SH", ".SZ", ".BJ")):
+        return None
+
+    entry_date = item.entry_time.date()
+    actual_exit_date = (item.exit_time or item.entry_time).date()
+    risk = rule_patch.get("risk") or {}
+    filters = rule_patch.get("filters") or {}
+    max_holding_bars = max(int(risk.get("max_holding_bars", 8)), 1)
+    start_date = entry_date - timedelta(days=20)
+    end_date = max(actual_exit_date + timedelta(days=max_holding_bars + 10), entry_date + timedelta(days=max_holding_bars + 10))
+    bars, metadata = market_data_service.load_daily_bars(
+        ts_code=item.symbol,
+        start_date=start_date,
+        end_date=end_date,
+        adjustment_mode="qfq",
+    )
+    if metadata.get("provider") in {None, "demo"} or not bars:
+        return None
+
+    entry_index = next(
+        (index for index, bar in enumerate(bars) if date.fromisoformat(bar.trade_date) >= entry_date),
+        None,
+    )
+    if entry_index is None:
+        return None
+
+    if not _replay_trade_passes_filters(
+        bars=bars,
+        entry_index=entry_index,
+        filters=filters,
+        minute_context=minute_context,
+        fundamental_context=fundamental_context,
+    ):
+        return None
+
+    entry_bar = bars[entry_index]
+    entry_price = float(item.entry_price) if item.entry_price is not None else float(entry_bar.open)
+    quantity = _infer_replay_trade_quantity(item)
+    exit_index_limit = min(len(bars) - 1, entry_index + max_holding_bars)
+    stop_loss_pct = risk.get("stop_loss_pct")
+
+    selected_exit_bar = bars[exit_index_limit]
+    exit_price = float(selected_exit_bar.close)
+    exit_reason = "max_holding_bars"
+    for bar_index in range(entry_index + 1, exit_index_limit + 1):
+        current_bar = bars[bar_index]
+        if current_bar.is_suspended or current_bar.is_limit_down:
+            continue
+        if isinstance(stop_loss_pct, (int, float)):
+            stop_price = entry_price * (1.0 + float(stop_loss_pct))
+            if float(current_bar.low) <= stop_price:
+                selected_exit_bar = current_bar
+                exit_price = stop_price
+                exit_reason = "stop_loss_intrabar"
+                break
+        selected_exit_bar = current_bar
+        exit_price = float(current_bar.close)
+
+    pnl = (exit_price - entry_price) * quantity
+    holding_bars = max(
+        (date.fromisoformat(selected_exit_bar.trade_date) - date.fromisoformat(entry_bar.trade_date)).days,
+        1,
+    )
+    holding_minutes = float(holding_bars * 24 * 60)
+    return {
+        "trade_id": item.trade_id,
+        "symbol": item.symbol,
+        "side": item.side,
+        "entry_time": item.entry_time.isoformat(),
+        "exit_time": selected_exit_bar.trade_date,
+        "entry_price": round(entry_price, 4),
+        "exit_price": round(exit_price, 4),
+        "holding_minutes": round(holding_minutes, 2),
+        "holding_label": _format_holding_label(holding_minutes),
+        "pnl": round(pnl, 2),
+        "pnl_pct": round(((exit_price - entry_price) / entry_price) * 100.0, 2) if entry_price else None,
+        "exit_reason": exit_reason,
+    }
+
+
+def _replay_trade_passes_filters(
+    *,
+    bars: list[Any],
+    entry_index: int,
+    filters: dict[str, Any],
+    minute_context: dict[str, Any] | None,
+    fundamental_context: dict[str, Any] | None,
+) -> bool:
+    entry_bar = bars[entry_index]
+    prior_bars = bars[max(0, entry_index - 5):entry_index]
+    ma5 = (
+        sum(float(bar.close) for bar in prior_bars) / len(prior_bars)
+        if prior_bars
+        else float(entry_bar.close)
+    )
+    start_bar = prior_bars[0] if prior_bars else entry_bar
+    prior_return_pct = (
+        ((float(entry_bar.close) - float(start_bar.close)) / float(start_bar.close)) * 100.0
+        if float(start_bar.close) != 0
+        else 0.0
+    )
+    avg_volume = (
+        sum(float(bar.volume or 0.0) for bar in prior_bars) / len(prior_bars)
+        if prior_bars
+        else 0.0
+    )
+    volume_ratio = (float(entry_bar.volume or 0.0) / avg_volume) if avg_volume else None
+    trend_regime = "trend" if float(entry_bar.close) >= ma5 and prior_return_pct >= 0 else "range"
+
+    market_regime = filters.get("market_regime") or {}
+    if market_regime.get("preferred") == "trend" and trend_regime != "trend":
+        return False
+
+    trend_confirmation = filters.get("trend_confirmation") or {}
+    if trend_confirmation and float(entry_bar.close) < ma5:
+        return False
+
+    extension_guard = filters.get("extension_guard") or {}
+    if "max_prior_return_pct" in extension_guard and prior_return_pct > float(extension_guard["max_prior_return_pct"]):
+        return False
+
+    volume_heat_guard = filters.get("volume_heat_guard") or {}
+    if volume_ratio is not None and "max_value" in volume_heat_guard and volume_ratio > float(volume_heat_guard["max_value"]):
+        return False
+
+    intraday_entry_timing = filters.get("intraday_entry_timing") or {}
+    if minute_context and "max_first_15m_return_pct" in intraday_entry_timing:
+        if float(minute_context.get("first_15m_return_pct") or 0.0) > float(intraday_entry_timing["max_first_15m_return_pct"]):
+            return False
+
+    intraday_structure = filters.get("intraday_structure") or {}
+    if minute_context:
+        min_close_position_pct = intraday_structure.get("min_close_position_pct")
+        if isinstance(min_close_position_pct, (int, float)) and float(minute_context.get("close_position_pct") or 0.0) < float(min_close_position_pct):
+            return False
+        min_up_bar_ratio = intraday_structure.get("min_up_bar_ratio")
+        if isinstance(min_up_bar_ratio, (int, float)) and float(minute_context.get("up_bar_ratio") or 0.0) < float(min_up_bar_ratio):
+            return False
+
+    fundamental_guard = filters.get("fundamental_guard") or {}
+    quality_filter = filters.get("quality_filter") or {}
+    if fundamental_context:
+        pe_ttm = fundamental_context.get("pe_ttm")
+        if isinstance(pe_ttm, (int, float)) and "max_pe_ttm" in fundamental_guard and pe_ttm > float(fundamental_guard["max_pe_ttm"]):
+            return False
+        debt_to_assets = fundamental_context.get("debt_to_assets")
+        if isinstance(debt_to_assets, (int, float)) and "max_debt_to_assets" in fundamental_guard and debt_to_assets > float(fundamental_guard["max_debt_to_assets"]):
+            return False
+        roe = fundamental_context.get("roe")
+        if isinstance(roe, (int, float)) and "min_roe" in quality_filter and roe < float(quality_filter["min_roe"]):
+            return False
+        grossprofit_margin = fundamental_context.get("grossprofit_margin")
+        if isinstance(grossprofit_margin, (int, float)) and "min_grossprofit_margin" in quality_filter and grossprofit_margin < float(quality_filter["min_grossprofit_margin"]):
+            return False
+        op_yoy = fundamental_context.get("op_yoy")
+        if isinstance(op_yoy, (int, float)) and "min_op_yoy" in quality_filter and op_yoy < float(quality_filter["min_op_yoy"]):
+            return False
+
+    return True
+
+
+def _infer_replay_trade_quantity(item: TradeRecordItem) -> float:
+    if item.entry_price is not None and item.exit_price is not None:
+        price_delta = float(item.exit_price) - float(item.entry_price)
+        if abs(price_delta) > 1e-9:
+            inferred = abs(float(item.pnl) / price_delta)
+            if inferred > 0:
+                return inferred
+    return 100.0
+
+
+def _build_replay_trade_rows_metrics(trade_rows: list[dict[str, Any]]) -> dict[str, Any]:
+    trade_count = len(trade_rows)
+    total_pnl = sum(float(item["pnl"]) for item in trade_rows)
+    wins = [item for item in trade_rows if float(item["pnl"]) > 0]
+    losses = [item for item in trade_rows if float(item["pnl"]) <= 0]
+    pnl_values = [float(item["pnl"]) for item in trade_rows]
+    max_drawdown_pct = _build_replay_max_drawdown_pct(pnl_values)
+    sharpe_like = _build_replay_sharpe_like(pnl_values)
+    avg_pnl = (total_pnl / trade_count) if trade_count else 0.0
+    win_rate_pct = (len(wins) / trade_count * 100.0) if trade_count else 0.0
+    return {
+        "trade_count": trade_count,
+        "total_pnl": round(total_pnl, 2),
+        "win_rate_pct": round(win_rate_pct, 2),
+        "avg_pnl": round(avg_pnl, 2),
+        "profit_count": len(wins),
+        "loss_count": len(losses),
+        "max_drawdown_pct": round(max_drawdown_pct, 2),
+        "sharpe_like": round(sharpe_like, 2),
+    }
 
 
 def _select_replay_objective_records(
