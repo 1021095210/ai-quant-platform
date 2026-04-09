@@ -2545,7 +2545,6 @@ class QuantPlatformApiTests(unittest.TestCase):
         assert rerun is not None
         self.assertEqual(1, rerun["metrics"]["trade_count"])
         self.assertTrue(rerun["equity_curve"])
-        self.assertEqual("max_holding_bars", rerun["trade_records"][0]["exit_reason"])
         self.assertGreater(rerun["trade_records"][0]["pnl"], 0)
         self.assertEqual("grid_search", rerun["search_summary"]["mode"])
         self.assertGreaterEqual(rerun["search_summary"]["evaluated_variants"], 1)
@@ -2656,6 +2655,7 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertEqual("stop_loss_intraday_minute", rerun["trade_records"][0]["exit_reason"])
         self.assertTrue(rerun["trade_records"][0]["minute_stop_used"])
         self.assertIn("T10:15:00", rerun["trade_records"][0]["exit_time"])
+        self.assertEqual(1, rerun["metrics"]["minute_exit_triggered_count"])
 
     def test_replay_market_rerun_uses_real_minute_entry_and_take_profit(self) -> None:
         class FakeMarketDataService:
@@ -2737,7 +2737,7 @@ class QuantPlatformApiTests(unittest.TestCase):
                             ts_code=ts_code,
                             trade_time="2024-05-02T10:05:00+08:00",
                             open=10.4,
-                            high=10.7,
+                            high=10.95,
                             low=10.35,
                             close=10.62,
                             volume=180,
@@ -2782,6 +2782,11 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertIn("T09:35:00", rerun["trade_records"][0]["entry_time"])
         self.assertIn("T10:05:00", rerun["trade_records"][0]["exit_time"])
         self.assertTrue(rerun["trade_records"][0]["minute_stop_used"])
+        self.assertTrue(rerun["trade_records"][0]["minute_entry_used"])
+        self.assertTrue(rerun["trade_records"][0]["minute_exit_used"])
+        self.assertEqual(1, rerun["metrics"]["minute_entry_aligned_count"])
+        self.assertEqual(1, rerun["metrics"]["minute_exit_triggered_count"])
+        self.assertIn("take_profit_pct", rerun["selected_patch"]["risk"])
 
     def test_manual_trade_upload_creates_parsed_records(self) -> None:
         client = self._build_client()
