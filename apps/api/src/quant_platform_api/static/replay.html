@@ -235,6 +235,37 @@
               <button id="run-replay-btn" class="btn secondary disabled" disabled>运行 AI 复盘</button>
               <a class="btn secondary" href="/mentor">先问金融导师</a>
             </div>
+            <section class="subpanel">
+              <div class="panel-header">
+                <h4>分析配置</h4>
+                <span class="muted-note">决定这次复盘额外纳入哪些维度和回看窗口。</span>
+              </div>
+              <div class="form-grid two">
+                <label class="field">
+                  <span>日线回看窗口</span>
+                  <select id="replay-lookback-days">
+                    <option value="3">前 3 个交易日</option>
+                    <option value="5" selected>前 5 个交易日</option>
+                    <option value="10">前 10 个交易日</option>
+                  </select>
+                </label>
+                <label class="field">
+                  <span>分钟级观察窗口</span>
+                  <select id="replay-minute-window">
+                    <option value="15">前 15 分钟</option>
+                    <option value="30">前 30 分钟</option>
+                    <option value="60" selected>前 60 分钟</option>
+                    <option value="120">前 120 分钟</option>
+                  </select>
+                </label>
+              </div>
+              <div class="choice-pill-grid">
+                <label class="choice-pill"><input id="replay-include-market-context" type="checkbox" checked /> 市场环境复盘</label>
+                <label class="choice-pill"><input id="replay-auto-market-context" type="checkbox" checked /> 自动触发环境复盘</label>
+                <label class="choice-pill"><input id="replay-include-minute-features" type="checkbox" /> 分钟级特征</label>
+                <label class="choice-pill"><input id="replay-include-fundamentals" type="checkbox" /> 基本面复盘</label>
+              </div>
+            </section>
           </div>
         </section>
 

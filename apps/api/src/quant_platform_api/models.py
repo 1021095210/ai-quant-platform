@@ -134,6 +134,7 @@ class ReplayCreateRequest(BaseModel):
     focus_dimensions: list[str]
     custom_prompt: str | None = None
     data_snapshot: DataSnapshotConfig | None = None
+    analysis_options: dict[str, Any] = Field(default_factory=dict)
 
 
 class ProjectCreateRequest(BaseModel):

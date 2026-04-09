@@ -1269,6 +1269,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             build_result=build_replay_result(
                 app_settings,
                 services.trade_upload_service,
+                services.market_data_service,
             ),
             request_id=request.state.request_id,
             user_id=current_user.user_id,
