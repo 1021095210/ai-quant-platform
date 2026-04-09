@@ -5280,6 +5280,7 @@ def _optimize_replay_rule_patch(
     filters = base_patch.get("filters") or {}
     candidates: dict[tuple[str, ...], list[Any]] = {
         ("risk", "stop_loss_pct"): _candidate_numeric_values(risk.get("stop_loss_pct"), [-0.015, -0.02, -0.03]),
+        ("risk", "take_profit_pct"): _candidate_numeric_values(risk.get("take_profit_pct"), [0.04, 0.06, 0.08]),
         ("risk", "max_holding_bars"): _candidate_numeric_values(risk.get("max_holding_bars"), [5, 8, 12]),
     }
     if "extension_guard" in filters:
@@ -5473,7 +5474,8 @@ def _rerun_single_replay_trade(
     exit_index_limit = min(len(bars) - 1, entry_index + max_holding_bars)
     stop_loss_pct = risk.get("stop_loss_pct")
     take_profit_pct = risk.get("take_profit_pct")
-    minute_stop_used = False
+    minute_entry_used = minute_entry is not None
+    minute_exit_used = False
 
     selected_exit_bar = bars[exit_index_limit]
     exit_price = float(selected_exit_bar.close)
@@ -5506,7 +5508,7 @@ def _rerun_single_replay_trade(
                 exit_price = minute_stop["exit_price"]
                 exit_reason = minute_stop["exit_reason"]
                 exit_time_value = minute_stop["exit_time"]
-                minute_stop_used = True
+                minute_exit_used = True
                 break
             if isinstance(stop_loss_pct, (int, float)) and float(current_bar.low) <= stop_price:
                 selected_exit_bar = current_bar
@@ -5566,7 +5568,9 @@ def _rerun_single_replay_trade(
         "pnl": round(pnl, 2),
         "pnl_pct": round(((exit_price - entry_price) / entry_price) * 100.0, 2) if entry_price else None,
         "exit_reason": exit_reason,
-        "minute_stop_used": minute_stop_used,
+        "minute_stop_used": minute_exit_used,
+        "minute_entry_used": minute_entry_used,
+        "minute_exit_used": minute_exit_used,
     }
 
 
@@ -5744,6 +5748,8 @@ def _build_replay_trade_rows_metrics(trade_rows: list[dict[str, Any]]) -> dict[s
     sharpe_like = _build_replay_sharpe_like(pnl_values)
     avg_pnl = (total_pnl / trade_count) if trade_count else 0.0
     win_rate_pct = (len(wins) / trade_count * 100.0) if trade_count else 0.0
+    minute_entry_aligned_count = sum(1 for item in trade_rows if item.get("minute_entry_used"))
+    minute_exit_triggered_count = sum(1 for item in trade_rows if item.get("minute_exit_used"))
     return {
         "trade_count": trade_count,
         "total_pnl": round(total_pnl, 2),
@@ -5753,6 +5759,8 @@ def _build_replay_trade_rows_metrics(trade_rows: list[dict[str, Any]]) -> dict[s
         "loss_count": len(losses),
         "max_drawdown_pct": round(max_drawdown_pct, 2),
         "sharpe_like": round(sharpe_like, 2),
+        "minute_entry_aligned_count": minute_entry_aligned_count,
+        "minute_exit_triggered_count": minute_exit_triggered_count,
     }
 
 
