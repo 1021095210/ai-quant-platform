@@ -3183,6 +3183,36 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertIsNotNone(record["exit_price"])
         self.assertIn("止损阈值", record["notes"])
 
+    def test_manual_text_parse_endpoint_supports_grouped_trade_lists_with_global_rules(self) -> None:
+        client = self._build_client()
+        self._login(client)
+
+        response = client.post(
+            "/api/v1/trades/uploads/manual/parse-text",
+            json={
+                "text": (
+                    "2025-07-25 (Friday)\n"
+                    "（8 只）：603590.SH, 002225.SZ, 001283.SZ\n\n"
+                    "2025-08-01 (Friday)\n"
+                    "（5 只）：603579.SH, 002675.SZ, 000802.SZ, 600501con9.SH, 002174.SZfinalsell\n\n"
+                    "以上日期买入，买入方式：当日开盘价买入，卖出方式：价格低于当日开盘价-0.5倍atr时卖出"
+                ),
+                "market": "cn_equity",
+                "adjustment_mode": "qfq",
+            },
+        )
+
+        self.assertEqual(200, response.status_code)
+        data = response.json()["data"]
+        self.assertEqual(2, len(data["trade_dates"]))
+        self.assertEqual(8, data["record_count"])
+        self.assertIn("0.5 倍 ATR", data["exit_rule"])
+        symbols = {item["symbol"] for item in data["records"]}
+        self.assertIn("600501.SH", symbols)
+        self.assertIn("002174.SZ", symbols)
+        self.assertNotIn("000.SH", symbols)
+        self.assertTrue(all("长文字智能识别" in item["notes"] for item in data["records"]))
+
     def test_screenshot_trade_upload_creates_structured_record(self) -> None:
         client = self._build_client()
         self._login(client)
