@@ -5460,16 +5460,31 @@ def _rerun_single_replay_trade(
     quantity = _infer_replay_trade_quantity(item)
     exit_index_limit = min(len(bars) - 1, entry_index + max_holding_bars)
     stop_loss_pct = risk.get("stop_loss_pct")
+    minute_stop_used = False
 
     selected_exit_bar = bars[exit_index_limit]
     exit_price = float(selected_exit_bar.close)
     exit_reason = "max_holding_bars"
+    exit_time_value: str | None = None
     for bar_index in range(entry_index + 1, exit_index_limit + 1):
         current_bar = bars[bar_index]
         if current_bar.is_suspended or current_bar.is_limit_down:
             continue
         if isinstance(stop_loss_pct, (int, float)):
             stop_price = entry_price * (1.0 + float(stop_loss_pct))
+            minute_stop = _find_replay_intraday_stop_exit(
+                market_data_service=market_data_service,
+                ts_code=item.symbol,
+                trade_date=date.fromisoformat(current_bar.trade_date),
+                stop_price=stop_price,
+            )
+            if minute_stop is not None:
+                selected_exit_bar = current_bar
+                exit_price = minute_stop["exit_price"]
+                exit_reason = "stop_loss_intraday_minute"
+                exit_time_value = minute_stop["exit_time"]
+                minute_stop_used = True
+                break
             if float(current_bar.low) <= stop_price:
                 selected_exit_bar = current_bar
                 exit_price = stop_price
@@ -5479,17 +5494,37 @@ def _rerun_single_replay_trade(
         exit_price = float(current_bar.close)
 
     pnl = (exit_price - entry_price) * quantity
-    holding_bars = max(
-        (date.fromisoformat(selected_exit_bar.trade_date) - date.fromisoformat(entry_bar.trade_date)).days,
-        1,
-    )
-    holding_minutes = float(holding_bars * 24 * 60)
+    if exit_time_value:
+        try:
+            holding_minutes = max(
+                (
+                    datetime.fromisoformat(exit_time_value.replace("Z", "+00:00")).replace(tzinfo=None)
+                    - item.entry_time.replace(tzinfo=None)
+                ).total_seconds()
+                / 60.0,
+                1.0,
+            )
+        except ValueError:
+            holding_minutes = float(
+                max(
+                    (date.fromisoformat(selected_exit_bar.trade_date) - date.fromisoformat(entry_bar.trade_date)).days,
+                    1,
+                )
+                * 24
+                * 60
+            )
+    else:
+        holding_bars = max(
+            (date.fromisoformat(selected_exit_bar.trade_date) - date.fromisoformat(entry_bar.trade_date)).days,
+            1,
+        )
+        holding_minutes = float(holding_bars * 24 * 60)
     return {
         "trade_id": item.trade_id,
         "symbol": item.symbol,
         "side": item.side,
         "entry_time": item.entry_time.isoformat(),
-        "exit_time": selected_exit_bar.trade_date,
+        "exit_time": exit_time_value or selected_exit_bar.trade_date,
         "entry_price": round(entry_price, 4),
         "exit_price": round(exit_price, 4),
         "holding_minutes": round(holding_minutes, 2),
@@ -5497,7 +5532,34 @@ def _rerun_single_replay_trade(
         "pnl": round(pnl, 2),
         "pnl_pct": round(((exit_price - entry_price) / entry_price) * 100.0, 2) if entry_price else None,
         "exit_reason": exit_reason,
+        "minute_stop_used": minute_stop_used,
     }
+
+
+def _find_replay_intraday_stop_exit(
+    *,
+    market_data_service: MarketDataService,
+    ts_code: str,
+    trade_date: date,
+    stop_price: float,
+) -> dict[str, Any] | None:
+    session_start = datetime.combine(trade_date, datetime.min.time()).replace(hour=9, minute=30)
+    session_end = datetime.combine(trade_date, datetime.min.time()).replace(hour=15, minute=0)
+    minute_bars, metadata = market_data_service.load_minute_window(
+        ts_code=ts_code,
+        start_time=session_start,
+        end_time=session_end,
+        adjustment_mode="qfq",
+    )
+    if metadata.get("status") != "ready" or not minute_bars:
+        return None
+    for bar in minute_bars:
+        if float(bar.low) <= stop_price:
+            return {
+                "exit_time": bar.trade_time,
+                "exit_price": float(stop_price),
+            }
+    return None
 
 
 def _replay_trade_passes_filters(
