@@ -35,6 +35,7 @@ try:
     from quant_platform_api.services import (
         FinancialAssistantService,
         MentorService,
+        _build_replay_counterfactual_cases,
         _build_replay_context_suggestions,
         _build_replay_fundamental_features,
         _build_replay_minute_context_features,
@@ -54,6 +55,7 @@ except ModuleNotFoundError:  # pragma: no cover - handled by skip
     TradeRecordItem = None
     FinancialAssistantService = None
     MentorService = None
+    _build_replay_counterfactual_cases = None
     _build_replay_context_suggestions = None
     _build_replay_minute_context_features = None
     _build_replay_fundamental_features = None
@@ -2275,6 +2277,7 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertTrue(data["loss_features"])
         self.assertTrue(data["profit_features"])
         self.assertTrue(data["objective_versions"])
+        self.assertIn("counterfactual_cases", data)
         self.assertTrue(data["parameter_changes"])
         self.assertTrue(data["condition_replacements"])
         self.assertTrue(data["trade_records"])
@@ -2872,6 +2875,158 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertEqual(1, rerun["metrics"]["minute_exit_triggered_count"])
         self.assertIn("take_profit_pct", rerun["selected_patch"]["risk"])
 
+    def test_replay_counterfactual_cases_build_alternative_paths_for_losing_trade(self) -> None:
+        class FakeMarketDataService:
+            def load_daily_bars(self, *, ts_code, start_date, end_date, adjustment_mode):
+                return (
+                    [
+                        MarketBar(
+                            ts_code=ts_code,
+                            asset_type="stock",
+                            adjustment_mode="qfq",
+                            trade_date="2024-05-01",
+                            open=10.0,
+                            high=10.4,
+                            low=9.9,
+                            close=10.3,
+                            volume=1000,
+                            amount=10000,
+                            pct_chg=0.0,
+                            turnover=1.0,
+                            data_source="internal_clickhouse_dwd",
+                            fetched_at="2026-04-09T00:00:00",
+                        ),
+                        MarketBar(
+                            ts_code=ts_code,
+                            asset_type="stock",
+                            adjustment_mode="qfq",
+                            trade_date="2024-05-02",
+                            open=10.35,
+                            high=10.55,
+                            low=9.7,
+                            close=9.85,
+                            volume=1200,
+                            amount=11000,
+                            pct_chg=0.0,
+                            turnover=1.2,
+                            data_source="internal_clickhouse_dwd",
+                            fetched_at="2026-04-09T00:00:00",
+                        ),
+                        MarketBar(
+                            ts_code=ts_code,
+                            asset_type="stock",
+                            adjustment_mode="qfq",
+                            trade_date="2024-05-03",
+                            open=9.9,
+                            high=10.0,
+                            low=9.75,
+                            close=9.95,
+                            volume=1100,
+                            amount=9000,
+                            pct_chg=0.0,
+                            turnover=1.1,
+                            data_source="internal_clickhouse_dwd",
+                            fetched_at="2026-04-09T00:00:00",
+                        ),
+                    ],
+                    {"provider": "internal_clickhouse_dwd", "status": "ready"},
+                )
+
+            def load_minute_window(self, *, ts_code, start_time, end_time, adjustment_mode):
+                if start_time.date().isoformat() == "2024-05-01":
+                    return (
+                        [
+                            MinuteBar(
+                                ts_code=ts_code,
+                                trade_time="2024-05-01T09:35:00+08:00",
+                                open=10.4,
+                                high=10.45,
+                                low=10.36,
+                                close=10.42,
+                                volume=120,
+                                amount=1000,
+                                pct_change=0.0,
+                                amplitude=0.0,
+                                data_source="internal_clickhouse_dwd",
+                            ),
+                            MinuteBar(
+                                ts_code=ts_code,
+                                trade_time="2024-05-01T09:50:00+08:00",
+                                open=10.12,
+                                high=10.18,
+                                low=10.08,
+                                close=10.15,
+                                volume=140,
+                                amount=1200,
+                                pct_change=0.0,
+                                amplitude=0.0,
+                                data_source="internal_clickhouse_dwd",
+                            ),
+                        ],
+                        {"provider": "internal_clickhouse_dwd", "status": "ready"},
+                    )
+                return (
+                    [
+                        MinuteBar(
+                            ts_code=ts_code,
+                            trade_time="2024-05-02T10:00:00+08:00",
+                            open=10.02,
+                            high=10.05,
+                            low=9.78,
+                            close=9.82,
+                            volume=180,
+                            amount=1400,
+                            pct_change=0.0,
+                            amplitude=0.0,
+                            data_source="internal_clickhouse_dwd",
+                        ),
+                    ],
+                    {"provider": "internal_clickhouse_dwd", "status": "ready"},
+                )
+
+        trade = TradeRecordItem(
+            trade_id="trade_loss_1",
+            symbol="600519.SH",
+            side="long",
+            entry_time=datetime.fromisoformat("2024-05-01T09:35:00+08:00"),
+            exit_time=datetime.fromisoformat("2024-05-02T15:00:00+08:00"),
+            pnl=-320.0,
+            entry_price=10.4,
+            exit_price=9.82,
+        )
+        cases = _build_replay_counterfactual_cases(
+            records=[trade],
+            replay_market="cn_a_share",
+            market_data_service=FakeMarketDataService(),
+            daily_context_by_trade_id={
+                "trade_loss_1": {"trend_regime": "range", "above_ma5": False, "prior_return_pct": 4.6}
+            },
+            minute_context_by_trade_id={
+                "trade_loss_1": {
+                    "first_15m_return_pct": 1.3,
+                    "last_15m_return_pct": -0.4,
+                    "close_position_pct": 38.0,
+                    "up_bar_ratio": 0.4,
+                    "peak_to_close_drawdown_pct": 3.2,
+                }
+            },
+            fundamental_context_by_trade_id={
+                "trade_loss_1": {"pe_ttm": 48.0, "roe": 7.0, "debt_to_assets": 66.0}
+            },
+        )
+
+        self.assertEqual(1, len(cases))
+        self.assertEqual("trade_loss_1", cases[0]["trade_id"])
+        self.assertEqual(4, len(cases[0]["alternatives"]))
+        self.assertEqual("skip_trade_filter", cases[0]["recommended_alternative_key"])
+        result_types = {item["result_type"] for item in cases[0]["alternatives"]}
+        self.assertIn("skipped", result_types)
+        self.assertIn("rerun", result_types)
+        delayed = next(item for item in cases[0]["alternatives"] if item["key"] == "delayed_entry_confirmation")
+        self.assertEqual("rerun", delayed["result_type"])
+        self.assertTrue(delayed["comparison"]["entry_changed"])
+        self.assertIsNotNone(delayed["trade_record"])
+
     def test_manual_trade_upload_creates_parsed_records(self) -> None:
         client = self._build_client()
         self._login(client)
@@ -3097,6 +3252,7 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertIn("亏损特征", response.text)
         self.assertIn("盈利特征", response.text)
         self.assertIn("优化目标分版本", response.text)
+        self.assertIn("单笔反事实复盘", response.text)
         self.assertIn("旧新参数对比", response.text)
         self.assertIn("指标条件替换", response.text)
         self.assertIn("当前样本成交记录", response.text)
