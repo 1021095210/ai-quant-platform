@@ -5128,14 +5128,25 @@ def _build_replay_objective_versions(
             selected_trade_rows = rerun_result["trade_records"]
             version_metrics = rerun_result["metrics"]
             version_equity_curve = rerun_result["equity_curve"]
+            selected_patch = rerun_result["selected_patch"]
+            search_summary = rerun_result["search_summary"]
             comparison_note = (
                 f"{comparison_note} 当前版本已基于真实日线行情重放生成结果。"
             )
-            simulation_mode = "market_rerun"
+            simulation_mode = "market_rerun_optimized"
         else:
             selected_trade_rows = _build_replay_trade_records(selected_records)
             version_metrics = _build_replay_sample_metrics(selected_records)
             version_equity_curve = _build_replay_equity_curve(selected_records)
+            selected_patch = _merge_replay_rule_patches(
+                suggestion_rules=suggestion_rules,
+                objective=spec["objective"],
+            )
+            search_summary = {
+                "mode": "fallback",
+                "evaluated_variants": 0,
+                "selected_reason": "当前无真实行情重放，保留样本筛选回放结果。",
+            }
             simulation_mode = "sample_scored_replay"
         items.append(
             {
@@ -5146,6 +5157,8 @@ def _build_replay_objective_versions(
                 "equity_curve": version_equity_curve,
                 "trade_records": selected_trade_rows[:10] or trade_records[:10],
                 "simulation_mode": simulation_mode,
+                "selected_patch": selected_patch,
+                "search_summary": search_summary,
             }
         )
     return items
@@ -5168,6 +5181,15 @@ def _rerun_replay_records_on_market_data(
         suggestion_rules=suggestion_rules,
         objective=objective,
     )
+    optimized_patch, evaluated_variants = _optimize_replay_rule_patch(
+        records=records,
+        replay_market=replay_market,
+        objective=objective,
+        market_data_service=market_data_service,
+        base_patch=combined_patch,
+        minute_context_by_trade_id=minute_context_by_trade_id,
+        fundamental_context_by_trade_id=fundamental_context_by_trade_id,
+    )
     rerun_trade_rows: list[dict[str, Any]] = []
     cumulative_pnl = 0.0
     equity_curve: list[dict[str, Any]] = []
@@ -5176,7 +5198,7 @@ def _rerun_replay_records_on_market_data(
         rerun_trade = _rerun_single_replay_trade(
             item=item,
             market_data_service=market_data_service,
-            rule_patch=combined_patch,
+            rule_patch=optimized_patch,
             minute_context=minute_context_by_trade_id.get(item.trade_id),
             fundamental_context=fundamental_context_by_trade_id.get(item.trade_id),
         )
@@ -5196,10 +5218,20 @@ def _rerun_replay_records_on_market_data(
 
     if not rerun_trade_rows:
         return None
+    metrics = _build_replay_trade_rows_metrics(rerun_trade_rows)
     return {
         "trade_records": rerun_trade_rows,
         "equity_curve": equity_curve,
-        "metrics": _build_replay_trade_rows_metrics(rerun_trade_rows),
+        "metrics": metrics,
+        "selected_patch": optimized_patch,
+        "search_summary": {
+            "mode": "grid_search",
+            "evaluated_variants": evaluated_variants,
+            "selected_reason": (
+                f"已按 {objective} 目标从 {evaluated_variants} 个候选参数版本中选出当前最优版本。"
+            ),
+            "objective_score": round(_score_replay_objective_metrics(metrics, objective=objective), 4),
+        },
     }
 
 
@@ -5229,6 +5261,155 @@ def _merge_replay_rule_patches(
         risk.setdefault("stop_loss_pct", -0.03)
         risk.setdefault("max_holding_bars", 12)
     return merged
+
+
+def _optimize_replay_rule_patch(
+    *,
+    records: list[TradeRecordItem],
+    replay_market: str,
+    objective: str,
+    market_data_service: MarketDataService,
+    base_patch: dict[str, Any],
+    minute_context_by_trade_id: dict[str, dict[str, Any]],
+    fundamental_context_by_trade_id: dict[str, dict[str, Any]],
+) -> tuple[dict[str, Any], int]:
+    if replay_market != "cn_a_share":
+        return base_patch, 0
+
+    risk = base_patch.get("risk") or {}
+    filters = base_patch.get("filters") or {}
+    candidates: dict[tuple[str, ...], list[Any]] = {
+        ("risk", "stop_loss_pct"): _candidate_numeric_values(risk.get("stop_loss_pct"), [-0.015, -0.02, -0.03]),
+        ("risk", "max_holding_bars"): _candidate_numeric_values(risk.get("max_holding_bars"), [5, 8, 12]),
+    }
+    if "extension_guard" in filters:
+        candidates[("filters", "extension_guard", "max_prior_return_pct")] = _candidate_numeric_values(
+            filters["extension_guard"].get("max_prior_return_pct"),
+            [2.0, 4.0, 6.0],
+        )
+    if "volume_heat_guard" in filters:
+        candidates[("filters", "volume_heat_guard", "max_value")] = _candidate_numeric_values(
+            filters["volume_heat_guard"].get("max_value"),
+            [1.4, 1.8, 2.2],
+        )
+    if "intraday_entry_timing" in filters:
+        candidates[("filters", "intraday_entry_timing", "max_first_15m_return_pct")] = _candidate_numeric_values(
+            filters["intraday_entry_timing"].get("max_first_15m_return_pct"),
+            [0.6, 1.0, 1.5],
+        )
+    if "intraday_structure" in filters:
+        candidates[("filters", "intraday_structure", "min_close_position_pct")] = _candidate_numeric_values(
+            filters["intraday_structure"].get("min_close_position_pct"),
+            [45, 50, 60],
+        )
+        candidates[("filters", "intraday_structure", "min_up_bar_ratio")] = _candidate_numeric_values(
+            filters["intraday_structure"].get("min_up_bar_ratio"),
+            [0.45, 0.5, 0.6],
+        )
+    if "fundamental_guard" in filters:
+        candidates[("filters", "fundamental_guard", "max_pe_ttm")] = _candidate_numeric_values(
+            filters["fundamental_guard"].get("max_pe_ttm"),
+            [25, 35, 45],
+        )
+        candidates[("filters", "fundamental_guard", "max_debt_to_assets")] = _candidate_numeric_values(
+            filters["fundamental_guard"].get("max_debt_to_assets"),
+            [45, 55, 65],
+        )
+    if "quality_filter" in filters:
+        candidates[("filters", "quality_filter", "min_roe")] = _candidate_numeric_values(
+            filters["quality_filter"].get("min_roe"),
+            [8, 10, 12],
+        )
+        candidates[("filters", "quality_filter", "min_grossprofit_margin")] = _candidate_numeric_values(
+            filters["quality_filter"].get("min_grossprofit_margin"),
+            [20, 25, 30],
+        )
+        candidates[("filters", "quality_filter", "min_op_yoy")] = _candidate_numeric_values(
+            filters["quality_filter"].get("min_op_yoy"),
+            [-5, 0, 5],
+        )
+
+    scored_candidates: list[tuple[float, dict[str, Any]]] = []
+    variants = _limited_replay_patch_variants(base_patch=base_patch, candidates=candidates, limit=24)
+    for patch in variants:
+        rerun_rows: list[dict[str, Any]] = []
+        for item in sorted(records, key=lambda row: row.exit_time or row.entry_time):
+            rerun_trade = _rerun_single_replay_trade(
+                item=item,
+                market_data_service=market_data_service,
+                rule_patch=patch,
+                minute_context=minute_context_by_trade_id.get(item.trade_id),
+                fundamental_context=fundamental_context_by_trade_id.get(item.trade_id),
+            )
+            if rerun_trade is not None:
+                rerun_rows.append(rerun_trade)
+        if not rerun_rows:
+            continue
+        metrics = _build_replay_trade_rows_metrics(rerun_rows)
+        score = _score_replay_objective_metrics(metrics, objective=objective)
+        scored_candidates.append((score, patch))
+    if not scored_candidates:
+        return base_patch, len(variants)
+    _, best_patch = max(scored_candidates, key=lambda item: item[0])
+    return best_patch, len(variants)
+
+
+def _candidate_numeric_values(current: Any, defaults: list[Any]) -> list[Any]:
+    values = []
+    if current is not None:
+        values.append(current)
+    values.extend(defaults)
+    deduped: list[Any] = []
+    seen: set[str] = set()
+    for value in values:
+        key = f"{value}"
+        if key not in seen:
+            seen.add(key)
+            deduped.append(value)
+    return deduped
+
+
+def _limited_replay_patch_variants(
+    *,
+    base_patch: dict[str, Any],
+    candidates: dict[tuple[str, ...], list[Any]],
+    limit: int,
+) -> list[dict[str, Any]]:
+    variants = [json.loads(json.dumps(base_patch))]
+    for path, options in candidates.items():
+        next_variants: list[dict[str, Any]] = []
+        for patch in variants:
+            for value in options:
+                copied = json.loads(json.dumps(patch))
+                _set_nested_replay_patch_value(copied, path, value)
+                next_variants.append(copied)
+                if len(next_variants) >= limit:
+                    break
+            if len(next_variants) >= limit:
+                break
+        variants = next_variants or variants
+        if len(variants) >= limit:
+            break
+    return variants[:limit]
+
+
+def _set_nested_replay_patch_value(target: dict[str, Any], path: tuple[str, ...], value: Any) -> None:
+    current = target
+    for key in path[:-1]:
+        current = current.setdefault(key, {})
+    current[path[-1]] = value
+
+
+def _score_replay_objective_metrics(metrics: dict[str, Any], *, objective: str) -> float:
+    if objective == "win_rate_max":
+        return float(metrics.get("win_rate_pct") or 0.0)
+    if objective == "max_drawdown_min":
+        return -abs(float(metrics.get("max_drawdown_pct") or 0.0))
+    if objective == "total_return_max":
+        return float(metrics.get("total_pnl") or 0.0)
+    sharpe_like = float(metrics.get("sharpe_like") or 0.0)
+    drawdown_penalty = abs(float(metrics.get("max_drawdown_pct") or 0.0)) * 0.1
+    return sharpe_like - drawdown_penalty
 
 
 def _rerun_single_replay_trade(
