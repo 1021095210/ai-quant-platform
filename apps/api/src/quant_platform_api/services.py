@@ -1972,6 +1972,18 @@ class TradeUploadService:
         if not normalized_text:
             raise TaskExecutionError("INVALID_ARGUMENT", "请先输入需要识别的长文字内容。")
 
+        grouped_candidates = self._extract_grouped_trade_candidates(
+            normalized_text,
+            market=market,
+        )
+        if len(grouped_candidates) > 1:
+            return self._build_grouped_text_trade_records(
+                grouped_candidates=grouped_candidates,
+                text=normalized_text,
+                market=market,
+                adjustment_mode=adjustment_mode,
+            )
+
         trade_date = self._extract_labeled_trade_date(normalized_text, "买入日期") or self._extract_trade_date(normalized_text)
         if trade_date is None:
             raise TaskExecutionError("INVALID_ARGUMENT", "未识别到交易日期，请至少包含 YYYY-MM-DD。")
@@ -2007,6 +2019,52 @@ class TradeUploadService:
             "records": [item.model_dump(mode="json") for item in records],
             "summary": (
                 f"已识别 {len(records)} 笔交易，日期为 {trade_date.isoformat()}，"
+                f"买入规则按“{entry_rule['label']}”理解。"
+            ),
+        }
+
+    def _build_grouped_text_trade_records(
+        self,
+        *,
+        grouped_candidates: list[dict[str, Any]],
+        text: str,
+        market: str,
+        adjustment_mode: str,
+    ) -> dict[str, Any]:
+        entry_rule = self._extract_entry_rule(text)
+        exit_rule = self._extract_exit_rule(text)
+        records: list[TradeRecordItem] = []
+        for group in grouped_candidates:
+            trade_date = group["trade_date"]
+            symbols = group["symbols"]
+            for index, symbol in enumerate(symbols, start=1):
+                records.append(
+                    self._build_text_trade_record(
+                        trade_date=trade_date,
+                        symbol=symbol,
+                        market=market,
+                        adjustment_mode=adjustment_mode,
+                        entry_rule=entry_rule,
+                        exit_rule=exit_rule,
+                        explicit_exit_date=None,
+                        index=len(records) + 1,
+                    )
+                )
+
+        if not records:
+            raise TaskExecutionError("INVALID_ARGUMENT", "未识别到可生成成交记录的日期和标的代码。")
+
+        trade_dates = [item["trade_date"].isoformat() for item in grouped_candidates]
+        return {
+            "market": market,
+            "trade_date": trade_dates[0],
+            "trade_dates": trade_dates,
+            "entry_rule": entry_rule["label"],
+            "exit_rule": exit_rule["label"] if exit_rule else "未提供卖出规则",
+            "record_count": len(records),
+            "records": [item.model_dump(mode="json") for item in records],
+            "summary": (
+                f"已识别 {len(grouped_candidates)} 个交易日期、{len(records)} 笔交易，"
                 f"买入规则按“{entry_rule['label']}”理解。"
             ),
         }
@@ -2298,6 +2356,24 @@ class TradeUploadService:
             return None
         return date.fromisoformat(match.group(1).replace("/", "-"))
 
+    def _extract_grouped_trade_candidates(self, text: str, *, market: str) -> list[dict[str, Any]]:
+        matches = list(re.finditer(r"(20\d{2}[-/]\d{2}[-/]\d{2})", text))
+        groups: list[dict[str, Any]] = []
+        for index, match in enumerate(matches):
+            trade_date = date.fromisoformat(match.group(1).replace("/", "-"))
+            start = match.start()
+            end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+            block = text[start:end]
+            symbols = self._extract_symbols_by_market(block, market)
+            if symbols:
+                groups.append(
+                    {
+                        "trade_date": trade_date,
+                        "symbols": symbols,
+                    }
+                )
+        return groups
+
     def _extract_labeled_trade_date(self, text: str, label: str) -> date | None:
         match = re.search(rf"{label}[:：]?\s*(20\d{{2}}[-/]\d{{2}}[-/]\d{{2}})", text)
         if match is None:
@@ -2317,12 +2393,17 @@ class TradeUploadService:
     def _extract_symbols_by_market(self, text: str, market: str) -> list[str]:
         normalized = text.upper().replace(" ", "")
         if market == "cn_equity":
-            direct = re.findall(r"\b\d{6}\.(?:SH|SZ)\b", normalized)
+            direct = re.findall(r"\d{6}\.(?:SH|SZ)\b", normalized)
+            embedded = re.findall(r"(\d{6})[A-Z0-9_\-\u4e00-\u9fff]*\.(SH|SZ)\b", normalized)
             plain = re.findall(r"\b\d{6}\b", normalized)
             deduped: list[str] = []
             for symbol in direct:
                 if symbol not in deduped:
                     deduped.append(symbol)
+            for code, suffix in embedded:
+                inferred = f"{code}.{suffix}"
+                if inferred not in deduped:
+                    deduped.append(inferred)
             for symbol in plain:
                 inferred = f"{symbol}.SH" if symbol.startswith(("5", "6", "9")) else f"{symbol}.SZ"
                 if inferred not in deduped:
@@ -2461,7 +2542,7 @@ class TradeUploadService:
                 "pct": float(stop_loss_match.group(1)) / 100,
             }
         atr_match = re.search(
-            r"最低价低于当日开盘价-([0-9]+(?:\.[0-9]+)?)倍atr",
+            r"(?:最低价|价格)(?:低于|跌破)当日开盘价-([0-9]+(?:\.[0-9]+)?)倍atr(?:的值)?(?:则)?(?:时卖出|卖出)?",
             text,
             flags=re.I,
         )
