@@ -2543,6 +2543,10 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertTrue(rerun["equity_curve"])
         self.assertEqual("max_holding_bars", rerun["trade_records"][0]["exit_reason"])
         self.assertGreater(rerun["trade_records"][0]["pnl"], 0)
+        self.assertEqual("grid_search", rerun["search_summary"]["mode"])
+        self.assertGreaterEqual(rerun["search_summary"]["evaluated_variants"], 1)
+        self.assertIn("risk", rerun["selected_patch"])
+        self.assertIn("filters", rerun["selected_patch"])
 
     def test_manual_trade_upload_creates_parsed_records(self) -> None:
         client = self._build_client()
