@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 import csv
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 import hashlib
 import httpx
 from io import BytesIO, StringIO
@@ -4001,10 +4001,27 @@ def build_replay_result(
             analysis_options=analysis_options,
             market_data_service=market_data_service,
         )
-        analysis_scope = _build_replay_analysis_scope(
+        minute_contexts, minute_status = _build_replay_minute_contexts(
+            records=records,
             replay_market=replay_market,
             analysis_options=analysis_options,
+            market_data_service=market_data_service,
+        )
+        fundamental_contexts, fundamental_status = _build_replay_fundamental_contexts(
+            records=records,
+            replay_market=replay_market,
+            analysis_options=analysis_options,
+            market_data_service=market_data_service,
+        )
+        analysis_scope = _build_replay_analysis_scope(
+            replay_market=replay_market,
+            focus_dimensions=payload.get("focus_dimensions") or [],
+            analysis_options=analysis_options,
             daily_contexts=daily_contexts,
+            minute_contexts=minute_contexts,
+            fundamental_contexts=fundamental_contexts,
+            minute_status=minute_status,
+            fundamental_status=fundamental_status,
         )
         best_side_label = _describe_trade_side(best_side[0], replay_market)
         worst_side_label = _describe_trade_side(worst_side[0], replay_market)
@@ -4114,6 +4131,8 @@ def build_replay_result(
             has_side_comparison=has_side_comparison,
         )
         loss_features.extend(_build_replay_daily_context_features(daily_contexts, target="loss"))
+        loss_features.extend(_build_replay_minute_context_features(minute_contexts, target="loss"))
+        loss_features.extend(_build_replay_fundamental_features(fundamental_contexts, target="loss"))
         profit_features = _build_replay_profit_features(
             records=records,
             market=replay_market,
@@ -4125,6 +4144,8 @@ def build_replay_result(
             best_side_label=best_side_label,
         )
         profit_features.extend(_build_replay_daily_context_features(daily_contexts, target="profit"))
+        profit_features.extend(_build_replay_minute_context_features(minute_contexts, target="profit"))
+        profit_features.extend(_build_replay_fundamental_features(fundamental_contexts, target="profit"))
         parameter_changes = _build_replay_parameter_changes(suggestion_rules)
         condition_replacements = _build_replay_condition_replacements(suggestion_rules)
         objective_versions = _build_replay_objective_versions(
@@ -4354,13 +4375,15 @@ def _build_replay_daily_contexts(
     end_date = max(record_dates) + timedelta(days=5)
     for symbol in {item.symbol for item in records if item.symbol.endswith((".SH", ".SZ", ".BJ"))}:
         try:
-            bars, _data_source = market_data_service.load_daily_bars(
+            bars, data_source = market_data_service.load_daily_bars(
                 ts_code=symbol,
                 start_date=start_date,
                 end_date=end_date,
                 adjustment_mode="qfq",
             )
         except Exception:
+            continue
+        if data_source.get("provider") in {None, "demo"}:
             continue
         bars_by_symbol[symbol] = bars
 
@@ -4406,15 +4429,108 @@ def _build_replay_daily_contexts(
     return contexts
 
 
+def _build_replay_minute_contexts(
+    *,
+    records: list[TradeRecordItem],
+    replay_market: str,
+    analysis_options: dict[str, Any],
+    market_data_service: MarketDataService | None,
+) -> tuple[list[dict[str, Any]], str]:
+    if not analysis_options["include_minute_features"]:
+        return [], "disabled"
+    if market_data_service is None or replay_market != "cn_a_share":
+        return [], "unavailable"
+
+    contexts: list[dict[str, Any]] = []
+    for item in records:
+        if not item.symbol.endswith((".SH", ".SZ", ".BJ")):
+            continue
+        entry_time = _to_market_local_datetime(item.entry_time, replay_market)
+        start_time = entry_time - timedelta(minutes=int(analysis_options["minute_window_minutes"]))
+        bars, metadata = market_data_service.load_minute_window(
+            ts_code=item.symbol,
+            start_time=start_time,
+            end_time=entry_time,
+            adjustment_mode="qfq",
+        )
+        if metadata.get("status") != "ready" or not bars:
+            continue
+        first_bar = bars[0]
+        last_bar = bars[-1]
+        open_price = float(first_bar.open)
+        close_price = float(last_bar.close)
+        if open_price == 0:
+            continue
+        high_price = max(float(bar.high) for bar in bars)
+        low_price = min(float(bar.low) for bar in bars)
+        minute_return_pct = ((close_price - open_price) / open_price) * 100.0
+        volatility_pct = ((high_price - low_price) / open_price) * 100.0
+        peak_to_close_drawdown_pct = ((close_price - high_price) / high_price) * 100.0 if high_price else 0.0
+        contexts.append(
+            {
+                "trade_id": item.trade_id,
+                "symbol": item.symbol,
+                "pnl": item.pnl,
+                "minute_return_pct": round(minute_return_pct, 2),
+                "volatility_pct": round(volatility_pct, 2),
+                "peak_to_close_drawdown_pct": round(abs(peak_to_close_drawdown_pct), 2),
+            }
+        )
+    return contexts, ("ready" if contexts else "unavailable")
+
+
+def _build_replay_fundamental_contexts(
+    *,
+    records: list[TradeRecordItem],
+    replay_market: str,
+    analysis_options: dict[str, Any],
+    market_data_service: MarketDataService | None,
+) -> tuple[list[dict[str, Any]], str]:
+    if not analysis_options["include_fundamentals"]:
+        return [], "disabled"
+    if market_data_service is None or replay_market != "cn_a_share":
+        return [], "unavailable"
+
+    contexts: list[dict[str, Any]] = []
+    for item in records:
+        if not item.symbol.endswith((".SH", ".SZ", ".BJ")):
+            continue
+        snapshot, metadata = market_data_service.load_daily_basic_snapshot(
+            ts_code=item.symbol,
+            trade_date=item.entry_time.date(),
+        )
+        if metadata.get("status") != "ready" or snapshot is None:
+            continue
+        contexts.append(
+            {
+                "trade_id": item.trade_id,
+                "symbol": item.symbol,
+                "pnl": item.pnl,
+                "pe_ttm": snapshot.pe_ttm,
+                "pb": snapshot.pb,
+                "turnover_rate": snapshot.turnover_rate,
+                "total_mv": snapshot.total_mv,
+            }
+        )
+    return contexts, ("ready" if contexts else "unavailable")
+
+
 def _build_replay_analysis_scope(
     *,
     replay_market: str,
+    focus_dimensions: list[str],
     analysis_options: dict[str, Any],
     daily_contexts: list[dict[str, Any]],
+    minute_contexts: list[dict[str, Any]],
+    fundamental_contexts: list[dict[str, Any]],
+    minute_status: str,
+    fundamental_status: str,
 ) -> dict[str, Any]:
     labels = ["方向表现", "持有时间"]
-    if daily_contexts:
-        labels.extend(["量价结构", "均线位置"])
+    if any(item in {"volume_structure", "volume_profile"} for item in focus_dimensions):
+        labels.append("量价结构")
+    if any(item in {"moving_average_structure", "trend_structure"} for item in focus_dimensions):
+        labels.append("均线位置")
     if analysis_options["include_market_context"]:
         labels.append("市场环境")
     if analysis_options["include_minute_features"]:
@@ -4430,8 +4546,10 @@ def _build_replay_analysis_scope(
         "include_fundamentals": analysis_options["include_fundamentals"],
         "labels": labels,
         "daily_context_status": "ready" if daily_contexts else "unavailable",
-        "minute_feature_status": "pending" if analysis_options["include_minute_features"] else "disabled",
-        "fundamental_status": "pending" if analysis_options["include_fundamentals"] else "disabled",
+        "minute_feature_status": minute_status,
+        "fundamental_status": fundamental_status,
+        "minute_context_count": len(minute_contexts),
+        "fundamental_context_count": len(fundamental_contexts),
         "market": replay_market,
     }
 
@@ -4529,11 +4647,143 @@ def _build_replay_daily_context_features(
     return features[:3]
 
 
+def _build_replay_minute_context_features(
+    contexts: list[dict[str, Any]],
+    *,
+    target: str,
+) -> list[dict[str, Any]]:
+    if not contexts:
+        return []
+    wins = [item for item in contexts if item["pnl"] > 0]
+    losses = [item for item in contexts if item["pnl"] <= 0]
+    if not wins or not losses:
+        return []
+    win_avg_return = _avg_optional_number(wins, "minute_return_pct")
+    loss_avg_return = _avg_optional_number(losses, "minute_return_pct")
+    win_avg_drawdown = _avg_optional_number(wins, "peak_to_close_drawdown_pct")
+    loss_avg_drawdown = _avg_optional_number(losses, "peak_to_close_drawdown_pct")
+    features: list[dict[str, Any]] = []
+    if target == "loss":
+        if loss_avg_return is not None and win_avg_return is not None and loss_avg_return > win_avg_return:
+            features.append(
+                {
+                    "id": "loss_intraday_chase",
+                    "title": "亏损样本更常出现在盘中短时拉升后追入",
+                    "detail": (
+                        f"亏损单入场前分钟窗口平均涨幅 {loss_avg_return:.2f}%，高于盈利单的 {win_avg_return:.2f}%。"
+                    ),
+                    "support": 1.0,
+                }
+            )
+        if loss_avg_drawdown is not None and win_avg_drawdown is not None and loss_avg_drawdown > win_avg_drawdown:
+            features.append(
+                {
+                    "id": "loss_intraday_pullback",
+                    "title": "亏损样本更常伴随盘中回落加剧",
+                    "detail": (
+                        f"亏损单分钟窗口峰值回落 {loss_avg_drawdown:.2f}%，高于盈利单的 {win_avg_drawdown:.2f}%。"
+                    ),
+                    "support": 1.0,
+                }
+            )
+        return features[:2]
+    if win_avg_return is not None and loss_avg_return is not None and win_avg_return <= loss_avg_return:
+        features.append(
+            {
+                "id": "profit_intraday_not_overheated",
+                "title": "盈利样本更适合在盘中结构不过热时入场",
+                "detail": (
+                    f"盈利单分钟窗口平均涨幅 {win_avg_return:.2f}%，没有高于亏损单的 {loss_avg_return:.2f}%。"
+                ),
+                "support": 1.0,
+            }
+        )
+    if win_avg_drawdown is not None and loss_avg_drawdown is not None and win_avg_drawdown < loss_avg_drawdown:
+        features.append(
+            {
+                "id": "profit_intraday_stable",
+                "title": "盈利样本更常出现在盘中结构更平稳时",
+                "detail": (
+                    f"盈利单分钟窗口峰值回落 {win_avg_drawdown:.2f}%，低于亏损单的 {loss_avg_drawdown:.2f}%。"
+                ),
+                "support": 1.0,
+            }
+        )
+    return features[:2]
+
+
+def _build_replay_fundamental_features(
+    contexts: list[dict[str, Any]],
+    *,
+    target: str,
+) -> list[dict[str, Any]]:
+    if not contexts:
+        return []
+    wins = [item for item in contexts if item["pnl"] > 0]
+    losses = [item for item in contexts if item["pnl"] <= 0]
+    if not wins or not losses:
+        return []
+    win_avg_pe = _avg_optional_number(wins, "pe_ttm")
+    loss_avg_pe = _avg_optional_number(losses, "pe_ttm")
+    win_avg_pb = _avg_optional_number(wins, "pb")
+    loss_avg_pb = _avg_optional_number(losses, "pb")
+    win_avg_turnover = _avg_optional_number(wins, "turnover_rate")
+    loss_avg_turnover = _avg_optional_number(losses, "turnover_rate")
+    features: list[dict[str, Any]] = []
+    if target == "loss":
+        if loss_avg_pe is not None and win_avg_pe is not None and loss_avg_pe > win_avg_pe:
+            features.append(
+                {
+                    "id": "loss_high_pe",
+                    "title": "亏损样本更常集中在高估值区间",
+                    "detail": f"亏损单平均 PE(TTM) {loss_avg_pe:.2f}，高于盈利单的 {win_avg_pe:.2f}。",
+                    "support": 1.0,
+                }
+            )
+        if loss_avg_turnover is not None and win_avg_turnover is not None and loss_avg_turnover > win_avg_turnover:
+            features.append(
+                {
+                    "id": "loss_high_turnover",
+                    "title": "亏损样本更常出现在高换手环境",
+                    "detail": f"亏损单平均换手率 {loss_avg_turnover:.2f}，高于盈利单的 {win_avg_turnover:.2f}。",
+                    "support": 1.0,
+                }
+            )
+        return features[:2]
+    if win_avg_pb is not None and loss_avg_pb is not None and win_avg_pb <= loss_avg_pb:
+        features.append(
+            {
+                "id": "profit_lower_pb",
+                "title": "盈利样本更常分布在相对更低 PB 区间",
+                "detail": f"盈利单平均 PB {win_avg_pb:.2f}，低于亏损单的 {loss_avg_pb:.2f}。",
+                "support": 1.0,
+            }
+        )
+    if win_avg_turnover is not None and loss_avg_turnover is not None and win_avg_turnover <= loss_avg_turnover:
+        features.append(
+            {
+                "id": "profit_turnover_healthier",
+                "title": "盈利样本更常出现在换手更健康的区间",
+                "detail": f"盈利单平均换手率 {win_avg_turnover:.2f}，没有高于亏损单的 {loss_avg_turnover:.2f}。",
+                "support": 1.0,
+            }
+        )
+    return features[:2]
+
+
 def _avg_optional_number(items: list[dict[str, Any]], key: str) -> float | None:
     values = [float(item[key]) for item in items if isinstance(item.get(key), (int, float))]
     if not values:
         return None
     return sum(values) / len(values)
+
+
+def _to_market_local_datetime(value: datetime, market: str) -> datetime:
+    if value.tzinfo is None:
+        return value
+    if market == "cn_a_share":
+        return value.astimezone(timezone(timedelta(hours=8))).replace(tzinfo=None)
+    return value.astimezone(timezone.utc).replace(tzinfo=None)
 
 
 def _build_replay_loss_features(
