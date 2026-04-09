@@ -417,6 +417,9 @@ function replayAnalysisStatusLabel(value) {
   if (value === "ready") {
     return "已接入";
   }
+  if (value === "unavailable") {
+    return "当前无真实数据可用";
+  }
   if (value === "disabled") {
     return "未开启";
   }

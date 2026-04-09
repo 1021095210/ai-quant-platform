@@ -38,6 +38,34 @@ class MarketBar:
     limit_down_price: float | None = None
 
 
+@dataclass(slots=True)
+class MinuteBar:
+    ts_code: str
+    trade_time: str
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float
+    amount: float
+    pct_change: float | None
+    amplitude: float | None
+    data_source: str
+
+
+@dataclass(slots=True)
+class DailyBasicSnapshot:
+    ts_code: str
+    trade_date: str
+    pe_ttm: float | None
+    pb: float | None
+    total_mv: float | None
+    circ_mv: float | None
+    turnover_rate: float | None
+    close: float | None
+    data_source: str
+
+
 class MarketDataProvider(Protocol):
     name: str
 
@@ -141,7 +169,97 @@ class ClickHouseMarketDataProvider:
             "latest_trade_date": latest_trade_date,
             "supports_asset_types": ["stock", "etf"],
             "supported_adjustment_modes": ["raw", "qfq", "hfq"],
+            "supports_intraday_window": True,
+            "supports_daily_basic": True,
         }
+
+    def fetch_minute_bars(
+        self,
+        *,
+        ts_code: str,
+        start_time: datetime,
+        end_time: datetime,
+        adjustment_mode: str,
+    ) -> list[MinuteBar]:
+        table_name = "quant_dwd.dwd_mkt_kline_1min_qfq" if adjustment_mode.strip().lower() == "qfq" else "quant_dwd.dwd_mkt_kline_1min"
+        rows = self._run_query(
+            f"""
+            SELECT
+                ts_code,
+                trade_time,
+                open,
+                high,
+                low,
+                close,
+                volume,
+                amount,
+                pct_change,
+                amplitude,
+                data_source
+            FROM {table_name} FINAL
+            WHERE ts_code = {_quote_clickhouse_string(ts_code)}
+              AND trade_time >= parseDateTimeBestEffort({_quote_clickhouse_string(start_time.strftime("%Y-%m-%d %H:%M:%S"))})
+              AND trade_time <= parseDateTimeBestEffort({_quote_clickhouse_string(end_time.strftime("%Y-%m-%d %H:%M:%S"))})
+            ORDER BY trade_time ASC
+            FORMAT JSONEachRow
+            """
+        )
+        return [
+            MinuteBar(
+                ts_code=ts_code,
+                trade_time=str(item["trade_time"]),
+                open=float(item["open"]),
+                high=float(item["high"]),
+                low=float(item["low"]),
+                close=float(item["close"]),
+                volume=float(item.get("volume") or 0.0),
+                amount=float(item.get("amount") or 0.0),
+                pct_change=_safe_float(item.get("pct_change")),
+                amplitude=_safe_float(item.get("amplitude")),
+                data_source=str(item.get("data_source") or self.name),
+            )
+            for item in rows
+        ]
+
+    def fetch_daily_basic_snapshot(
+        self,
+        *,
+        ts_code: str,
+        trade_date: str,
+    ) -> DailyBasicSnapshot | None:
+        rows = self._run_query(
+            f"""
+            SELECT
+                ts_code,
+                trade_date,
+                pe_ttm,
+                pb,
+                total_mv,
+                circ_mv,
+                turnover_rate,
+                close
+            FROM quant_dwd.dwd_mkt_daily_basic FINAL
+            WHERE ts_code = {_quote_clickhouse_string(ts_code)}
+              AND trade_date <= toDate({_quote_clickhouse_string(trade_date)})
+            ORDER BY trade_date DESC
+            LIMIT 1
+            FORMAT JSONEachRow
+            """
+        )
+        if not rows:
+            return None
+        item = rows[0]
+        return DailyBasicSnapshot(
+            ts_code=ts_code,
+            trade_date=_format_trade_date(item["trade_date"]),
+            pe_ttm=_safe_float(item.get("pe_ttm")),
+            pb=_safe_float(item.get("pb")),
+            total_mv=_safe_float(item.get("total_mv")),
+            circ_mv=_safe_float(item.get("circ_mv")),
+            turnover_rate=_safe_float(item.get("turnover_rate")),
+            close=_safe_float(item.get("close")),
+            data_source=self.name,
+        )
 
     def _apply_adjustment(
         self,
@@ -969,6 +1087,69 @@ class MarketDataService:
             "cache_database_path": str(Path(self._cache_repository._database_path).resolve()),
         }
         return bars, metadata
+
+    def load_minute_window(
+        self,
+        *,
+        ts_code: str,
+        start_time: datetime,
+        end_time: datetime,
+        adjustment_mode: str = "qfq",
+    ) -> tuple[list[MinuteBar], dict[str, Any]]:
+        provider = self._primary_provider
+        if provider is None or not hasattr(provider, "fetch_minute_bars"):
+            return [], {
+                "provider": None,
+                "status": "unavailable",
+                "reason": "minute window provider unavailable",
+            }
+        try:
+            bars = provider.fetch_minute_bars(
+                ts_code=ts_code,
+                start_time=start_time,
+                end_time=end_time,
+                adjustment_mode=adjustment_mode,
+            )
+        except Exception as exc:
+            return [], {
+                "provider": getattr(provider, "name", "unknown"),
+                "status": "unavailable",
+                "reason": str(exc),
+            }
+        return bars, {
+            "provider": getattr(provider, "name", "unknown"),
+            "status": "ready" if bars else "unavailable",
+            "bar_count": len(bars),
+        }
+
+    def load_daily_basic_snapshot(
+        self,
+        *,
+        ts_code: str,
+        trade_date: date,
+    ) -> tuple[DailyBasicSnapshot | None, dict[str, Any]]:
+        provider = self._primary_provider
+        if provider is None or not hasattr(provider, "fetch_daily_basic_snapshot"):
+            return None, {
+                "provider": None,
+                "status": "unavailable",
+                "reason": "daily basic provider unavailable",
+            }
+        try:
+            snapshot = provider.fetch_daily_basic_snapshot(
+                ts_code=ts_code,
+                trade_date=trade_date.strftime("%Y-%m-%d"),
+            )
+        except Exception as exc:
+            return None, {
+                "provider": getattr(provider, "name", "unknown"),
+                "status": "unavailable",
+                "reason": str(exc),
+            }
+        return snapshot, {
+            "provider": getattr(provider, "name", "unknown"),
+            "status": "ready" if snapshot is not None else "unavailable",
+        }
 
     def _sync_range(
         self,

@@ -31,7 +31,12 @@ try:
     from quant_platform_api.config import Settings
     from quant_platform_api.main import create_app
     from quant_platform_api.models import MentorAskRequest
-    from quant_platform_api.services import FinancialAssistantService, MentorService
+    from quant_platform_api.services import (
+        FinancialAssistantService,
+        MentorService,
+        _build_replay_fundamental_features,
+        _build_replay_minute_context_features,
+    )
 except ModuleNotFoundError:  # pragma: no cover - handled by skip
     TestClient = None
     Image = None
@@ -42,6 +47,8 @@ except ModuleNotFoundError:  # pragma: no cover - handled by skip
     MentorAskRequest = None
     FinancialAssistantService = None
     MentorService = None
+    _build_replay_minute_context_features = None
+    _build_replay_fundamental_features = None
 
 
 @unittest.skipIf(TestClient is None, "FastAPI dependencies are unavailable")
@@ -2332,13 +2339,30 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertTrue(scope["include_fundamentals"])
         self.assertIn("量价结构", scope["labels"])
         self.assertIn("均线位置", scope["labels"])
-        self.assertEqual("pending", scope["minute_feature_status"])
-        self.assertEqual("pending", scope["fundamental_status"])
-        self.assertEqual("ready", scope["daily_context_status"])
-        feature_titles = [item["title"] for item in data["profit_features"] + data["loss_features"]]
-        self.assertTrue(
-            any("5日线" in title or "量能" in title or "趋势环境" in title or "震荡环境" in title for title in feature_titles)
+        self.assertEqual("unavailable", scope["minute_feature_status"])
+        self.assertEqual("unavailable", scope["fundamental_status"])
+        self.assertEqual("unavailable", scope["daily_context_status"])
+
+    def test_replay_feature_extractors_build_minute_and_fundamental_summaries(self) -> None:
+        minute_loss = _build_replay_minute_context_features(
+            [
+                {"pnl": -500, "minute_return_pct": 2.8, "peak_to_close_drawdown_pct": 1.5},
+                {"pnl": -300, "minute_return_pct": 2.1, "peak_to_close_drawdown_pct": 1.3},
+                {"pnl": 800, "minute_return_pct": 0.6, "peak_to_close_drawdown_pct": 0.3},
+            ],
+            target="loss",
         )
+        fundamental_profit = _build_replay_fundamental_features(
+            [
+                {"pnl": 1200, "pe_ttm": 18.0, "pb": 2.1, "turnover_rate": 1.8, "total_mv": 1200.0},
+                {"pnl": 900, "pe_ttm": 20.0, "pb": 2.4, "turnover_rate": 2.0, "total_mv": 1100.0},
+                {"pnl": -700, "pe_ttm": 45.0, "pb": 5.8, "turnover_rate": 4.2, "total_mv": 900.0},
+            ],
+            target="profit",
+        )
+
+        self.assertTrue(any("盘中短时拉升" in item["title"] for item in minute_loss))
+        self.assertTrue(any("PB" in item["title"] or "换手" in item["title"] for item in fundamental_profit))
 
     def test_manual_trade_upload_creates_parsed_records(self) -> None:
         client = self._build_client()
