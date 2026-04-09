@@ -34,6 +34,7 @@ try:
     from quant_platform_api.services import (
         FinancialAssistantService,
         MentorService,
+        _build_replay_context_suggestions,
         _build_replay_fundamental_features,
         _build_replay_minute_context_features,
     )
@@ -47,6 +48,7 @@ except ModuleNotFoundError:  # pragma: no cover - handled by skip
     MentorAskRequest = None
     FinancialAssistantService = None
     MentorService = None
+    _build_replay_context_suggestions = None
     _build_replay_minute_context_features = None
     _build_replay_fundamental_features = None
 
@@ -2280,6 +2282,7 @@ class QuantPlatformApiTests(unittest.TestCase):
             data["objective_versions"][0]["baseline_metrics"]["trade_count"],
         )
         self.assertIn("样本筛选回放", data["objective_versions"][0]["comparison_note"])
+        self.assertIn("上下文评分", data["objective_versions"][0]["comparison_note"])
         self.assertIn("entry_price", data["trade_records"][0])
         self.assertIn("把该方向仓位降到优势方向的一半", data["suggestion_rules"][0]["description"])
         self.assertTrue(data["suggestion_rules"])
@@ -2420,6 +2423,26 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertTrue(any("ROE" in item["title"] for item in fundamental_profit))
         self.assertTrue(any("毛利率" in item["title"] for item in fundamental_profit))
         self.assertTrue(any("营收增速" in item["title"] for item in fundamental_profit))
+
+    def test_replay_context_suggestions_generate_structured_rule_patches(self) -> None:
+        suggestions = _build_replay_context_suggestions(
+            loss_features=[
+                {"id": "loss_first_15m_hot", "title": "亏损样本更常在开盘前15分钟过热后入场"},
+                {"id": "loss_higher_debt", "title": "亏损样本更常集中在资产负债率更高的标的"},
+            ],
+            profit_features=[
+                {"id": "profit_trend_regime", "title": "趋势环境下更容易保留盈利结构"},
+                {"id": "profit_higher_roe", "title": "盈利样本更常分布在 ROE 更高的标的"},
+            ],
+        )
+
+        self.assertTrue(any(item["title"] == "收紧盘中过热追入" for item in suggestions))
+        self.assertTrue(any(item["title"] == "只在趋势环境里保留开仓" for item in suggestions))
+        self.assertTrue(any(item["title"] == "加入基本面质量过滤" for item in suggestions))
+        intraday_rule = next(item for item in suggestions if item["title"] == "收紧盘中过热追入")
+        self.assertIn("intraday_entry_timing", intraday_rule["dsl_patch"]["filters"])
+        quality_rule = next(item for item in suggestions if item["title"] == "加入基本面质量过滤")
+        self.assertIn("quality_filter", quality_rule["dsl_patch"]["filters"])
 
     def test_manual_trade_upload_creates_parsed_records(self) -> None:
         client = self._build_client()
