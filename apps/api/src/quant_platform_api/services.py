@@ -4463,9 +4463,19 @@ def _build_replay_minute_contexts(
             continue
         high_price = max(float(bar.high) for bar in bars)
         low_price = min(float(bar.low) for bar in bars)
+        up_bar_ratio = sum(1 for bar in bars if float(bar.close) >= float(bar.open)) / len(bars)
+        first_segment = bars[: min(len(bars), 15)]
+        last_segment = bars[max(0, len(bars) - 15):]
+        first_open = float(first_segment[0].open)
+        first_close = float(first_segment[-1].close)
+        last_open = float(last_segment[0].open)
+        last_close = float(last_segment[-1].close)
         minute_return_pct = ((close_price - open_price) / open_price) * 100.0
         volatility_pct = ((high_price - low_price) / open_price) * 100.0
         peak_to_close_drawdown_pct = ((close_price - high_price) / high_price) * 100.0 if high_price else 0.0
+        first_15m_return_pct = ((first_close - first_open) / first_open) * 100.0 if first_open else 0.0
+        last_15m_return_pct = ((last_close - last_open) / last_open) * 100.0 if last_open else 0.0
+        close_position_pct = ((close_price - low_price) / (high_price - low_price) * 100.0) if high_price > low_price else 50.0
         contexts.append(
             {
                 "trade_id": item.trade_id,
@@ -4474,6 +4484,10 @@ def _build_replay_minute_contexts(
                 "minute_return_pct": round(minute_return_pct, 2),
                 "volatility_pct": round(volatility_pct, 2),
                 "peak_to_close_drawdown_pct": round(abs(peak_to_close_drawdown_pct), 2),
+                "up_bar_ratio": round(up_bar_ratio, 2),
+                "first_15m_return_pct": round(first_15m_return_pct, 2),
+                "last_15m_return_pct": round(last_15m_return_pct, 2),
+                "close_position_pct": round(close_position_pct, 2),
             }
         )
     return contexts, ("ready" if contexts else "unavailable")
@@ -4499,8 +4513,17 @@ def _build_replay_fundamental_contexts(
             ts_code=item.symbol,
             trade_date=item.entry_time.date(),
         )
+        financial_snapshot, financial_metadata = market_data_service.load_financial_quality_snapshot(
+            ts_code=item.symbol,
+            trade_date=item.entry_time.date(),
+        )
         if metadata.get("status") != "ready" or snapshot is None:
             continue
+        if financial_metadata.get("status") != "ready" or financial_snapshot is None:
+            continue
+        debt_to_assets = None
+        if financial_snapshot.total_assets and financial_snapshot.total_assets > 0 and financial_snapshot.total_liab is not None:
+            debt_to_assets = (financial_snapshot.total_liab / financial_snapshot.total_assets) * 100.0
         contexts.append(
             {
                 "trade_id": item.trade_id,
@@ -4510,6 +4533,10 @@ def _build_replay_fundamental_contexts(
                 "pb": snapshot.pb,
                 "turnover_rate": snapshot.turnover_rate,
                 "total_mv": snapshot.total_mv,
+                "roe": financial_snapshot.roe,
+                "grossprofit_margin": financial_snapshot.grossprofit_margin,
+                "op_yoy": financial_snapshot.op_yoy,
+                "debt_to_assets": round(debt_to_assets, 2) if debt_to_assets is not None else None,
             }
         )
     return contexts, ("ready" if contexts else "unavailable")
@@ -4662,6 +4689,14 @@ def _build_replay_minute_context_features(
     loss_avg_return = _avg_optional_number(losses, "minute_return_pct")
     win_avg_drawdown = _avg_optional_number(wins, "peak_to_close_drawdown_pct")
     loss_avg_drawdown = _avg_optional_number(losses, "peak_to_close_drawdown_pct")
+    win_up_ratio = _avg_optional_number(wins, "up_bar_ratio")
+    loss_up_ratio = _avg_optional_number(losses, "up_bar_ratio")
+    win_first_15m = _avg_optional_number(wins, "first_15m_return_pct")
+    loss_first_15m = _avg_optional_number(losses, "first_15m_return_pct")
+    win_last_15m = _avg_optional_number(wins, "last_15m_return_pct")
+    loss_last_15m = _avg_optional_number(losses, "last_15m_return_pct")
+    win_close_position = _avg_optional_number(wins, "close_position_pct")
+    loss_close_position = _avg_optional_number(losses, "close_position_pct")
     features: list[dict[str, Any]] = []
     if target == "loss":
         if loss_avg_return is not None and win_avg_return is not None and loss_avg_return > win_avg_return:
@@ -4682,6 +4717,39 @@ def _build_replay_minute_context_features(
                     "title": "亏损样本更常伴随盘中回落加剧",
                     "detail": (
                         f"亏损单分钟窗口峰值回落 {loss_avg_drawdown:.2f}%，高于盈利单的 {win_avg_drawdown:.2f}%。"
+                    ),
+                    "support": 1.0,
+                }
+            )
+        if loss_first_15m is not None and win_first_15m is not None and loss_first_15m > win_first_15m:
+            features.append(
+                {
+                    "id": "loss_first_15m_hot",
+                    "title": "亏损样本更常在开盘前15分钟过热后入场",
+                    "detail": (
+                        f"亏损单前15分钟平均涨幅 {loss_first_15m:.2f}%，高于盈利单的 {win_first_15m:.2f}%。"
+                    ),
+                    "support": 1.0,
+                }
+            )
+        if loss_close_position is not None and win_close_position is not None and loss_close_position < win_close_position:
+            features.append(
+                {
+                    "id": "loss_close_weak",
+                    "title": "亏损样本更常在分钟窗口末端收在区间偏弱位置",
+                    "detail": (
+                        f"亏损单窗口收盘位置 {loss_close_position:.2f}%，低于盈利单的 {win_close_position:.2f}%。"
+                    ),
+                    "support": 1.0,
+                }
+            )
+        if loss_up_ratio is not None and win_up_ratio is not None and loss_up_ratio < win_up_ratio:
+            features.append(
+                {
+                    "id": "loss_bar_structure_weak",
+                    "title": "亏损样本的盘中阳线占比更低",
+                    "detail": (
+                        f"亏损单窗口阳线占比 {loss_up_ratio:.2f}，低于盈利单的 {win_up_ratio:.2f}。"
                     ),
                     "support": 1.0,
                 }
@@ -4709,7 +4777,18 @@ def _build_replay_minute_context_features(
                 "support": 1.0,
             }
         )
-    return features[:2]
+    if win_last_15m is not None and loss_last_15m is not None and win_last_15m >= loss_last_15m:
+        features.append(
+            {
+                "id": "profit_last_15m_stable",
+                "title": "盈利样本更常在窗口末端保持稳定而不是快速回吐",
+                "detail": (
+                    f"盈利单末15分钟平均变动 {win_last_15m:.2f}%，优于亏损单的 {loss_last_15m:.2f}%。"
+                ),
+                "support": 1.0,
+            }
+        )
+    return features[:3]
 
 
 def _build_replay_fundamental_features(
@@ -4729,6 +4808,14 @@ def _build_replay_fundamental_features(
     loss_avg_pb = _avg_optional_number(losses, "pb")
     win_avg_turnover = _avg_optional_number(wins, "turnover_rate")
     loss_avg_turnover = _avg_optional_number(losses, "turnover_rate")
+    win_avg_roe = _avg_optional_number(wins, "roe")
+    loss_avg_roe = _avg_optional_number(losses, "roe")
+    win_avg_margin = _avg_optional_number(wins, "grossprofit_margin")
+    loss_avg_margin = _avg_optional_number(losses, "grossprofit_margin")
+    win_avg_growth = _avg_optional_number(wins, "op_yoy")
+    loss_avg_growth = _avg_optional_number(losses, "op_yoy")
+    win_avg_debt = _avg_optional_number(wins, "debt_to_assets")
+    loss_avg_debt = _avg_optional_number(losses, "debt_to_assets")
     features: list[dict[str, Any]] = []
     if target == "loss":
         if loss_avg_pe is not None and win_avg_pe is not None and loss_avg_pe > win_avg_pe:
@@ -4749,7 +4836,16 @@ def _build_replay_fundamental_features(
                     "support": 1.0,
                 }
             )
-        return features[:2]
+        if loss_avg_debt is not None and win_avg_debt is not None and loss_avg_debt > win_avg_debt:
+            features.append(
+                {
+                    "id": "loss_higher_debt",
+                    "title": "亏损样本更常集中在资产负债率更高的标的",
+                    "detail": f"亏损单平均资产负债率 {loss_avg_debt:.2f}%，高于盈利单的 {win_avg_debt:.2f}%。",
+                    "support": 1.0,
+                }
+            )
+        return features[:3]
     if win_avg_pb is not None and loss_avg_pb is not None and win_avg_pb <= loss_avg_pb:
         features.append(
             {
@@ -4768,7 +4864,34 @@ def _build_replay_fundamental_features(
                 "support": 1.0,
             }
         )
-    return features[:2]
+    if win_avg_roe is not None and loss_avg_roe is not None and win_avg_roe >= loss_avg_roe:
+        features.append(
+            {
+                "id": "profit_higher_roe",
+                "title": "盈利样本更常分布在 ROE 更高的标的",
+                "detail": f"盈利单平均 ROE {win_avg_roe:.2f}%，高于亏损单的 {loss_avg_roe:.2f}%。",
+                "support": 1.0,
+            }
+        )
+    if win_avg_margin is not None and loss_avg_margin is not None and win_avg_margin >= loss_avg_margin:
+        features.append(
+            {
+                "id": "profit_higher_margin",
+                "title": "盈利样本更常分布在毛利率更高的标的",
+                "detail": f"盈利单平均毛利率 {win_avg_margin:.2f}%，高于亏损单的 {loss_avg_margin:.2f}%。",
+                "support": 1.0,
+            }
+        )
+    if win_avg_growth is not None and loss_avg_growth is not None and win_avg_growth >= loss_avg_growth:
+        features.append(
+            {
+                "id": "profit_higher_growth",
+                "title": "盈利样本更常分布在营收增速更强的标的",
+                "detail": f"盈利单平均营收增速 {win_avg_growth:.2f}%，高于亏损单的 {loss_avg_growth:.2f}%。",
+                "support": 1.0,
+            }
+        )
+    return features[:5]
 
 
 def _avg_optional_number(items: list[dict[str, Any]], key: str) -> float | None:
