@@ -3905,6 +3905,7 @@ def build_optimization_result() -> Callable[[str, dict[str, Any]], dict[str, Any
 def build_replay_result(
     settings: Settings,
     trade_upload_service: TradeUploadService,
+    market_data_service: MarketDataService | None = None,
 ) -> Callable[[str, dict[str, Any]], dict[str, Any]]:
     def _builder(task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         upload = trade_upload_service.get_upload(payload["upload_id"])
@@ -3993,6 +3994,18 @@ def build_replay_result(
         )
 
         replay_market = _infer_replay_market(records)
+        analysis_options = _normalize_replay_analysis_options(payload.get("analysis_options") or {})
+        daily_contexts = _build_replay_daily_contexts(
+            records=records,
+            replay_market=replay_market,
+            analysis_options=analysis_options,
+            market_data_service=market_data_service,
+        )
+        analysis_scope = _build_replay_analysis_scope(
+            replay_market=replay_market,
+            analysis_options=analysis_options,
+            daily_contexts=daily_contexts,
+        )
         best_side_label = _describe_trade_side(best_side[0], replay_market)
         worst_side_label = _describe_trade_side(worst_side[0], replay_market)
         replay_supports_short = _market_supports_short(replay_market)
@@ -4100,6 +4113,7 @@ def build_replay_result(
             worst_side_label=worst_side_label,
             has_side_comparison=has_side_comparison,
         )
+        loss_features.extend(_build_replay_daily_context_features(daily_contexts, target="loss"))
         profit_features = _build_replay_profit_features(
             records=records,
             market=replay_market,
@@ -4110,6 +4124,7 @@ def build_replay_result(
             best_side=best_side,
             best_side_label=best_side_label,
         )
+        profit_features.extend(_build_replay_daily_context_features(daily_contexts, target="profit"))
         parameter_changes = _build_replay_parameter_changes(suggestion_rules)
         condition_replacements = _build_replay_condition_replacements(suggestion_rules)
         objective_versions = _build_replay_objective_versions(
@@ -4151,6 +4166,7 @@ def build_replay_result(
                 "default_objective_label": "夏普最大",
                 "market": replay_market,
                 "supports_short": replay_supports_short,
+                "analysis_scope": analysis_scope,
             },
             "winning_patterns": [
                 {
@@ -4304,6 +4320,220 @@ def _build_replay_max_drawdown_pct(pnl_values: list[float]) -> float:
         drawdown_pct = ((equity - peak) / peak) * 100.0
         max_drawdown_pct = min(max_drawdown_pct, drawdown_pct)
     return abs(max_drawdown_pct)
+
+
+def _normalize_replay_analysis_options(options: dict[str, Any]) -> dict[str, Any]:
+    lookback_days = int(options.get("lookback_days", 5) or 5)
+    minute_window_minutes = int(options.get("minute_window_minutes", 60) or 60)
+    return {
+        "lookback_days": min(max(lookback_days, 1), 20),
+        "minute_window_minutes": min(max(minute_window_minutes, 15), 240),
+        "include_minute_features": bool(options.get("include_minute_features", False)),
+        "include_fundamentals": bool(options.get("include_fundamentals", False)),
+        "include_market_context": bool(options.get("include_market_context", True)),
+        "auto_market_context": bool(options.get("auto_market_context", True)),
+    }
+
+
+def _build_replay_daily_contexts(
+    *,
+    records: list[TradeRecordItem],
+    replay_market: str,
+    analysis_options: dict[str, Any],
+    market_data_service: MarketDataService | None,
+) -> list[dict[str, Any]]:
+    if market_data_service is None or replay_market != "cn_a_share":
+        return []
+    lookback_days = int(analysis_options["lookback_days"])
+    contexts: list[dict[str, Any]] = []
+    bars_by_symbol: dict[str, list[Any]] = {}
+    record_dates = [item.entry_time.date() for item in records]
+    if not record_dates:
+        return []
+    start_date = min(record_dates) - timedelta(days=lookback_days + 10)
+    end_date = max(record_dates) + timedelta(days=5)
+    for symbol in {item.symbol for item in records if item.symbol.endswith((".SH", ".SZ", ".BJ"))}:
+        try:
+            bars, _data_source = market_data_service.load_daily_bars(
+                ts_code=symbol,
+                start_date=start_date,
+                end_date=end_date,
+                adjustment_mode="qfq",
+            )
+        except Exception:
+            continue
+        bars_by_symbol[symbol] = bars
+
+    for item in records:
+        bars = bars_by_symbol.get(item.symbol)
+        if not bars:
+            continue
+        entry_date = item.entry_time.date()
+        entry_index = next(
+            (index for index, bar in enumerate(bars) if date.fromisoformat(bar.trade_date) >= entry_date),
+            None,
+        )
+        if entry_index is None:
+            continue
+        prior_bars = bars[max(0, entry_index - lookback_days):entry_index]
+        if len(prior_bars) < 3:
+            continue
+        ma_bars = bars[max(0, entry_index - 5):entry_index]
+        if not ma_bars:
+            continue
+        entry_bar = bars[entry_index]
+        start_bar = prior_bars[0]
+        avg_volume = sum(float(bar.volume or 0.0) for bar in prior_bars) / len(prior_bars)
+        ma5 = sum(float(bar.close) for bar in ma_bars) / len(ma_bars)
+        prior_return_pct = (
+            ((float(entry_bar.close) - float(start_bar.close)) / float(start_bar.close)) * 100.0
+            if float(start_bar.close) != 0
+            else 0.0
+        )
+        volume_ratio = (float(entry_bar.volume or 0.0) / avg_volume) if avg_volume else None
+        trend_regime = "trend" if float(entry_bar.close) >= ma5 and prior_return_pct >= 0 else "range"
+        contexts.append(
+            {
+                "trade_id": item.trade_id,
+                "symbol": item.symbol,
+                "pnl": item.pnl,
+                "prior_return_pct": round(prior_return_pct, 2),
+                "volume_ratio": round(volume_ratio, 2) if volume_ratio is not None else None,
+                "above_ma5": float(entry_bar.close) >= ma5,
+                "trend_regime": trend_regime,
+            }
+        )
+    return contexts
+
+
+def _build_replay_analysis_scope(
+    *,
+    replay_market: str,
+    analysis_options: dict[str, Any],
+    daily_contexts: list[dict[str, Any]],
+) -> dict[str, Any]:
+    labels = ["方向表现", "持有时间"]
+    if daily_contexts:
+        labels.extend(["量价结构", "均线位置"])
+    if analysis_options["include_market_context"]:
+        labels.append("市场环境")
+    if analysis_options["include_minute_features"]:
+        labels.append("分钟级特征")
+    if analysis_options["include_fundamentals"]:
+        labels.append("基本面")
+    return {
+        "lookback_days": analysis_options["lookback_days"],
+        "minute_window_minutes": analysis_options["minute_window_minutes"],
+        "include_market_context": analysis_options["include_market_context"],
+        "auto_market_context": analysis_options["auto_market_context"],
+        "include_minute_features": analysis_options["include_minute_features"],
+        "include_fundamentals": analysis_options["include_fundamentals"],
+        "labels": labels,
+        "daily_context_status": "ready" if daily_contexts else "unavailable",
+        "minute_feature_status": "pending" if analysis_options["include_minute_features"] else "disabled",
+        "fundamental_status": "pending" if analysis_options["include_fundamentals"] else "disabled",
+        "market": replay_market,
+    }
+
+
+def _build_replay_daily_context_features(
+    contexts: list[dict[str, Any]],
+    *,
+    target: str,
+) -> list[dict[str, Any]]:
+    if not contexts:
+        return []
+    wins = [item for item in contexts if item["pnl"] > 0]
+    losses = [item for item in contexts if item["pnl"] <= 0]
+    if not wins or not losses:
+        return []
+
+    features: list[dict[str, Any]] = []
+    win_avg_volume_ratio = _avg_optional_number(wins, "volume_ratio")
+    loss_avg_volume_ratio = _avg_optional_number(losses, "volume_ratio")
+    win_avg_prior_return = _avg_optional_number(wins, "prior_return_pct")
+    loss_avg_prior_return = _avg_optional_number(losses, "prior_return_pct")
+    win_above_ma_rate = sum(1 for item in wins if item["above_ma5"]) / len(wins)
+    loss_above_ma_rate = sum(1 for item in losses if item["above_ma5"]) / len(losses)
+    win_trend_rate = sum(1 for item in wins if item["trend_regime"] == "trend") / len(wins)
+    loss_range_rate = sum(1 for item in losses if item["trend_regime"] == "range") / len(losses)
+
+    if target == "loss":
+        if loss_avg_volume_ratio is not None and win_avg_volume_ratio is not None and loss_avg_volume_ratio > win_avg_volume_ratio + 0.3:
+            features.append(
+                {
+                    "id": "loss_volume_chase",
+                    "title": "亏损样本更常出现在放量追入时",
+                    "detail": (
+                        f"亏损单入场日平均量比 {loss_avg_volume_ratio:.2f}，高于盈利单的 {win_avg_volume_ratio:.2f}。"
+                        "说明追高式入场需要更强过滤。"
+                    ),
+                    "support": round(loss_avg_volume_ratio / max(loss_avg_volume_ratio + win_avg_volume_ratio, 0.01), 2),
+                }
+            )
+        if loss_avg_prior_return is not None and win_avg_prior_return is not None and loss_avg_prior_return > win_avg_prior_return + 2:
+            features.append(
+                {
+                    "id": "loss_after_extended_move",
+                    "title": "亏损样本更常出现在短期涨幅过大后入场",
+                    "detail": (
+                        f"亏损单入场前窗口平均涨幅 {loss_avg_prior_return:.2f}%，明显高于盈利单的 {win_avg_prior_return:.2f}%。"
+                    ),
+                    "support": round(loss_range_rate, 2),
+                }
+            )
+        if loss_range_rate >= 0.5:
+            features.append(
+                {
+                    "id": "loss_range_regime",
+                    "title": "震荡环境里更容易出现亏损样本",
+                    "detail": f"当前亏损样本里有 {round(loss_range_rate * 100)}% 出现在震荡环境，后续应强化环境过滤。",
+                    "support": round(loss_range_rate, 2),
+                }
+            )
+        return features[:3]
+
+    if win_above_ma_rate > loss_above_ma_rate:
+        features.append(
+            {
+                "id": "profit_above_ma5",
+                "title": "盈利样本更常在站上5日线时出现",
+                "detail": (
+                    f"盈利单入场时站上 5 日线的比例为 {round(win_above_ma_rate * 100)}%，"
+                    f"高于亏损单的 {round(loss_above_ma_rate * 100)}%。"
+                ),
+                "support": round(win_above_ma_rate, 2),
+            }
+        )
+    if win_trend_rate >= 0.5:
+        features.append(
+            {
+                "id": "profit_trend_regime",
+                "title": "趋势环境下更容易保留盈利结构",
+                "detail": f"当前盈利样本里有 {round(win_trend_rate * 100)}% 出现在趋势环境，可作为后续开仓过滤参考。",
+                "support": round(win_trend_rate, 2),
+            }
+        )
+    if win_avg_volume_ratio is not None and loss_avg_volume_ratio is not None and win_avg_volume_ratio <= loss_avg_volume_ratio:
+        features.append(
+            {
+                "id": "profit_not_overheated",
+                "title": "盈利样本的量能更偏健康而非过热",
+                "detail": (
+                    f"盈利单平均量比 {win_avg_volume_ratio:.2f}，没有高于亏损单的 {loss_avg_volume_ratio:.2f}。"
+                    "更适合保留量能健康而非过热的入场。"
+                ),
+                "support": round(win_trend_rate, 2),
+            }
+        )
+    return features[:3]
+
+
+def _avg_optional_number(items: list[dict[str, Any]], key: str) -> float | None:
+    values = [float(item[key]) for item in items if isinstance(item.get(key), (int, float))]
+    if not values:
+        return None
+    return sum(values) / len(values)
 
 
 def _build_replay_loss_features(

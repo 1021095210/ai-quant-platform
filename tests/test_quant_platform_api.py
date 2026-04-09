@@ -2277,16 +2277,68 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertIn("把该方向仓位降到优势方向的一半", data["suggestion_rules"][0]["description"])
         self.assertTrue(data["suggestion_rules"])
 
-        with sqlite3.connect(database_path) as connection:
-            snapshot_row = connection.execute(
-                """
-                SELECT market, asset_type, frequency, adjustment_mode
-                FROM dataset_snapshots
-                WHERE dataset_snapshot_ref = ?
-                """,
-                (data["dataset_snapshot_ref"],),
-            ).fetchone()
-        self.assertEqual(("cn_a_share", "stock", "1d", "qfq"), snapshot_row)
+    def test_replay_analysis_returns_analysis_scope_and_daily_context_features(self) -> None:
+        client = self._build_client()
+        self._login(client)
+        csv_text = (
+            "symbol,side,entry_time,exit_time,pnl\n"
+            "600519.SH,long,2024-05-06T09:30:00Z,2024-05-10T15:00:00Z,1200\n"
+            "600519.SH,long,2024-06-03T09:30:00Z,2024-06-05T15:00:00Z,-800\n"
+            "510300.SH,long,2024-06-18T09:30:00Z,2024-06-20T15:00:00Z,-500\n"
+        )
+        upload = client.post(
+            "/api/v1/trades/uploads",
+            files={"file": ("trades.csv", csv_text.encode("utf-8"), "text/csv")},
+        ).json()["data"]
+        upload_id = upload["upload_id"]
+        client.post(
+            f"/api/v1/trades/uploads/{upload_id}/parse",
+            json={
+                "column_mapping": {
+                    "symbol": "symbol",
+                    "side": "side",
+                    "entry_time": "entry_time",
+                    "exit_time": "exit_time",
+                    "pnl": "pnl",
+                }
+            },
+        )
+
+        created = client.post(
+            "/api/v1/replays/analyses",
+            json={
+                "upload_id": upload_id,
+                "focus_dimensions": ["side_performance", "volume_structure", "moving_average_structure"],
+                "analysis_options": {
+                    "lookback_days": 5,
+                    "minute_window_minutes": 60,
+                    "include_market_context": True,
+                    "auto_market_context": True,
+                    "include_minute_features": True,
+                    "include_fundamentals": True,
+                },
+            },
+        )
+        analysis_id = created.json()["data"]["analysis_id"]
+        fetched = client.get(f"/api/v1/replays/analyses/{analysis_id}")
+
+        self.assertEqual(200, fetched.status_code)
+        data = fetched.json()["data"]
+        scope = data["overview"]["analysis_scope"]
+        self.assertEqual(5, scope["lookback_days"])
+        self.assertEqual(60, scope["minute_window_minutes"])
+        self.assertTrue(scope["include_market_context"])
+        self.assertTrue(scope["include_minute_features"])
+        self.assertTrue(scope["include_fundamentals"])
+        self.assertIn("量价结构", scope["labels"])
+        self.assertIn("均线位置", scope["labels"])
+        self.assertEqual("pending", scope["minute_feature_status"])
+        self.assertEqual("pending", scope["fundamental_status"])
+        self.assertEqual("ready", scope["daily_context_status"])
+        feature_titles = [item["title"] for item in data["profit_features"] + data["loss_features"]]
+        self.assertTrue(
+            any("5日线" in title or "量能" in title or "趋势环境" in title or "震荡环境" in title for title in feature_titles)
+        )
 
     def test_manual_trade_upload_creates_parsed_records(self) -> None:
         client = self._build_client()

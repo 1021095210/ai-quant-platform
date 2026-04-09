@@ -91,6 +91,12 @@ const nodes = {
     screenshot: document.querySelector("#source-panel-screenshot"),
     manual: document.querySelector("#source-panel-manual"),
   },
+  replayLookbackDays: document.querySelector("#replay-lookback-days"),
+  replayMinuteWindow: document.querySelector("#replay-minute-window"),
+  includeMarketContext: document.querySelector("#replay-include-market-context"),
+  autoMarketContext: document.querySelector("#replay-auto-market-context"),
+  includeMinuteFeatures: document.querySelector("#replay-include-minute-features"),
+  includeFundamentals: document.querySelector("#replay-include-fundamentals"),
 };
 
 applySourceMode("csv");
@@ -348,6 +354,14 @@ async function runReplay() {
       upload_id: state.uploadId,
       focus_dimensions: ["side_performance", "holding_time"],
       custom_prompt: "结合中国股票和 ETF 交易特性总结问题",
+      analysis_options: {
+        lookback_days: Number(nodes.replayLookbackDays.value || 5),
+        minute_window_minutes: Number(nodes.replayMinuteWindow.value || 60),
+        include_market_context: nodes.includeMarketContext.checked,
+        auto_market_context: nodes.autoMarketContext.checked,
+        include_minute_features: nodes.includeMinuteFeatures.checked,
+        include_fundamentals: nodes.includeFundamentals.checked,
+      },
     }),
   });
   const result = await pollTask(created.data.status_url);
@@ -370,6 +384,7 @@ async function runReplay() {
 }
 
 function renderReplayOverview(overview) {
+  const scope = overview.analysis_scope || {};
   const items = [
     ["样本交易数", overview.trade_count],
     ["胜率", overview.win_rate_pct != null ? `${overview.win_rate_pct}%` : "-"],
@@ -377,6 +392,11 @@ function renderReplayOverview(overview) {
     ["平均盈利", overview.avg_win != null ? overview.avg_win : "-"],
     ["平均亏损", overview.avg_loss != null ? overview.avg_loss : "-"],
     ["默认目标", overview.default_objective_label || "-"],
+    ["分析维度", (scope.labels || []).join(" / ") || "-"],
+    ["日线回看窗口", scope.lookback_days ? `前 ${scope.lookback_days} 个交易日` : "-"],
+    ["分钟级观察窗口", scope.minute_window_minutes ? `前 ${scope.minute_window_minutes} 分钟` : "-"],
+    ["分钟级特征状态", replayAnalysisStatusLabel(scope.minute_feature_status)],
+    ["基本面复盘状态", replayAnalysisStatusLabel(scope.fundamental_status)],
   ];
   nodes.overview.innerHTML = items
     .map(
@@ -388,6 +408,19 @@ function renderReplayOverview(overview) {
       `,
     )
     .join("");
+}
+
+function replayAnalysisStatusLabel(value) {
+  if (value === "pending") {
+    return "已开启，等待接入真实数据";
+  }
+  if (value === "ready") {
+    return "已接入";
+  }
+  if (value === "disabled") {
+    return "未开启";
+  }
+  return value || "-";
 }
 
 function renderReplayFeatureList(container, items, emptyText) {
