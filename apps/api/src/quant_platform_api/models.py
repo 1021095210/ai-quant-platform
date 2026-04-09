@@ -336,8 +336,16 @@ class ReplayResult(BaseModel):
     feature_snapshot_ref: str | None = None
     analysis_rule_version: str
     summary: str | None = None
+    concise_summary: str | None = None
+    overview: dict[str, Any] = Field(default_factory=dict)
     winning_patterns: list[dict[str, Any]] = Field(default_factory=list)
     losing_patterns: list[dict[str, Any]] = Field(default_factory=list)
+    loss_features: list[dict[str, Any]] = Field(default_factory=list)
+    profit_features: list[dict[str, Any]] = Field(default_factory=list)
+    objective_versions: list[dict[str, Any]] = Field(default_factory=list)
+    parameter_changes: list[dict[str, Any]] = Field(default_factory=list)
+    condition_replacements: list[dict[str, Any]] = Field(default_factory=list)
+    trade_records: list[dict[str, Any]] = Field(default_factory=list)
     suggestion_rules: list[dict[str, Any]] = Field(default_factory=list)
     error: ErrorPayload | None = None
 

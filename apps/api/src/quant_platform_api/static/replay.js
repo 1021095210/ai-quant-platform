@@ -7,6 +7,8 @@ const state = {
   replayReady: false,
   sourceMode: "csv",
   manualTrades: [],
+  objectiveVersions: [],
+  selectedObjective: "sharpe_max",
 };
 
 const SOURCE_MODE_META = {
@@ -65,6 +67,14 @@ const nodes = {
   uploadId: document.querySelector("#current-upload-id"),
   recordsBody: document.querySelector("#replay-records-body"),
   summary: document.querySelector("#replay-summary"),
+  overview: document.querySelector("#replay-overview"),
+  lossFeatures: document.querySelector("#replay-loss-features"),
+  profitFeatures: document.querySelector("#replay-profit-features"),
+  objectiveTabs: document.querySelector("#replay-objective-tabs"),
+  objectiveDetail: document.querySelector("#replay-objective-detail"),
+  parameterChanges: document.querySelector("#replay-parameter-changes"),
+  conditionReplacements: document.querySelector("#replay-condition-replacements"),
+  tradeRecords: document.querySelector("#replay-trade-records"),
   rules: document.querySelector("#replay-rules"),
   uploadButton: document.querySelector("#upload-trades-btn"),
   uploadScreenshotButton: document.querySelector("#upload-screenshot-btn"),
@@ -341,20 +351,274 @@ async function runReplay() {
     }),
   });
   const result = await pollTask(created.data.status_url);
-  nodes.summary.textContent = result.summary || "暂无总结。";
-  nodes.rules.innerHTML = (result.suggestion_rules || [])
+  state.objectiveVersions = result.objective_versions || [];
+  const defaultObjective =
+    state.objectiveVersions.find((item) => item.is_default)?.objective || "sharpe_max";
+  state.selectedObjective = defaultObjective;
+  nodes.summary.textContent = result.concise_summary || result.summary || "暂无总结。";
+  renderReplayOverview(result.overview || {});
+  renderReplayFeatureList(nodes.lossFeatures, result.loss_features || [], "尚未提取亏损特征。");
+  renderReplayFeatureList(nodes.profitFeatures, result.profit_features || [], "尚未提取盈利特征。");
+  renderReplayObjectiveTabs();
+  renderReplayObjectiveDetail();
+  renderReplayParameterChanges(result.parameter_changes || []);
+  renderReplayConditionReplacements(result.condition_replacements || []);
+  renderReplayRules(result.suggestion_rules || []);
+  renderReplayTradeRecords(result.trade_records || []);
+  syncReplayActionState();
+  setStatus("AI 复盘完成。");
+}
+
+function renderReplayOverview(overview) {
+  const items = [
+    ["样本交易数", overview.trade_count],
+    ["胜率", overview.win_rate_pct != null ? `${overview.win_rate_pct}%` : "-"],
+    ["总盈亏", overview.total_pnl != null ? overview.total_pnl : "-"],
+    ["平均盈利", overview.avg_win != null ? overview.avg_win : "-"],
+    ["平均亏损", overview.avg_loss != null ? overview.avg_loss : "-"],
+    ["默认目标", overview.default_objective_label || "-"],
+  ];
+  nodes.overview.innerHTML = items
     .map(
-      (item) => `
-        <div class="list-item">
-          <strong>${item.title}</strong>
-          <div class="muted-note">${item.description || "无描述"}</div>
-          <pre class="result-box light" style="margin-top:12px">${JSON.stringify(item.dsl_patch, null, 2)}</pre>
+      ([label, value]) => `
+        <div class="list-item compact-item">
+          <strong>${label}</strong>
+          <div class="muted-note">${value ?? "-"}</div>
         </div>
       `,
     )
     .join("");
-  syncReplayActionState();
-  setStatus("AI 复盘完成。");
+}
+
+function renderReplayFeatureList(container, items, emptyText) {
+  container.innerHTML = items.length
+    ? items
+        .map(
+          (item, index) => `
+            <div class="list-item compact-item">
+              <strong>Top ${index + 1} · ${item.title}</strong>
+              <div class="muted-note">${item.detail || "无说明"}</div>
+              <div class="muted-note">命中 / 支持度：${formatPercent(item.support)}</div>
+            </div>
+          `,
+        )
+        .join("")
+    : emptyText;
+}
+
+function renderReplayObjectiveTabs() {
+  nodes.objectiveTabs.innerHTML = state.objectiveVersions.length
+    ? state.objectiveVersions
+        .map(
+          (item) => `
+            <button
+              class="btn ${item.objective === state.selectedObjective ? "secondary active" : "ghost"} replay-objective-btn"
+              type="button"
+              data-objective="${item.objective}"
+            >
+              ${item.label}
+            </button>
+          `,
+        )
+        .join("")
+    : "";
+  nodes.objectiveTabs.querySelectorAll("[data-objective]").forEach((node) => {
+    node.addEventListener("click", () => {
+      state.selectedObjective = node.dataset.objective;
+      renderReplayObjectiveTabs();
+      renderReplayObjectiveDetail();
+    });
+  });
+}
+
+function renderReplayObjectiveDetail() {
+  if (!state.objectiveVersions.length) {
+    nodes.objectiveDetail.innerHTML = "尚未生成优化目标版本。";
+    return;
+  }
+  const current =
+    state.objectiveVersions.find((item) => item.objective === state.selectedObjective) ||
+    state.objectiveVersions[0];
+  const curvePoints = current.equity_curve || [];
+  const maxEquity = curvePoints.reduce(
+    (acc, item) => Math.max(acc, Number(item.equity || 0)),
+    0,
+  );
+  const minEquity = curvePoints.reduce(
+    (acc, item) => Math.min(acc, Number(item.equity || 0)),
+    0,
+  );
+  const range = Math.max(maxEquity - minEquity, 1);
+  const polyline = curvePoints
+    .map((item, index) => {
+      const x = curvePoints.length > 1 ? (index / (curvePoints.length - 1)) * 100 : 0;
+      const y = 100 - ((Number(item.equity || 0) - minEquity) / range) * 100;
+      return `${x},${y}`;
+    })
+    .join(" ");
+  nodes.objectiveDetail.innerHTML = `
+    <div class="list-item">
+      <strong>${current.label}</strong>
+      <div class="muted-note">${current.summary || "暂无说明"}</div>
+      <div class="muted-note">${current.comparison_note || ""}</div>
+      <div class="muted-note" style="margin-top:8px;">核心调整：${(current.key_adjustments || []).join("；") || "暂无"}</div>
+      ${renderReplayObjectiveMetrics(current.metrics || {}, current.baseline_metrics || {})}
+      <div class="result-box light" style="margin-top:12px;">
+        <strong>收益曲线</strong>
+        <svg viewBox="0 0 100 100" preserveAspectRatio="none" style="width:100%;height:140px;display:block;margin-top:10px;">
+          <polyline fill="none" stroke="#0f766e" stroke-width="2.5" points="${polyline}" />
+        </svg>
+      </div>
+      <div class="table-wrap" style="margin-top:12px;">
+        <table>
+          <thead>
+            <tr>
+              <th>标的</th>
+              <th>买入时间</th>
+              <th>卖出时间</th>
+              <th>买入价</th>
+              <th>卖出价</th>
+              <th>持仓时长</th>
+              <th>盈亏比例</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${renderReplayTradeRows(current.trade_records || [])}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
+}
+
+function renderReplayObjectiveMetrics(metrics, baselineMetrics) {
+  const items = [
+    ["交易数", metrics.trade_count, baselineMetrics.trade_count],
+    ["总盈亏", metrics.total_pnl, baselineMetrics.total_pnl],
+    ["胜率", metrics.win_rate_pct != null ? `${metrics.win_rate_pct}%` : "-", baselineMetrics.win_rate_pct != null ? `${baselineMetrics.win_rate_pct}%` : "-"],
+    ["样本回撤", metrics.max_drawdown_pct != null ? `${metrics.max_drawdown_pct}%` : "-", baselineMetrics.max_drawdown_pct != null ? `${baselineMetrics.max_drawdown_pct}%` : "-"],
+    ["样本夏普近似", metrics.sharpe_like ?? "-", baselineMetrics.sharpe_like ?? "-"],
+  ];
+  return `
+    <div class="grid-2" style="margin-top:12px;">
+      ${items
+        .map(
+          ([label, value, baseline]) => `
+            <div class="result-box light">
+              <strong>${label}</strong>
+              <div class="muted-note" style="margin-top:6px;">当前版本：${value ?? "-"}</div>
+              <div class="muted-note">原样本：${baseline ?? "-"}</div>
+            </div>
+          `,
+        )
+        .join("")}
+    </div>
+  `;
+}
+
+function renderReplayParameterChanges(items) {
+  nodes.parameterChanges.innerHTML = items.length
+    ? items
+        .map(
+          (item) => `
+            <div class="list-item compact-item">
+              <strong>${item.parameter}</strong>
+              <div class="muted-note">旧值：${item.old_value} → 新值：${item.new_value}</div>
+              <div class="muted-note">${item.reason || "无说明"}</div>
+            </div>
+          `,
+        )
+        .join("")
+    : "尚未生成参数改动列表。";
+}
+
+function renderReplayConditionReplacements(items) {
+  nodes.conditionReplacements.innerHTML = items.length
+    ? items
+        .map(
+          (item) => `
+            <div class="list-item compact-item">
+              <strong>${item.reason || "条件替换"}</strong>
+              <div class="muted-note">原条件：${item.from}</div>
+              <div class="muted-note">推荐替换：${item.to}</div>
+            </div>
+          `,
+        )
+        .join("")
+    : "尚未生成条件替换建议。";
+}
+
+function renderReplayRules(items) {
+  nodes.rules.innerHTML = items.length
+    ? items
+        .map(
+          (item) => `
+            <div class="list-item">
+              <strong>${item.title}</strong>
+              <div class="muted-note">${item.description || "无描述"}</div>
+              <pre class="result-box light" style="margin-top:12px">${JSON.stringify(item.dsl_patch, null, 2)}</pre>
+            </div>
+          `,
+        )
+        .join("")
+    : "尚未生成建议规则。";
+}
+
+function renderReplayTradeRecords(items) {
+  nodes.tradeRecords.innerHTML = items.length
+    ? `
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>标的</th>
+              <th>买入时间</th>
+              <th>卖出时间</th>
+              <th>买入价</th>
+              <th>卖出价</th>
+              <th>持仓时长</th>
+              <th>盈亏比例</th>
+            </tr>
+          </thead>
+          <tbody>${renderReplayTradeRows(items)}</tbody>
+        </table>
+      </div>
+    `
+    : "尚未生成成交记录对照。";
+}
+
+function renderReplayTradeRows(items) {
+  return items.length
+    ? items
+        .map(
+          (item) => `
+            <tr>
+              <td>${item.symbol}</td>
+              <td>${formatTime(item.entry_time)}</td>
+              <td>${formatTime(item.exit_time)}</td>
+              <td>${item.entry_price ?? "-"}</td>
+              <td>${item.exit_price ?? "-"}</td>
+              <td>${item.holding_label || "-"}</td>
+              <td class="${Number(item.pnl || 0) >= 0 ? "positive" : "negative"}">${item.pnl_pct != null ? `${item.pnl_pct}%` : "-"}</td>
+            </tr>
+          `,
+        )
+        .join("")
+    : '<tr><td colspan="7" class="empty-state">暂无成交记录。</td></tr>';
+}
+
+function formatTime(value) {
+  if (!value) {
+    return "-";
+  }
+  return value.replace("T", " ").replace("Z", "").slice(0, 16);
+}
+
+function formatPercent(value) {
+  if (typeof value !== "number") {
+    return "-";
+  }
+  return `${Math.round(value * 100)}%`;
 }
 
 function applySourceMode(mode) {
