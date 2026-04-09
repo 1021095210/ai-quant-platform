@@ -7,6 +7,7 @@ import hashlib
 import httpx
 from io import BytesIO, StringIO
 import json
+import math
 import re
 from time import sleep
 from typing import Any, Callable
@@ -3964,6 +3965,32 @@ def build_replay_result(
             if loss_records
             else 0.0
         )
+        all_holding_minutes = [
+            _holding_minutes(item.entry_time, item.exit_time) for item in records
+        ]
+        avg_holding_minutes = (
+            round(sum(all_holding_minutes) / len(all_holding_minutes), 2)
+            if all_holding_minutes
+            else 0.0
+        )
+        avg_win_holding_minutes = (
+            round(
+                sum(_holding_minutes(item.entry_time, item.exit_time) for item in win_records)
+                / len(win_records),
+                2,
+            )
+            if win_records
+            else 0.0
+        )
+        avg_loss_holding_minutes = (
+            round(
+                sum(_holding_minutes(item.entry_time, item.exit_time) for item in loss_records)
+                / len(loss_records),
+                2,
+            )
+            if loss_records
+            else 0.0
+        )
 
         replay_market = _infer_replay_market(records)
         best_side_label = _describe_trade_side(best_side[0], replay_market)
@@ -4059,6 +4086,52 @@ def build_replay_result(
                 f"{best_side[1]['pnl_sum']:.2f}，平均持有 {best_side[1]['avg_holding_minutes']:.2f} 分钟。"
                 "下一步建议优先优化入场过滤、止损阈值和持有周期，而不是做方向优劣比较。"
             )
+        trade_records = _build_replay_trade_records(records)
+        equity_curve = _build_replay_equity_curve(records)
+        loss_features = _build_replay_loss_features(
+            records=records,
+            market=replay_market,
+            total_count=total_count,
+            avg_win=avg_win,
+            avg_loss=avg_loss,
+            avg_win_holding_minutes=avg_win_holding_minutes,
+            avg_loss_holding_minutes=avg_loss_holding_minutes,
+            worst_side=worst_side,
+            worst_side_label=worst_side_label,
+            has_side_comparison=has_side_comparison,
+        )
+        profit_features = _build_replay_profit_features(
+            records=records,
+            market=replay_market,
+            total_count=total_count,
+            avg_win=avg_win,
+            avg_loss=avg_loss,
+            avg_win_holding_minutes=avg_win_holding_minutes,
+            best_side=best_side,
+            best_side_label=best_side_label,
+        )
+        parameter_changes = _build_replay_parameter_changes(suggestion_rules)
+        condition_replacements = _build_replay_condition_replacements(suggestion_rules)
+        objective_versions = _build_replay_objective_versions(
+            records=records,
+            suggestion_rules=suggestion_rules,
+            trade_records=trade_records,
+            best_side=best_side,
+            worst_side=worst_side,
+            has_side_comparison=has_side_comparison,
+            avg_loss=avg_loss,
+            avg_holding_minutes=avg_holding_minutes,
+            avg_loss_holding_minutes=avg_loss_holding_minutes,
+        )
+        concise_summary = _build_replay_concise_summary(
+            total_count=total_count,
+            win_rate=win_rate,
+            total_pnl=total_pnl,
+            best_side_label=best_side_label,
+            has_side_comparison=has_side_comparison,
+            worst_side_label=worst_side_label,
+            loss_features=loss_features,
+        )
         return {
             "analysis_id": task_id,
             "dataset_snapshot_ref": payload["data_snapshot"]["dataset_snapshot_ref"],
@@ -4066,6 +4139,19 @@ def build_replay_result(
             "analysis_rule_version": "replay_rule_v1",
             "prompt_template_version": settings.replay_prompt_version,
             "summary": summary,
+            "concise_summary": concise_summary,
+            "overview": {
+                "trade_count": total_count,
+                "win_rate_pct": round(win_rate * 100.0, 2),
+                "total_pnl": round(total_pnl, 2),
+                "avg_win": round(avg_win, 2),
+                "avg_loss": round(avg_loss, 2),
+                "avg_holding_minutes": avg_holding_minutes,
+                "default_objective": "sharpe_max",
+                "default_objective_label": "夏普最大",
+                "market": replay_market,
+                "supports_short": replay_supports_short,
+            },
             "winning_patterns": [
                 {
                     "dimension": "side_performance",
@@ -4092,10 +4178,512 @@ def build_replay_result(
                     "pnl_sum": round(worst_side[1]["pnl_sum"], 2),
                 }
             ],
+            "loss_features": loss_features,
+            "profit_features": profit_features,
+            "objective_versions": objective_versions,
+            "parameter_changes": parameter_changes,
+            "condition_replacements": condition_replacements,
+            "trade_records": trade_records,
             "suggestion_rules": suggestion_rules,
         }
 
     return _builder
+
+
+def _build_replay_concise_summary(
+    *,
+    total_count: int,
+    win_rate: float,
+    total_pnl: float,
+    best_side_label: str,
+    has_side_comparison: bool,
+    worst_side_label: str,
+    loss_features: list[dict[str, Any]],
+) -> str:
+    feature_summary = loss_features[0]["title"] if loss_features else "当前样本暂未形成明显亏损特征"
+    if has_side_comparison:
+        return (
+            f"这批交易共 {total_count} 笔，胜率 {win_rate:.1%}，总盈亏 {total_pnl:.2f}。"
+            f"当前更值得保留的是{best_side_label}，最先要修正的是{worst_side_label}相关出手。"
+            f"从样本里最明显的问题看，优先处理“{feature_summary}”。"
+        )
+    return (
+        f"这批交易共 {total_count} 笔，胜率 {win_rate:.1%}，总盈亏 {total_pnl:.2f}。"
+        f"当前样本主要还是单方向交易，最优先的动作是先修正“{feature_summary}”，"
+        "再决定是否需要扩展更多方向或参数。"
+    )
+
+
+def _build_replay_trade_records(records: list[TradeRecordItem]) -> list[dict[str, Any]]:
+    items = sorted(
+        records,
+        key=lambda item: item.exit_time or item.entry_time,
+    )
+    trade_rows: list[dict[str, Any]] = []
+    for item in items:
+        holding_minutes = round(_holding_minutes(item.entry_time, item.exit_time), 2)
+        trade_rows.append(
+            {
+                "trade_id": item.trade_id,
+                "symbol": item.symbol,
+                "side": item.side,
+                "entry_time": item.entry_time.isoformat(),
+                "exit_time": item.exit_time.isoformat() if item.exit_time else None,
+                "entry_price": item.entry_price,
+                "exit_price": item.exit_price,
+                "holding_minutes": holding_minutes,
+                "holding_label": _format_holding_label(holding_minutes),
+                "pnl": round(item.pnl, 2),
+                "pnl_pct": _infer_trade_pnl_pct(item),
+            }
+        )
+    return trade_rows
+
+
+def _build_replay_equity_curve(records: list[TradeRecordItem]) -> list[dict[str, Any]]:
+    equity = 0.0
+    points: list[dict[str, Any]] = []
+    for index, item in enumerate(
+        sorted(records, key=lambda row: row.exit_time or row.entry_time),
+        start=1,
+    ):
+        equity += item.pnl
+        points.append(
+            {
+                "index": index,
+                "timestamp": (item.exit_time or item.entry_time).isoformat(),
+                "symbol": item.symbol,
+                "pnl": round(item.pnl, 2),
+                "equity": round(equity, 2),
+            }
+        )
+    return points
+
+
+def _build_replay_sample_metrics(records: list[TradeRecordItem]) -> dict[str, Any]:
+    trade_count = len(records)
+    total_pnl = sum(item.pnl for item in records)
+    wins = [item for item in records if item.pnl > 0]
+    losses = [item for item in records if item.pnl <= 0]
+    win_rate_pct = (len(wins) / trade_count * 100.0) if trade_count else 0.0
+    avg_pnl = (total_pnl / trade_count) if trade_count else 0.0
+    pnl_values = [item.pnl for item in records]
+    sharpe_like = _build_replay_sharpe_like(pnl_values)
+    max_drawdown_pct = _build_replay_max_drawdown_pct(pnl_values)
+    return {
+        "trade_count": trade_count,
+        "total_pnl": round(total_pnl, 2),
+        "win_rate_pct": round(win_rate_pct, 2),
+        "avg_pnl": round(avg_pnl, 2),
+        "profit_count": len(wins),
+        "loss_count": len(losses),
+        "max_drawdown_pct": round(max_drawdown_pct, 2),
+        "sharpe_like": round(sharpe_like, 2),
+    }
+
+
+def _build_replay_sharpe_like(pnl_values: list[float]) -> float:
+    if len(pnl_values) < 2:
+        return 0.0
+    mean_value = sum(pnl_values) / len(pnl_values)
+    variance = sum((value - mean_value) ** 2 for value in pnl_values) / (len(pnl_values) - 1)
+    if variance <= 0:
+        return 0.0
+    return (mean_value / math.sqrt(variance)) * math.sqrt(len(pnl_values))
+
+
+def _build_replay_max_drawdown_pct(pnl_values: list[float]) -> float:
+    equity = 0.0
+    peak = 0.0
+    max_drawdown_pct = 0.0
+    for pnl in pnl_values:
+        equity += pnl
+        peak = max(peak, equity)
+        if peak <= 0:
+            continue
+        drawdown_pct = ((equity - peak) / peak) * 100.0
+        max_drawdown_pct = min(max_drawdown_pct, drawdown_pct)
+    return abs(max_drawdown_pct)
+
+
+def _build_replay_loss_features(
+    *,
+    records: list[TradeRecordItem],
+    market: str,
+    total_count: int,
+    avg_win: float,
+    avg_loss: float,
+    avg_win_holding_minutes: float,
+    avg_loss_holding_minutes: float,
+    worst_side: tuple[str, dict[str, float]],
+    worst_side_label: str,
+    has_side_comparison: bool,
+) -> list[dict[str, Any]]:
+    features: list[dict[str, Any]] = []
+    if has_side_comparison and worst_side[1]["count"] > 0 and worst_side[1]["pnl_sum"] < 0:
+        features.append(
+            {
+                "id": "weak_side_drag",
+                "title": f"{worst_side_label}是当前主要拖累方向",
+                "detail": (
+                    f"{worst_side_label}共 {int(worst_side[1]['count'])} 笔，累计盈亏 "
+                    f"{worst_side[1]['pnl_sum']:.2f}。"
+                ),
+                "support": round(worst_side[1]["count"] / total_count, 2) if total_count else 0.0,
+            }
+        )
+    if avg_loss < 0 and abs(avg_loss) > avg_win:
+        features.append(
+            {
+                "id": "loss_bigger_than_win",
+                "title": "平均亏损明显大于平均盈利",
+                "detail": (
+                    f"当前平均盈利 {avg_win:.2f}，平均亏损 {avg_loss:.2f}。"
+                    "说明止损和持有周期需要优先收紧。"
+                ),
+                "support": 1.0,
+            }
+        )
+    if avg_loss_holding_minutes > avg_win_holding_minutes and avg_loss_holding_minutes > 0:
+        features.append(
+            {
+                "id": "loss_hold_too_long",
+                "title": "亏损单平均持有时间更长",
+                "detail": (
+                    f"亏损单平均持有 {avg_loss_holding_minutes:.2f} 分钟，"
+                    f"高于盈利单的 {avg_win_holding_minutes:.2f} 分钟。"
+                ),
+                "support": 1.0,
+            }
+        )
+    if market == "cn_a_share":
+        features.append(
+            {
+                "id": "cn_equity_trend_filter",
+                "title": "A股样本优先检查趋势和量能过滤",
+                "detail": "A股现货更容易在弱趋势和缩量环境里反复试错，复盘时应优先看趋势确认和量比过滤。",
+                "support": 1.0,
+            }
+        )
+    if not features:
+        features.append(
+            {
+                "id": "no_clear_loss_pattern",
+                "title": "当前样本尚未形成强亏损共性",
+                "detail": "建议继续积累样本，至少补到 20 笔同类交易后再做强结论。",
+                "support": 0.0,
+            }
+        )
+    return features[:5]
+
+
+def _build_replay_profit_features(
+    *,
+    records: list[TradeRecordItem],
+    market: str,
+    total_count: int,
+    avg_win: float,
+    avg_loss: float,
+    avg_win_holding_minutes: float,
+    best_side: tuple[str, dict[str, float]],
+    best_side_label: str,
+) -> list[dict[str, Any]]:
+    features: list[dict[str, Any]] = []
+    if best_side[1]["count"] > 0 and best_side[1]["pnl_sum"] > 0:
+        features.append(
+            {
+                "id": "best_side_positive",
+                "title": f"{best_side_label}当前样本表现更稳",
+                "detail": (
+                    f"{best_side_label}共 {int(best_side[1]['count'])} 笔，累计盈亏 "
+                    f"{best_side[1]['pnl_sum']:.2f}。"
+                ),
+                "support": round(best_side[1]["count"] / total_count, 2) if total_count else 0.0,
+            }
+        )
+    if avg_win > 0:
+        features.append(
+            {
+                "id": "positive_avg_win",
+                "title": "样本里已经存在可保留的盈利结构",
+                "detail": (
+                    f"平均盈利 {avg_win:.2f}，说明当前规则里并非没有有效信号，"
+                    "关键是保留有效部分并过滤差的出手。"
+                ),
+                "support": 1.0,
+            }
+        )
+    if avg_win_holding_minutes > 0:
+        features.append(
+            {
+                "id": "win_hold_window",
+                "title": "盈利单已表现出可参考的持有节奏",
+                "detail": f"盈利单平均持有 {avg_win_holding_minutes:.2f} 分钟，可作为后续持仓优化参考。",
+                "support": 1.0,
+            }
+        )
+    if market == "cn_a_share":
+        features.append(
+            {
+                "id": "cn_equity_quality_filter",
+                "title": "A股样本里更适合保留趋势同向和量能健康的出手",
+                "detail": "后续优先把趋势确认、量比过滤和弱开过滤沉淀成稳定规则。",
+                "support": 1.0,
+            }
+        )
+    return features[:5]
+
+
+def _build_replay_objective_versions(
+    *,
+    records: list[TradeRecordItem],
+    suggestion_rules: list[dict[str, Any]],
+    trade_records: list[dict[str, Any]],
+    best_side: tuple[str, dict[str, float]],
+    worst_side: tuple[str, dict[str, float]],
+    has_side_comparison: bool,
+    avg_loss: float,
+    avg_holding_minutes: float,
+    avg_loss_holding_minutes: float,
+) -> list[dict[str, Any]]:
+    suggestion_titles = [item.get("title", "") for item in suggestion_rules if item.get("title")]
+    baseline_metrics = _build_replay_sample_metrics(records)
+    objective_specs = [
+        {
+            "objective": "sharpe_max",
+            "label": "夏普最大",
+            "is_default": True,
+            "summary": "默认主推荐版本，更重视收益质量、稳定性和回撤控制。",
+            "key_adjustments": suggestion_titles[:2] or ["优先收缩弱势方向并加强开仓过滤"],
+        },
+        {
+            "objective": "win_rate_max",
+            "label": "胜率最大",
+            "is_default": False,
+            "summary": "更重视减少无效出手和降低试错频率。",
+            "key_adjustments": suggestion_titles[:2] or ["优先减少低质量开仓"],
+        },
+        {
+            "objective": "max_drawdown_min",
+            "label": "回撤最低",
+            "is_default": False,
+            "summary": "更重视控制亏损扩大和缩短错误持有。",
+            "key_adjustments": suggestion_titles[1:3] or ["优先收紧止损和持有周期"],
+        },
+        {
+            "objective": "total_return_max",
+            "label": "收益最大",
+            "is_default": False,
+            "summary": "更重视保留高收益信号，但需接受更高波动。",
+            "key_adjustments": suggestion_titles[-2:] or ["优先保留已有优势信号并放宽过强过滤"],
+        },
+    ]
+    items: list[dict[str, Any]] = []
+    for spec in objective_specs:
+        selected_records, comparison_note = _select_replay_objective_records(
+            records=records,
+            objective=spec["objective"],
+            best_side=best_side,
+            worst_side=worst_side,
+            has_side_comparison=has_side_comparison,
+            avg_loss=avg_loss,
+            avg_holding_minutes=avg_holding_minutes,
+            avg_loss_holding_minutes=avg_loss_holding_minutes,
+        )
+        selected_trade_rows = _build_replay_trade_records(selected_records)
+        items.append(
+            {
+                **spec,
+                "comparison_note": comparison_note,
+                "metrics": _build_replay_sample_metrics(selected_records),
+                "baseline_metrics": baseline_metrics,
+                "equity_curve": _build_replay_equity_curve(selected_records),
+                "trade_records": selected_trade_rows[:10] or trade_records[:10],
+            }
+        )
+    return items
+
+
+def _select_replay_objective_records(
+    *,
+    records: list[TradeRecordItem],
+    objective: str,
+    best_side: tuple[str, dict[str, float]],
+    worst_side: tuple[str, dict[str, float]],
+    has_side_comparison: bool,
+    avg_loss: float,
+    avg_holding_minutes: float,
+    avg_loss_holding_minutes: float,
+) -> tuple[list[TradeRecordItem], str]:
+    if not records:
+        return [], "当前样本为空，无法生成对照版本。"
+    ordered_records = sorted(records, key=lambda item: item.exit_time or item.entry_time)
+    weak_side = worst_side[0]
+    strong_side = best_side[0]
+    negative_records = [item for item in ordered_records if item.pnl <= 0]
+    worst_loss_value = min((item.pnl for item in ordered_records), default=0.0)
+    worst_loss_cutoff = avg_loss if avg_loss < 0 else worst_loss_value
+    long_loss_minutes = max(avg_loss_holding_minutes, avg_holding_minutes)
+
+    def keep(item: TradeRecordItem) -> bool:
+        if objective == "win_rate_max":
+            return item.pnl > 0
+        if objective == "max_drawdown_min":
+            if item.pnl <= 0 and item.pnl <= min(worst_loss_cutoff / 2 if worst_loss_cutoff else 0.0, -0.01):
+                return False
+            if item.pnl <= 0 and _holding_minutes(item.entry_time, item.exit_time) >= long_loss_minutes:
+                return False
+            if has_side_comparison and weak_side != strong_side and item.side == weak_side and item.pnl <= 0:
+                return False
+            return True
+        if objective == "total_return_max":
+            if negative_records and item.pnl == worst_loss_value:
+                return False
+            return True
+        if has_side_comparison and weak_side != strong_side and item.side == weak_side and item.pnl <= 0:
+            return False
+        if item.pnl < worst_loss_cutoff and _holding_minutes(item.entry_time, item.exit_time) >= long_loss_minutes:
+            return False
+        return True
+
+    selected = [item for item in ordered_records if keep(item)]
+    if not selected:
+        selected = [max(ordered_records, key=lambda item: item.pnl)]
+    removed_count = len(ordered_records) - len(selected)
+    if objective == "win_rate_max":
+        note = (
+            f"这个版本按样本筛选回放，只保留当前样本中更接近高胜率的出手。"
+            f"本次共剔除 {removed_count} 笔负收益记录，用于对照确认。"
+        )
+    elif objective == "max_drawdown_min":
+        note = (
+            f"这个版本按样本筛选回放，优先剔除导致回撤扩大的长持亏损或弱势方向亏损。"
+            f"本次共剔除 {removed_count} 笔记录，用于对照确认。"
+        )
+    elif objective == "total_return_max":
+        note = (
+            f"这个版本按样本筛选回放，优先保留总收益贡献更高的交易，并剔除最拖累收益的样本。"
+            f"本次共剔除 {removed_count} 笔记录，用于对照确认。"
+        )
+    else:
+        note = (
+            f"这个版本按样本筛选回放，优先平衡收益质量、回撤和稳定性。"
+            f"本次共剔除 {removed_count} 笔弱质量样本，用于对照确认。"
+        )
+    return selected, note
+
+
+def _build_replay_parameter_changes(
+    suggestion_rules: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for rule in suggestion_rules:
+        patch = rule.get("dsl_patch") or {}
+        risk = patch.get("risk") or {}
+        filters = patch.get("filters") or {}
+        position = patch.get("position") or {}
+        if "stop_loss_pct" in risk:
+            items.append(
+                {
+                    "parameter": "止损比例",
+                    "old_value": "当前未明确限制",
+                    "new_value": risk["stop_loss_pct"],
+                    "reason": rule.get("title", "复盘建议"),
+                }
+            )
+        if "max_holding_bars" in risk:
+            items.append(
+                {
+                    "parameter": "最大持有K线数",
+                    "old_value": "当前未明确限制",
+                    "new_value": risk["max_holding_bars"],
+                    "reason": rule.get("title", "复盘建议"),
+                }
+            )
+        volume_confirmation = filters.get("volume_confirmation") or {}
+        if "value" in volume_confirmation:
+            items.append(
+                {
+                    "parameter": "量比阈值",
+                    "old_value": "当前未明确限制",
+                    "new_value": volume_confirmation["value"],
+                    "reason": rule.get("title", "复盘建议"),
+                }
+            )
+        trend_confirmation = filters.get("trend_confirmation") or {}
+        if "timeframe" in trend_confirmation or "entry_timeframe" in trend_confirmation:
+            items.append(
+                {
+                    "parameter": "趋势确认周期",
+                    "old_value": "当前未明确限制",
+                    "new_value": trend_confirmation.get("entry_timeframe")
+                    or trend_confirmation.get("timeframe"),
+                    "reason": rule.get("title", "复盘建议"),
+                }
+            )
+        if "reduced_side_size_ratio" in position:
+            items.append(
+                {
+                    "parameter": "弱势方向仓位",
+                    "old_value": "当前等同常规仓位",
+                    "new_value": position["reduced_side_size_ratio"],
+                    "reason": rule.get("title", "复盘建议"),
+                }
+            )
+    return items
+
+
+def _build_replay_condition_replacements(
+    suggestion_rules: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    replacements: list[dict[str, Any]] = []
+    for rule in suggestion_rules:
+        patch = rule.get("dsl_patch") or {}
+        filters = patch.get("filters") or {}
+        if "trend_confirmation" in filters:
+            timeframe = (
+                filters["trend_confirmation"].get("entry_timeframe")
+                or filters["trend_confirmation"].get("timeframe")
+                or "更高周期"
+            )
+            replacements.append(
+                {
+                    "from": "原规则未强制趋势确认",
+                    "to": f"入场前先确认 {timeframe} 趋势同向",
+                    "reason": rule.get("title", "趋势过滤建议"),
+                }
+            )
+        if "volume_confirmation" in filters:
+            replacements.append(
+                {
+                    "from": "原规则未做量能过滤",
+                    "to": f"仅在量比 >= {filters['volume_confirmation'].get('value')} 时允许开仓",
+                    "reason": rule.get("title", "量能过滤建议"),
+                }
+            )
+        if "weak_open_filter" in filters:
+            replacements.append(
+                {
+                    "from": "原规则未限制弱开场景",
+                    "to": "加入弱开过滤，避免开盘承接不足时贸然入场",
+                    "reason": rule.get("title", "弱开过滤建议"),
+                }
+            )
+    return replacements
+
+
+def _infer_trade_pnl_pct(item: TradeRecordItem) -> float | None:
+    if item.entry_price and item.entry_price != 0 and item.exit_price is not None:
+        return round((item.exit_price - item.entry_price) / item.entry_price * 100.0, 2)
+    return None
+
+
+def _format_holding_label(value: float) -> str:
+    if value >= 1440:
+        return f"{round(value / 1440, 1)}天"
+    if value >= 60:
+        return f"{round(value / 60, 1)}小时"
+    return f"{round(value, 1)}分钟"
 
 
 def _holding_minutes(entry_time: datetime, exit_time: datetime | None) -> float:

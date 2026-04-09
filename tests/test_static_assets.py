@@ -85,6 +85,11 @@ class StaticAssetTests(unittest.TestCase):
         self.assertIn('id="trade-manual-smart-text"', replay_html)
         self.assertIn('id="parse-manual-text-btn"', replay_html)
         self.assertIn("长文字智能识别", replay_html)
+        self.assertIn('id="replay-overview"', replay_html)
+        self.assertIn('id="replay-loss-features"', replay_html)
+        self.assertIn('id="replay-profit-features"', replay_html)
+        self.assertIn('id="replay-objective-tabs"', replay_html)
+        self.assertIn('id="replay-objective-detail"', replay_html)
         self.assertIn("/api/v1/trades/uploads/manual/parse-text", replay_js)
         self.assertIn("智能识别并加入记录", replay_js)
 
@@ -589,6 +594,11 @@ console.log('mentor-bootstrapped');
         self.assertIn("sourceModeSteps", replay_js_source)
         self.assertIn("uploadScreenshotTrade", replay_js_source)
         self.assertIn("uploadManualTrades", replay_js_source)
+        self.assertIn("renderReplayOverview", replay_js_source)
+        self.assertIn("renderReplayObjectiveTabs", replay_js_source)
+        self.assertIn("renderReplayObjectiveDetail", replay_js_source)
+        self.assertIn("renderReplayObjectiveMetrics", replay_js_source)
+        self.assertIn("renderReplayTradeRecords", replay_js_source)
         self.assertIn('classList.toggle("primary"', replay_js_source)
         self.assertIn('classList.toggle("active"', replay_js_source)
         self.assertIn('disabled>运行 AI 复盘</button>', replay_html_source)
@@ -604,6 +614,8 @@ console.log('mentor-bootstrapped');
         self.assertIn('return "做空交易" if side == "short" else "做多交易"', services_source)
         self.assertIn('f"{best_side_label}的累计盈亏和整体表现当前更优"', services_source)
         self.assertIn("def _build_single_side_suggestions(", services_source)
+        self.assertIn("def _build_replay_objective_versions(", services_source)
+        self.assertIn("def _build_replay_sample_metrics(", services_source)
 
     def test_mentor_assets_expose_topic_cards_and_structured_answer_sections(self) -> None:
         mentor_html_path = (

@@ -264,16 +264,68 @@
       <section class="grid two" style="margin-top: 22px">
         <section class="card">
           <div class="panel-header">
-            <h3>复盘总结</h3>
+            <h3>精简结论</h3>
           </div>
           <pre id="replay-summary" class="result-box light">尚未运行复盘。</pre>
         </section>
         <section class="card">
           <div class="panel-header">
-            <h3>建议规则</h3>
+            <h3>复盘概览</h3>
           </div>
-          <div id="replay-rules" class="list empty-state">尚未生成建议规则。</div>
+          <div id="replay-overview" class="list empty-state">尚未生成复盘概览。</div>
         </section>
+      </section>
+
+      <section class="grid two" style="margin-top: 22px">
+        <section class="card">
+          <div class="panel-header">
+            <h3>亏损特征</h3>
+          </div>
+          <div id="replay-loss-features" class="list empty-state">尚未提取亏损特征。</div>
+        </section>
+        <section class="card">
+          <div class="panel-header">
+            <h3>盈利特征</h3>
+          </div>
+          <div id="replay-profit-features" class="list empty-state">尚未提取盈利特征。</div>
+        </section>
+      </section>
+
+      <section class="card" style="margin-top: 22px">
+        <div class="panel-header">
+          <h3>优化目标分版本</h3>
+        </div>
+        <div id="replay-objective-tabs" class="choice-pill-grid"></div>
+        <div id="replay-objective-detail" class="list empty-state" style="margin-top: 18px">尚未生成优化目标版本。</div>
+      </section>
+
+      <section class="grid two" style="margin-top: 22px">
+        <section class="card">
+          <div class="panel-header">
+            <h3>旧新参数对比</h3>
+          </div>
+          <div id="replay-parameter-changes" class="list empty-state">尚未生成参数改动列表。</div>
+        </section>
+        <section class="card">
+          <div class="panel-header">
+            <h3>指标条件替换</h3>
+          </div>
+          <div id="replay-condition-replacements" class="list empty-state">尚未生成条件替换建议。</div>
+        </section>
+      </section>
+
+      <section class="card" style="margin-top: 22px">
+        <div class="panel-header">
+          <h3>可回写规则建议</h3>
+        </div>
+        <div id="replay-rules" class="list empty-state">尚未生成建议规则。</div>
+      </section>
+
+      <section class="card" style="margin-top: 22px">
+        <div class="panel-header">
+          <h3>当前样本成交记录</h3>
+        </div>
+        <div id="replay-trade-records" class="list empty-state">尚未生成成交记录对照。</div>
       </section>
     </div>
 
