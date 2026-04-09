@@ -72,6 +72,7 @@ const nodes = {
   profitFeatures: document.querySelector("#replay-profit-features"),
   objectiveTabs: document.querySelector("#replay-objective-tabs"),
   objectiveDetail: document.querySelector("#replay-objective-detail"),
+  counterfactualCases: document.querySelector("#replay-counterfactual-cases"),
   parameterChanges: document.querySelector("#replay-parameter-changes"),
   conditionReplacements: document.querySelector("#replay-condition-replacements"),
   tradeRecords: document.querySelector("#replay-trade-records"),
@@ -375,6 +376,7 @@ async function runReplay() {
   renderReplayFeatureList(nodes.profitFeatures, result.profit_features || [], "尚未提取盈利特征。");
   renderReplayObjectiveTabs();
   renderReplayObjectiveDetail();
+  renderReplayCounterfactualCases(result.counterfactual_cases || []);
   renderReplayParameterChanges(result.parameter_changes || []);
   renderReplayConditionReplacements(result.condition_replacements || []);
   renderReplayRules(result.suggestion_rules || []);
@@ -568,6 +570,64 @@ function renderReplayParameterChanges(items) {
     : "尚未生成参数改动列表。";
 }
 
+function renderReplayCounterfactualCases(items) {
+  nodes.counterfactualCases.innerHTML = items.length
+    ? items
+        .map(
+          (item) => `
+            <details class="list-item">
+              <summary>
+                <strong>Top ${item.rank} · ${item.symbol}</strong>
+                <span class="muted-note" style="margin-left:8px;">${item.summary || ""}</span>
+              </summary>
+              <div class="result-box light" style="margin-top:12px;">
+                <strong>原始路径</strong>
+                <div class="muted-note" style="margin-top:6px;">
+                  买入 ${formatTime(item.original_trade?.entry_time)} · 卖出 ${formatTime(item.original_trade?.exit_time)}
+                </div>
+                <div class="muted-note">
+                  买入价 ${item.original_trade?.entry_price ?? "-"} · 卖出价 ${item.original_trade?.exit_price ?? "-"} ·
+                  持仓 ${item.original_trade?.holding_label || "-"} ·
+                  盈亏 ${item.original_trade?.pnl_pct != null ? `${item.original_trade?.pnl_pct}%` : "-"}
+                </div>
+              </div>
+              <div class="list" style="margin-top:12px;">
+                ${(item.alternatives || [])
+                  .map(
+                    (alternative) => `
+                      <div class="list-item compact-item">
+                        <strong>${alternative.title}</strong>
+                        <div class="muted-note">${alternative.summary || "无说明"}</div>
+                        <div class="muted-note">
+                          结果：${alternative.result_type === "skipped" ? "不成交 / 被过滤" : "真实重放"}
+                          · 盈亏变化 ${formatSignedValue(alternative.comparison?.pnl_delta)}
+                        </div>
+                        ${
+                          alternative.trade_record
+                            ? `
+                              <div class="muted-note">
+                                买入 ${formatTime(alternative.trade_record.entry_time)} · 卖出 ${formatTime(alternative.trade_record.exit_time)}
+                              </div>
+                              <div class="muted-note">
+                                买入价 ${alternative.trade_record.entry_price ?? "-"} · 卖出价 ${alternative.trade_record.exit_price ?? "-"} ·
+                                持仓 ${alternative.trade_record.holding_label || "-"} ·
+                                盈亏 ${alternative.trade_record.pnl_pct != null ? `${alternative.trade_record.pnl_pct}%` : "-"}
+                              </div>
+                            `
+                            : `<div class="muted-note">这条替代路径会直接过滤掉这笔交易。</div>`
+                        }
+                      </div>
+                    `,
+                  )
+                  .join("")}
+              </div>
+            </details>
+          `,
+        )
+        .join("")
+    : "尚未生成单笔反事实复盘。";
+}
+
 function renderReplayConditionReplacements(items) {
   nodes.conditionReplacements.innerHTML = items.length
     ? items
@@ -655,6 +715,14 @@ function formatPercent(value) {
     return "-";
   }
   return `${Math.round(value * 100)}%`;
+}
+
+function formatSignedValue(value) {
+  if (typeof value !== "number") {
+    return "-";
+  }
+  const normalized = Math.round(value * 100) / 100;
+  return normalized > 0 ? `+${normalized}` : `${normalized}`;
 }
 
 function applySourceMode(mode) {

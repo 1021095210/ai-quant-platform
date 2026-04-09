@@ -4170,6 +4170,14 @@ def build_replay_result(
             replay_market=replay_market,
             market_data_service=market_data_service,
         )
+        counterfactual_cases = _build_replay_counterfactual_cases(
+            records=records,
+            replay_market=replay_market,
+            market_data_service=market_data_service,
+            daily_context_by_trade_id=_group_replay_contexts_by_trade_id(daily_contexts),
+            minute_context_by_trade_id=_group_replay_contexts_by_trade_id(minute_contexts),
+            fundamental_context_by_trade_id=_group_replay_contexts_by_trade_id(fundamental_contexts),
+        )
         concise_summary = _build_replay_concise_summary(
             total_count=total_count,
             win_rate=win_rate,
@@ -4229,6 +4237,7 @@ def build_replay_result(
             "loss_features": loss_features,
             "profit_features": profit_features,
             "objective_versions": objective_versions,
+            "counterfactual_cases": counterfactual_cases,
             "parameter_changes": parameter_changes,
             "condition_replacements": condition_replacements,
             "trade_records": trade_records,
@@ -5164,6 +5173,302 @@ def _build_replay_objective_versions(
     return items
 
 
+def _build_replay_counterfactual_cases(
+    *,
+    records: list[TradeRecordItem],
+    replay_market: str,
+    market_data_service: MarketDataService | None,
+    daily_context_by_trade_id: dict[str, dict[str, Any]],
+    minute_context_by_trade_id: dict[str, dict[str, Any]],
+    fundamental_context_by_trade_id: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if replay_market != "cn_a_share" or market_data_service is None:
+        return []
+
+    losing_records = sorted(
+        [item for item in records if item.pnl < 0],
+        key=lambda item: item.pnl,
+    )[:3]
+    cases: list[dict[str, Any]] = []
+    for rank, item in enumerate(losing_records, start=1):
+        case = _build_single_trade_counterfactuals(
+            item=item,
+            rank=rank,
+            market_data_service=market_data_service,
+            daily_context=daily_context_by_trade_id.get(item.trade_id),
+            minute_context=minute_context_by_trade_id.get(item.trade_id),
+            fundamental_context=fundamental_context_by_trade_id.get(item.trade_id),
+        )
+        if case is not None:
+            cases.append(case)
+    return cases
+
+
+def _build_single_trade_counterfactuals(
+    *,
+    item: TradeRecordItem,
+    rank: int,
+    market_data_service: MarketDataService,
+    daily_context: dict[str, Any] | None,
+    minute_context: dict[str, Any] | None,
+    fundamental_context: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    baseline_rerun = _rerun_single_replay_trade(
+        item=item,
+        market_data_service=market_data_service,
+        rule_patch={"filters": {}, "risk": {}},
+        minute_context=minute_context,
+        fundamental_context=fundamental_context,
+    )
+    if baseline_rerun is None:
+        return None
+    original_trade = _build_replay_trade_records([item])[0]
+    alternatives: list[dict[str, Any]] = []
+    for candidate in _build_counterfactual_rule_candidates(
+        item=item,
+        daily_context=daily_context,
+        minute_context=minute_context,
+        fundamental_context=fundamental_context,
+    ):
+        rerun_trade = _rerun_single_replay_trade(
+            item=item,
+            market_data_service=market_data_service,
+            rule_patch=candidate["patch"],
+            minute_context=minute_context,
+            fundamental_context=fundamental_context,
+        )
+        alternatives.append(
+            _build_counterfactual_alternative_result(
+                item=item,
+                original_trade=original_trade,
+                candidate=candidate,
+                rerun_trade=rerun_trade,
+            )
+        )
+
+    if not alternatives:
+        return None
+
+    ranked = sorted(
+        alternatives,
+        key=lambda option: (
+            1 if option["result_type"] == "skipped" else 0,
+            float(option.get("pnl_improvement") or 0.0),
+        ),
+        reverse=True,
+    )
+    recommended = ranked[0]
+    return {
+        "trade_id": item.trade_id,
+        "rank": rank,
+        "symbol": item.symbol,
+        "side": item.side,
+        "summary": (
+            f"这笔亏损交易优先对照不开仓过滤、延迟入场、收紧止损和止盈优化。"
+            f" 当前最值得优先验证的是“{recommended['title']}”。"
+        ),
+        "original_trade": original_trade,
+        "alternatives": alternatives[:5],
+        "recommended_alternative_key": recommended["key"],
+        "recommended_summary": recommended["summary"],
+    }
+
+
+def _build_counterfactual_rule_candidates(
+    *,
+    item: TradeRecordItem,
+    daily_context: dict[str, Any] | None,
+    minute_context: dict[str, Any] | None,
+    fundamental_context: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    return [
+        _build_counterfactual_skip_candidate(
+            daily_context=daily_context,
+            minute_context=minute_context,
+            fundamental_context=fundamental_context,
+        ),
+        {
+            "key": "delayed_entry_confirmation",
+            "title": "延迟入场确认",
+            "kind": "modified_entry",
+            "patch": {
+                "filters": {
+                    "intraday_entry_timing": {
+                        "enabled": True,
+                        "delay_entry_minutes": 15,
+                    }
+                },
+                "risk": {},
+            },
+        },
+        {
+            "key": "tighter_stop_loss",
+            "title": "收紧止损",
+            "kind": "modified_risk",
+            "patch": {
+                "filters": {},
+                "risk": {
+                    "stop_loss_pct": -0.015,
+                    "max_holding_bars": 5,
+                },
+            },
+        },
+        {
+            "key": "take_profit_optimization",
+            "title": "提前止盈保护",
+            "kind": "modified_exit",
+            "patch": {
+                "filters": {},
+                "risk": {
+                    "take_profit_pct": 0.04,
+                    "stop_loss_pct": -0.02,
+                    "max_holding_bars": 8,
+                },
+            },
+        },
+    ]
+
+
+def _build_counterfactual_skip_candidate(
+    *,
+    daily_context: dict[str, Any] | None,
+    minute_context: dict[str, Any] | None,
+    fundamental_context: dict[str, Any] | None,
+) -> dict[str, Any]:
+    filters: dict[str, Any]
+    if minute_context and float(minute_context.get("first_15m_return_pct") or 0.0) >= 1.0:
+        filters = {
+            "intraday_entry_timing": {
+                "enabled": True,
+                "max_first_15m_return_pct": 1.0,
+            }
+        }
+    elif minute_context and float(minute_context.get("close_position_pct") or 100.0) < 50.0:
+        filters = {
+            "intraday_structure": {
+                "enabled": True,
+                "min_close_position_pct": 50,
+                "min_up_bar_ratio": 0.5,
+            }
+        }
+    elif daily_context and (
+        daily_context.get("trend_regime") == "range"
+        or not daily_context.get("above_ma5", True)
+    ):
+        filters = {
+            "market_regime": {
+                "enabled": True,
+                "preferred": "trend",
+            },
+            "trend_confirmation": {
+                "enabled": True,
+                "timeframe": "1d",
+            },
+        }
+    elif fundamental_context and (
+        float(fundamental_context.get("debt_to_assets") or 0.0) >= 60.0
+        or float(fundamental_context.get("roe") or 100.0) < 10.0
+    ):
+        filters = {
+            "fundamental_guard": {
+                "enabled": True,
+                "max_debt_to_assets": 55,
+            },
+            "quality_filter": {
+                "enabled": True,
+                "min_roe": 10,
+            },
+        }
+    else:
+        filters = {
+            "extension_guard": {
+                "enabled": True,
+                "max_prior_return_pct": 2.5,
+            }
+        }
+    return {
+        "key": "skip_trade_filter",
+        "title": "不开仓过滤",
+        "kind": "skip_trade",
+        "patch": {
+            "filters": filters,
+            "risk": {},
+        },
+    }
+
+
+def _build_counterfactual_alternative_result(
+    *,
+    item: TradeRecordItem,
+    original_trade: dict[str, Any],
+    candidate: dict[str, Any],
+    rerun_trade: dict[str, Any] | None,
+) -> dict[str, Any]:
+    original_pnl = float(item.pnl)
+    if rerun_trade is None:
+        pnl_improvement = round(-original_pnl, 2)
+        return {
+            "key": candidate["key"],
+            "title": candidate["title"],
+            "kind": candidate["kind"],
+            "result_type": "skipped",
+            "summary": (
+                f"按“{candidate['title']}”执行后，这笔交易会被过滤掉，"
+                f"可直接避免原本 {original_pnl:.2f} 的亏损。"
+            ),
+            "pnl_improvement": pnl_improvement,
+            "trade_record": None,
+            "patch": candidate["patch"],
+            "comparison": {
+                "original_pnl": round(original_pnl, 2),
+                "counterfactual_pnl": 0.0,
+                "pnl_delta": pnl_improvement,
+                "entry_changed": False,
+                "exit_changed": False,
+            },
+        }
+
+    new_pnl = float(rerun_trade["pnl"])
+    entry_changed = (
+        _normalize_counterfactual_time_value(rerun_trade.get("entry_time"))
+        != _normalize_counterfactual_time_value(original_trade.get("entry_time"))
+        or rerun_trade.get("entry_price") != original_trade.get("entry_price")
+    )
+    exit_changed = (
+        _normalize_counterfactual_time_value(rerun_trade.get("exit_time"))
+        != _normalize_counterfactual_time_value(original_trade.get("exit_time"))
+        or rerun_trade.get("exit_price") != original_trade.get("exit_price")
+    )
+    pnl_improvement = round(new_pnl - original_pnl, 2)
+    improvement_text = "改善" if pnl_improvement >= 0 else "变差"
+    return {
+        "key": candidate["key"],
+        "title": candidate["title"],
+        "kind": candidate["kind"],
+        "result_type": "rerun",
+        "summary": (
+            f"按“{candidate['title']}”重放后，结果从 {original_pnl:.2f} 变为 {new_pnl:.2f}，"
+            f"较原路径{improvement_text} {abs(pnl_improvement):.2f}。"
+        ),
+        "pnl_improvement": pnl_improvement,
+        "trade_record": rerun_trade,
+        "patch": candidate["patch"],
+        "comparison": {
+            "original_pnl": round(original_pnl, 2),
+            "counterfactual_pnl": round(new_pnl, 2),
+            "pnl_delta": pnl_improvement,
+            "entry_changed": entry_changed,
+            "exit_changed": exit_changed,
+        },
+    }
+
+
+def _normalize_counterfactual_time_value(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    return value.replace("Z", "+00:00")
+
+
 def _rerun_replay_records_on_market_data(
     *,
     records: list[TradeRecordItem],
@@ -5473,6 +5778,9 @@ def _rerun_single_replay_trade(
         market_data_service=market_data_service,
         ts_code=item.symbol,
         entry_time=_to_market_local_datetime(item.entry_time, "cn_a_share"),
+        delay_minutes=int(
+            ((filters.get("intraday_entry_timing") or {}).get("delay_entry_minutes") or 0)
+        ),
     )
     entry_price = (
         float(minute_entry["entry_price"])
@@ -5591,9 +5899,11 @@ def _find_replay_intraday_entry(
     market_data_service: MarketDataService,
     ts_code: str,
     entry_time: datetime,
+    delay_minutes: int = 0,
 ) -> dict[str, Any] | None:
     session_start = datetime.combine(entry_time.date(), datetime.min.time()).replace(hour=9, minute=30)
     session_end = datetime.combine(entry_time.date(), datetime.min.time()).replace(hour=15, minute=0)
+    target_time = entry_time + timedelta(minutes=max(delay_minutes, 0))
     minute_bars, metadata = market_data_service.load_minute_window(
         ts_code=ts_code,
         start_time=session_start,
@@ -5607,7 +5917,7 @@ def _find_replay_intraday_entry(
             trade_time = datetime.fromisoformat(bar.trade_time.replace("Z", "+00:00")).replace(tzinfo=None)
         except ValueError:
             continue
-        if trade_time >= entry_time:
+        if trade_time >= target_time:
             return {
                 "entry_time": bar.trade_time,
                 "entry_price": float(bar.open),

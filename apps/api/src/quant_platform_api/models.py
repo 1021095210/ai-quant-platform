@@ -344,6 +344,7 @@ class ReplayResult(BaseModel):
     loss_features: list[dict[str, Any]] = Field(default_factory=list)
     profit_features: list[dict[str, Any]] = Field(default_factory=list)
     objective_versions: list[dict[str, Any]] = Field(default_factory=list)
+    counterfactual_cases: list[dict[str, Any]] = Field(default_factory=list)
     parameter_changes: list[dict[str, Any]] = Field(default_factory=list)
     condition_replacements: list[dict[str, Any]] = Field(default_factory=list)
     trade_records: list[dict[str, Any]] = Field(default_factory=list)
