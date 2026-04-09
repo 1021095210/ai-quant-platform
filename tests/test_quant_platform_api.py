@@ -2657,6 +2657,132 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertTrue(rerun["trade_records"][0]["minute_stop_used"])
         self.assertIn("T10:15:00", rerun["trade_records"][0]["exit_time"])
 
+    def test_replay_market_rerun_uses_real_minute_entry_and_take_profit(self) -> None:
+        class FakeMarketDataService:
+            def load_daily_bars(self, *, ts_code, start_date, end_date, adjustment_mode):
+                return (
+                    [
+                        MarketBar(
+                            ts_code=ts_code,
+                            asset_type="stock",
+                            adjustment_mode="qfq",
+                            trade_date="2024-05-01",
+                            open=10.0,
+                            high=10.2,
+                            low=9.95,
+                            close=10.15,
+                            volume=1000,
+                            amount=10000,
+                            pct_chg=0.0,
+                            turnover=1.0,
+                            data_source="internal_clickhouse_dwd",
+                            fetched_at="2026-04-09T00:00:00",
+                        ),
+                        MarketBar(
+                            ts_code=ts_code,
+                            asset_type="stock",
+                            adjustment_mode="qfq",
+                            trade_date="2024-05-02",
+                            open=10.2,
+                            high=10.8,
+                            low=10.1,
+                            close=10.7,
+                            volume=1200,
+                            amount=11000,
+                            pct_chg=0.0,
+                            turnover=1.2,
+                            data_source="internal_clickhouse_dwd",
+                            fetched_at="2026-04-09T00:00:00",
+                        ),
+                    ],
+                    {"provider": "internal_clickhouse_dwd", "status": "ready"},
+                )
+
+            def load_minute_window(self, *, ts_code, start_time, end_time, adjustment_mode):
+                if start_time.date().isoformat() == "2024-05-01":
+                    return (
+                        [
+                            MinuteBar(
+                                ts_code=ts_code,
+                                trade_time="2024-05-01T09:35:00+08:00",
+                                open=10.05,
+                                high=10.08,
+                                low=10.02,
+                                close=10.06,
+                                volume=120,
+                                amount=1000,
+                                pct_change=0.0,
+                                amplitude=0.0,
+                                data_source="internal_clickhouse_dwd",
+                            ),
+                            MinuteBar(
+                                ts_code=ts_code,
+                                trade_time="2024-05-01T09:36:00+08:00",
+                                open=10.06,
+                                high=10.09,
+                                low=10.05,
+                                close=10.08,
+                                volume=100,
+                                amount=900,
+                                pct_change=0.0,
+                                amplitude=0.0,
+                                data_source="internal_clickhouse_dwd",
+                            ),
+                        ],
+                        {"provider": "internal_clickhouse_dwd", "status": "ready"},
+                    )
+                return (
+                    [
+                        MinuteBar(
+                            ts_code=ts_code,
+                            trade_time="2024-05-02T10:05:00+08:00",
+                            open=10.4,
+                            high=10.7,
+                            low=10.35,
+                            close=10.62,
+                            volume=180,
+                            amount=1400,
+                            pct_change=0.0,
+                            amplitude=0.0,
+                            data_source="internal_clickhouse_dwd",
+                        ),
+                    ],
+                    {"provider": "internal_clickhouse_dwd", "status": "ready"},
+                )
+
+        trade = TradeRecordItem(
+            trade_id="trade_2",
+            symbol="600519.SH",
+            side="long",
+            entry_time=datetime.fromisoformat("2024-05-01T09:35:00+08:00"),
+            exit_time=datetime.fromisoformat("2024-05-02T15:00:00+08:00"),
+            pnl=500.0,
+            entry_price=None,
+            exit_price=None,
+        )
+        rerun = _rerun_replay_records_on_market_data(
+            records=[trade],
+            replay_market="cn_a_share",
+            objective="total_return_max",
+            market_data_service=FakeMarketDataService(),
+            suggestion_rules=[
+                {
+                    "title": "保留更强盈利空间并设置止盈",
+                    "dsl_patch": {"risk": {"max_holding_bars": 2, "take_profit_pct": 0.06, "stop_loss_pct": -0.02}},
+                }
+            ],
+            minute_context_by_trade_id={},
+            fundamental_context_by_trade_id={},
+        )
+
+        self.assertIsNotNone(rerun)
+        assert rerun is not None
+        self.assertEqual("take_profit_intraday_minute", rerun["trade_records"][0]["exit_reason"])
+        self.assertEqual(10.05, rerun["trade_records"][0]["entry_price"])
+        self.assertIn("T09:35:00", rerun["trade_records"][0]["entry_time"])
+        self.assertIn("T10:05:00", rerun["trade_records"][0]["exit_time"])
+        self.assertTrue(rerun["trade_records"][0]["minute_stop_used"])
+
     def test_manual_trade_upload_creates_parsed_records(self) -> None:
         client = self._build_client()
         self._login(client)
