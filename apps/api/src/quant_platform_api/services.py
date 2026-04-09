@@ -5298,6 +5298,14 @@ def _optimize_replay_rule_patch(
             filters["intraday_entry_timing"].get("max_first_15m_return_pct"),
             [0.6, 1.0, 1.5],
         )
+        candidates[("filters", "intraday_entry_timing", "min_first_15m_return_pct")] = _candidate_numeric_values(
+            filters["intraday_entry_timing"].get("min_first_15m_return_pct"),
+            [-0.2, 0.0, 0.3],
+        )
+        candidates[("filters", "intraday_entry_timing", "min_last_15m_return_pct")] = _candidate_numeric_values(
+            filters["intraday_entry_timing"].get("min_last_15m_return_pct"),
+            [-0.3, 0.0, 0.2],
+        )
     if "intraday_structure" in filters:
         candidates[("filters", "intraday_structure", "min_close_position_pct")] = _candidate_numeric_values(
             filters["intraday_structure"].get("min_close_position_pct"),
@@ -5306,6 +5314,10 @@ def _optimize_replay_rule_patch(
         candidates[("filters", "intraday_structure", "min_up_bar_ratio")] = _candidate_numeric_values(
             filters["intraday_structure"].get("min_up_bar_ratio"),
             [0.45, 0.5, 0.6],
+        )
+        candidates[("filters", "intraday_structure", "max_peak_to_close_drawdown_pct")] = _candidate_numeric_values(
+            filters["intraday_structure"].get("max_peak_to_close_drawdown_pct"),
+            [1.0, 2.0, 3.5],
         )
     if "fundamental_guard" in filters:
         candidates[("filters", "fundamental_guard", "max_pe_ttm")] = _candidate_numeric_values(
@@ -5696,6 +5708,12 @@ def _replay_trade_passes_filters(
     if minute_context and "max_first_15m_return_pct" in intraday_entry_timing:
         if float(minute_context.get("first_15m_return_pct") or 0.0) > float(intraday_entry_timing["max_first_15m_return_pct"]):
             return False
+    if minute_context and "min_first_15m_return_pct" in intraday_entry_timing:
+        if float(minute_context.get("first_15m_return_pct") or 0.0) < float(intraday_entry_timing["min_first_15m_return_pct"]):
+            return False
+    if minute_context and "min_last_15m_return_pct" in intraday_entry_timing:
+        if float(minute_context.get("last_15m_return_pct") or 0.0) < float(intraday_entry_timing["min_last_15m_return_pct"]):
+            return False
 
     intraday_structure = filters.get("intraday_structure") or {}
     if minute_context:
@@ -5704,6 +5722,12 @@ def _replay_trade_passes_filters(
             return False
         min_up_bar_ratio = intraday_structure.get("min_up_bar_ratio")
         if isinstance(min_up_bar_ratio, (int, float)) and float(minute_context.get("up_bar_ratio") or 0.0) < float(min_up_bar_ratio):
+            return False
+        max_peak_to_close_drawdown_pct = intraday_structure.get("max_peak_to_close_drawdown_pct")
+        if (
+            isinstance(max_peak_to_close_drawdown_pct, (int, float))
+            and float(minute_context.get("peak_to_close_drawdown_pct") or 0.0) > float(max_peak_to_close_drawdown_pct)
+        ):
             return False
 
     fundamental_guard = filters.get("fundamental_guard") or {}

@@ -38,6 +38,7 @@ try:
         _build_replay_context_suggestions,
         _build_replay_fundamental_features,
         _build_replay_minute_context_features,
+        _replay_trade_passes_filters,
         _rerun_replay_records_on_market_data,
     )
 except ModuleNotFoundError:  # pragma: no cover - handled by skip
@@ -56,6 +57,7 @@ except ModuleNotFoundError:  # pragma: no cover - handled by skip
     _build_replay_context_suggestions = None
     _build_replay_minute_context_features = None
     _build_replay_fundamental_features = None
+    _replay_trade_passes_filters = None
     _rerun_replay_records_on_market_data = None
 
 
@@ -2449,6 +2451,88 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertIn("intraday_entry_timing", intraday_rule["dsl_patch"]["filters"])
         quality_rule = next(item for item in suggestions if item["title"] == "加入基本面质量过滤")
         self.assertIn("quality_filter", quality_rule["dsl_patch"]["filters"])
+
+    def test_replay_intraday_filters_support_extended_minute_constraints(self) -> None:
+        bars = [
+            MarketBar(
+                ts_code="600519.SH",
+                asset_type="stock",
+                adjustment_mode="qfq",
+                trade_date="2024-05-01",
+                open=10.0,
+                high=10.1,
+                low=9.9,
+                close=10.0,
+                volume=1000,
+                amount=10000,
+                pct_chg=0.0,
+                turnover=1.0,
+                data_source="internal_clickhouse_dwd",
+                fetched_at="2026-04-09T00:00:00",
+            ),
+            MarketBar(
+                ts_code="600519.SH",
+                asset_type="stock",
+                adjustment_mode="qfq",
+                trade_date="2024-05-02",
+                open=10.0,
+                high=10.3,
+                low=9.98,
+                close=10.2,
+                volume=1200,
+                amount=11000,
+                pct_chg=0.0,
+                turnover=1.2,
+                data_source="internal_clickhouse_dwd",
+                fetched_at="2026-04-09T00:00:00",
+            ),
+        ]
+
+        passing = _replay_trade_passes_filters(
+            bars=bars,
+            entry_index=1,
+            filters={
+                "intraday_entry_timing": {
+                    "min_first_15m_return_pct": 0.1,
+                    "min_last_15m_return_pct": 0.0,
+                },
+                "intraday_structure": {
+                    "max_peak_to_close_drawdown_pct": 2.0,
+                },
+            },
+            minute_context={
+                "first_15m_return_pct": 0.3,
+                "last_15m_return_pct": 0.1,
+                "close_position_pct": 62.0,
+                "up_bar_ratio": 0.6,
+                "peak_to_close_drawdown_pct": 1.5,
+            },
+            fundamental_context=None,
+        )
+        failing = _replay_trade_passes_filters(
+            bars=bars,
+            entry_index=1,
+            filters={
+                "intraday_entry_timing": {
+                    "min_first_15m_return_pct": 0.1,
+                    "min_last_15m_return_pct": 0.2,
+                },
+                "intraday_structure": {
+                    "max_peak_to_close_drawdown_pct": 1.0,
+                },
+            },
+            minute_context={
+                "first_15m_return_pct": 0.3,
+                "last_15m_return_pct": 0.1,
+                "close_position_pct": 62.0,
+                "up_bar_ratio": 0.6,
+                "peak_to_close_drawdown_pct": 1.5,
+            },
+            fundamental_context=None,
+        )
+
+        self.assertTrue(passing)
+        self.assertFalse(failing)
 
     def test_replay_market_rerun_uses_real_daily_bars_when_available(self) -> None:
         class FakeMarketDataService:
