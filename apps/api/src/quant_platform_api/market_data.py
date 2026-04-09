@@ -66,6 +66,18 @@ class DailyBasicSnapshot:
     data_source: str
 
 
+@dataclass(slots=True)
+class FinancialQualitySnapshot:
+    ts_code: str
+    end_date: str
+    roe: float | None
+    grossprofit_margin: float | None
+    op_yoy: float | None
+    total_assets: float | None
+    total_liab: float | None
+    data_source: str
+
+
 class MarketDataProvider(Protocol):
     name: str
 
@@ -258,6 +270,44 @@ class ClickHouseMarketDataProvider:
             circ_mv=_safe_float(item.get("circ_mv")),
             turnover_rate=_safe_float(item.get("turnover_rate")),
             close=_safe_float(item.get("close")),
+            data_source=self.name,
+        )
+
+    def fetch_financial_quality_snapshot(
+        self,
+        *,
+        ts_code: str,
+        trade_date: str,
+    ) -> FinancialQualitySnapshot | None:
+        rows = self._run_query(
+            f"""
+            SELECT
+                ts_code,
+                end_date,
+                roe,
+                grossprofit_margin,
+                op_yoy,
+                total_assets,
+                total_liab
+            FROM quant_dwd.dwd_fin_report_quarterly FINAL
+            WHERE ts_code = {_quote_clickhouse_string(ts_code)}
+              AND end_date <= toDate({_quote_clickhouse_string(trade_date)})
+            ORDER BY end_date DESC
+            LIMIT 1
+            FORMAT JSONEachRow
+            """
+        )
+        if not rows:
+            return None
+        item = rows[0]
+        return FinancialQualitySnapshot(
+            ts_code=ts_code,
+            end_date=_format_trade_date(item["end_date"]),
+            roe=_safe_float(item.get("roe")),
+            grossprofit_margin=_safe_float(item.get("grossprofit_margin")),
+            op_yoy=_safe_float(item.get("op_yoy")),
+            total_assets=_safe_float(item.get("total_assets")),
+            total_liab=_safe_float(item.get("total_liab")),
             data_source=self.name,
         )
 
@@ -1137,6 +1187,35 @@ class MarketDataService:
             }
         try:
             snapshot = provider.fetch_daily_basic_snapshot(
+                ts_code=ts_code,
+                trade_date=trade_date.strftime("%Y-%m-%d"),
+            )
+        except Exception as exc:
+            return None, {
+                "provider": getattr(provider, "name", "unknown"),
+                "status": "unavailable",
+                "reason": str(exc),
+            }
+        return snapshot, {
+            "provider": getattr(provider, "name", "unknown"),
+            "status": "ready" if snapshot is not None else "unavailable",
+        }
+
+    def load_financial_quality_snapshot(
+        self,
+        *,
+        ts_code: str,
+        trade_date: date,
+    ) -> tuple[FinancialQualitySnapshot | None, dict[str, Any]]:
+        provider = self._primary_provider
+        if provider is None or not hasattr(provider, "fetch_financial_quality_snapshot"):
+            return None, {
+                "provider": None,
+                "status": "unavailable",
+                "reason": "financial quality provider unavailable",
+            }
+        try:
+            snapshot = provider.fetch_financial_quality_snapshot(
                 ts_code=ts_code,
                 trade_date=trade_date.strftime("%Y-%m-%d"),
             )

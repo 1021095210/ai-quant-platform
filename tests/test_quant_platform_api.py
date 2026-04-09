@@ -2346,23 +2346,80 @@ class QuantPlatformApiTests(unittest.TestCase):
     def test_replay_feature_extractors_build_minute_and_fundamental_summaries(self) -> None:
         minute_loss = _build_replay_minute_context_features(
             [
-                {"pnl": -500, "minute_return_pct": 2.8, "peak_to_close_drawdown_pct": 1.5},
-                {"pnl": -300, "minute_return_pct": 2.1, "peak_to_close_drawdown_pct": 1.3},
-                {"pnl": 800, "minute_return_pct": 0.6, "peak_to_close_drawdown_pct": 0.3},
+                {
+                    "pnl": -500,
+                    "minute_return_pct": 0.4,
+                    "peak_to_close_drawdown_pct": 0.2,
+                    "first_15m_return_pct": 1.9,
+                    "last_15m_return_pct": -0.8,
+                    "up_bar_ratio": 0.32,
+                    "close_position_pct": 22.0,
+                },
+                {
+                    "pnl": -300,
+                    "minute_return_pct": 0.5,
+                    "peak_to_close_drawdown_pct": 0.25,
+                    "first_15m_return_pct": 1.4,
+                    "last_15m_return_pct": -0.5,
+                    "up_bar_ratio": 0.4,
+                    "close_position_pct": 35.0,
+                },
+                {
+                    "pnl": 800,
+                    "minute_return_pct": 0.6,
+                    "peak_to_close_drawdown_pct": 0.3,
+                    "first_15m_return_pct": 0.2,
+                    "last_15m_return_pct": 0.3,
+                    "up_bar_ratio": 0.68,
+                    "close_position_pct": 74.0,
+                },
             ],
             target="loss",
         )
         fundamental_profit = _build_replay_fundamental_features(
             [
-                {"pnl": 1200, "pe_ttm": 18.0, "pb": 2.1, "turnover_rate": 1.8, "total_mv": 1200.0},
-                {"pnl": 900, "pe_ttm": 20.0, "pb": 2.4, "turnover_rate": 2.0, "total_mv": 1100.0},
-                {"pnl": -700, "pe_ttm": 45.0, "pb": 5.8, "turnover_rate": 4.2, "total_mv": 900.0},
+                {
+                    "pnl": 1200,
+                    "pe_ttm": 18.0,
+                    "pb": 2.1,
+                    "turnover_rate": 1.8,
+                    "total_mv": 1200.0,
+                    "roe": 16.2,
+                    "grossprofit_margin": 41.0,
+                    "op_yoy": 18.5,
+                    "debt_to_assets": 32.0,
+                },
+                {
+                    "pnl": 900,
+                    "pe_ttm": 20.0,
+                    "pb": 2.4,
+                    "turnover_rate": 2.0,
+                    "total_mv": 1100.0,
+                    "roe": 13.5,
+                    "grossprofit_margin": 38.0,
+                    "op_yoy": 12.0,
+                    "debt_to_assets": 35.0,
+                },
+                {
+                    "pnl": -700,
+                    "pe_ttm": 45.0,
+                    "pb": 5.8,
+                    "turnover_rate": 4.2,
+                    "total_mv": 900.0,
+                    "roe": 5.1,
+                    "grossprofit_margin": 18.0,
+                    "op_yoy": -6.0,
+                    "debt_to_assets": 62.0,
+                },
             ],
             target="profit",
         )
 
-        self.assertTrue(any("盘中短时拉升" in item["title"] for item in minute_loss))
-        self.assertTrue(any("PB" in item["title"] or "换手" in item["title"] for item in fundamental_profit))
+        self.assertTrue(any("开盘前15分钟过热" in item["title"] for item in minute_loss))
+        self.assertTrue(any("分钟窗口末端收在区间偏弱位置" in item["title"] for item in minute_loss))
+        self.assertTrue(any("ROE" in item["title"] for item in fundamental_profit))
+        self.assertTrue(any("毛利率" in item["title"] for item in fundamental_profit))
+        self.assertTrue(any("营收增速" in item["title"] for item in fundamental_profit))
 
     def test_manual_trade_upload_creates_parsed_records(self) -> None:
         client = self._build_client()
