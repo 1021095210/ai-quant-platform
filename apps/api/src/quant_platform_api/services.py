@@ -4146,6 +4146,12 @@ def build_replay_result(
         profit_features.extend(_build_replay_daily_context_features(daily_contexts, target="profit"))
         profit_features.extend(_build_replay_minute_context_features(minute_contexts, target="profit"))
         profit_features.extend(_build_replay_fundamental_features(fundamental_contexts, target="profit"))
+        suggestion_rules.extend(
+            _build_replay_context_suggestions(
+                loss_features=loss_features,
+                profit_features=profit_features,
+            )
+        )
         parameter_changes = _build_replay_parameter_changes(suggestion_rules)
         condition_replacements = _build_replay_condition_replacements(suggestion_rules)
         objective_versions = _build_replay_objective_versions(
@@ -4158,6 +4164,9 @@ def build_replay_result(
             avg_loss=avg_loss,
             avg_holding_minutes=avg_holding_minutes,
             avg_loss_holding_minutes=avg_loss_holding_minutes,
+            daily_contexts=daily_contexts,
+            minute_contexts=minute_contexts,
+            fundamental_contexts=fundamental_contexts,
         )
         concise_summary = _build_replay_concise_summary(
             total_count=total_count,
@@ -5048,9 +5057,15 @@ def _build_replay_objective_versions(
     avg_loss: float,
     avg_holding_minutes: float,
     avg_loss_holding_minutes: float,
+    daily_contexts: list[dict[str, Any]],
+    minute_contexts: list[dict[str, Any]],
+    fundamental_contexts: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     suggestion_titles = [item.get("title", "") for item in suggestion_rules if item.get("title")]
     baseline_metrics = _build_replay_sample_metrics(records)
+    daily_context_by_trade_id = _group_replay_contexts_by_trade_id(daily_contexts)
+    minute_context_by_trade_id = _group_replay_contexts_by_trade_id(minute_contexts)
+    fundamental_context_by_trade_id = _group_replay_contexts_by_trade_id(fundamental_contexts)
     objective_specs = [
         {
             "objective": "sharpe_max",
@@ -5092,6 +5107,9 @@ def _build_replay_objective_versions(
             avg_loss=avg_loss,
             avg_holding_minutes=avg_holding_minutes,
             avg_loss_holding_minutes=avg_loss_holding_minutes,
+            daily_context_by_trade_id=daily_context_by_trade_id,
+            minute_context_by_trade_id=minute_context_by_trade_id,
+            fundamental_context_by_trade_id=fundamental_context_by_trade_id,
         )
         selected_trade_rows = _build_replay_trade_records(selected_records)
         items.append(
@@ -5117,6 +5135,9 @@ def _select_replay_objective_records(
     avg_loss: float,
     avg_holding_minutes: float,
     avg_loss_holding_minutes: float,
+    daily_context_by_trade_id: dict[str, dict[str, Any]],
+    minute_context_by_trade_id: dict[str, dict[str, Any]],
+    fundamental_context_by_trade_id: dict[str, dict[str, Any]],
 ) -> tuple[list[TradeRecordItem], str]:
     if not records:
         return [], "当前样本为空，无法生成对照版本。"
@@ -5127,53 +5148,268 @@ def _select_replay_objective_records(
     worst_loss_value = min((item.pnl for item in ordered_records), default=0.0)
     worst_loss_cutoff = avg_loss if avg_loss < 0 else worst_loss_value
     long_loss_minutes = max(avg_loss_holding_minutes, avg_holding_minutes)
-
-    def keep(item: TradeRecordItem) -> bool:
-        if objective == "win_rate_max":
-            return item.pnl > 0
-        if objective == "max_drawdown_min":
-            if item.pnl <= 0 and item.pnl <= min(worst_loss_cutoff / 2 if worst_loss_cutoff else 0.0, -0.01):
-                return False
-            if item.pnl <= 0 and _holding_minutes(item.entry_time, item.exit_time) >= long_loss_minutes:
-                return False
-            if has_side_comparison and weak_side != strong_side and item.side == weak_side and item.pnl <= 0:
-                return False
-            return True
-        if objective == "total_return_max":
-            if negative_records and item.pnl == worst_loss_value:
-                return False
-            return True
-        if has_side_comparison and weak_side != strong_side and item.side == weak_side and item.pnl <= 0:
-            return False
-        if item.pnl < worst_loss_cutoff and _holding_minutes(item.entry_time, item.exit_time) >= long_loss_minutes:
-            return False
-        return True
-
-    selected = [item for item in ordered_records if keep(item)]
+    target_count_map = {
+        "win_rate_max": max(1, len([item for item in ordered_records if item.pnl > 0])),
+        "max_drawdown_min": max(1, math.ceil(len(ordered_records) * 0.6)),
+        "total_return_max": max(1, math.ceil(len(ordered_records) * 0.75)),
+        "sharpe_max": max(1, math.ceil(len(ordered_records) * 0.67)),
+    }
+    scored_records = [
+        (
+            item,
+            _score_replay_record_for_objective(
+                item=item,
+                objective=objective,
+                weak_side=weak_side,
+                strong_side=strong_side,
+                has_side_comparison=has_side_comparison,
+                worst_loss_cutoff=worst_loss_cutoff,
+                long_loss_minutes=long_loss_minutes,
+                daily_context=daily_context_by_trade_id.get(item.trade_id),
+                minute_context=minute_context_by_trade_id.get(item.trade_id),
+                fundamental_context=fundamental_context_by_trade_id.get(item.trade_id),
+            ),
+        )
+        for item in ordered_records
+    ]
+    selected = [
+        item
+        for item, _score in sorted(scored_records, key=lambda pair: pair[1], reverse=True)[: target_count_map[objective]]
+    ]
+    selected.sort(key=lambda item: item.exit_time or item.entry_time)
     if not selected:
         selected = [max(ordered_records, key=lambda item: item.pnl)]
     removed_count = len(ordered_records) - len(selected)
     if objective == "win_rate_max":
         note = (
-            f"这个版本按样本筛选回放，只保留当前样本中更接近高胜率的出手。"
+            f"这个版本按样本筛选回放，结合盈亏、方向、持有、分钟节奏和基本面上下文评分，只保留更接近高胜率的出手。"
             f"本次共剔除 {removed_count} 笔负收益记录，用于对照确认。"
         )
     elif objective == "max_drawdown_min":
         note = (
-            f"这个版本按样本筛选回放，优先剔除导致回撤扩大的长持亏损或弱势方向亏损。"
+            f"这个版本按样本筛选回放，结合上下文评分优先剔除导致回撤扩大的长持亏损、盘中过热追入和弱基本面样本。"
             f"本次共剔除 {removed_count} 笔记录，用于对照确认。"
         )
     elif objective == "total_return_max":
         note = (
-            f"这个版本按样本筛选回放，优先保留总收益贡献更高的交易，并剔除最拖累收益的样本。"
+            f"这个版本按样本筛选回放，优先保留总收益贡献更高且上下文质量更高的交易，并剔除最拖累收益的样本。"
             f"本次共剔除 {removed_count} 笔记录，用于对照确认。"
         )
     else:
         note = (
-            f"这个版本按样本筛选回放，优先平衡收益质量、回撤和稳定性。"
+            f"这个版本按样本筛选回放，结合盈亏、持有、分钟节奏和基本面上下文评分，优先平衡收益质量、回撤和稳定性。"
             f"本次共剔除 {removed_count} 笔弱质量样本，用于对照确认。"
         )
     return selected, note
+
+
+def _group_replay_contexts_by_trade_id(contexts: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    grouped: dict[str, dict[str, Any]] = {}
+    for item in contexts:
+        trade_id = item.get("trade_id")
+        if isinstance(trade_id, str) and trade_id:
+            grouped[trade_id] = item
+    return grouped
+
+
+def _score_replay_record_for_objective(
+    *,
+    item: TradeRecordItem,
+    objective: str,
+    weak_side: str,
+    strong_side: str,
+    has_side_comparison: bool,
+    worst_loss_cutoff: float,
+    long_loss_minutes: float,
+    daily_context: dict[str, Any] | None,
+    minute_context: dict[str, Any] | None,
+    fundamental_context: dict[str, Any] | None,
+) -> float:
+    score = float(item.pnl)
+    holding_minutes = _holding_minutes(item.entry_time, item.exit_time)
+
+    if objective == "sharpe_max":
+        if item.pnl <= 0:
+            score -= 20.0
+        if holding_minutes >= long_loss_minutes and item.pnl <= 0:
+            score -= 20.0
+    elif objective == "win_rate_max":
+        score = 80.0 if item.pnl > 0 else -80.0
+        score -= max(holding_minutes - 60.0, 0.0) * 0.05 if item.pnl <= 0 else 0.0
+    elif objective == "max_drawdown_min":
+        score = -abs(item.pnl)
+        if item.pnl > 0:
+            score += 50.0
+        if item.pnl < worst_loss_cutoff:
+            score -= 30.0
+        if holding_minutes >= long_loss_minutes and item.pnl <= 0:
+            score -= 20.0
+    elif objective == "total_return_max":
+        score = float(item.pnl) * 1.25
+
+    if has_side_comparison and weak_side != strong_side and item.side == weak_side and item.pnl <= 0:
+        score -= 25.0
+
+    if daily_context:
+        if daily_context.get("above_ma5"):
+            score += 10.0
+        else:
+            score -= 8.0
+        if daily_context.get("trend_regime") == "trend":
+            score += 8.0
+        else:
+            score -= 10.0 if objective in {"sharpe_max", "max_drawdown_min", "win_rate_max"} else 5.0
+        prior_return_pct = daily_context.get("prior_return_pct")
+        if isinstance(prior_return_pct, (int, float)) and prior_return_pct >= 4.0:
+            score -= 12.0 if objective != "total_return_max" else 6.0
+        volume_ratio = daily_context.get("volume_ratio")
+        if isinstance(volume_ratio, (int, float)) and volume_ratio >= 1.8:
+            score -= 10.0 if objective != "total_return_max" else 4.0
+
+    if minute_context:
+        first_15m_return_pct = minute_context.get("first_15m_return_pct")
+        if isinstance(first_15m_return_pct, (int, float)) and first_15m_return_pct >= 1.0:
+            score -= 14.0 if objective != "total_return_max" else 6.0
+        close_position_pct = minute_context.get("close_position_pct")
+        if isinstance(close_position_pct, (int, float)) and close_position_pct < 40.0:
+            score -= 12.0 if objective != "total_return_max" else 5.0
+        up_bar_ratio = minute_context.get("up_bar_ratio")
+        if isinstance(up_bar_ratio, (int, float)) and up_bar_ratio < 0.45:
+            score -= 8.0
+        last_15m_return_pct = minute_context.get("last_15m_return_pct")
+        if isinstance(last_15m_return_pct, (int, float)) and last_15m_return_pct >= 0.0:
+            score += 6.0
+        peak_to_close_drawdown_pct = minute_context.get("peak_to_close_drawdown_pct")
+        if isinstance(peak_to_close_drawdown_pct, (int, float)) and peak_to_close_drawdown_pct >= 1.0:
+            score -= 10.0 if objective != "total_return_max" else 4.0
+
+    if fundamental_context:
+        pe_ttm = fundamental_context.get("pe_ttm")
+        if isinstance(pe_ttm, (int, float)) and pe_ttm >= 35.0:
+            score -= 8.0 if objective != "total_return_max" else 3.0
+        debt_to_assets = fundamental_context.get("debt_to_assets")
+        if isinstance(debt_to_assets, (int, float)) and debt_to_assets >= 60.0:
+            score -= 12.0 if objective != "total_return_max" else 5.0
+        pb = fundamental_context.get("pb")
+        if isinstance(pb, (int, float)) and pb <= 3.0:
+            score += 4.0
+        roe = fundamental_context.get("roe")
+        if isinstance(roe, (int, float)) and roe >= 10.0:
+            score += 8.0
+        grossprofit_margin = fundamental_context.get("grossprofit_margin")
+        if isinstance(grossprofit_margin, (int, float)) and grossprofit_margin >= 25.0:
+            score += 6.0
+        op_yoy = fundamental_context.get("op_yoy")
+        if isinstance(op_yoy, (int, float)) and op_yoy >= 0.0:
+            score += 5.0
+
+    return score
+
+
+def _build_replay_context_suggestions(
+    *,
+    loss_features: list[dict[str, Any]],
+    profit_features: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    suggestions: list[dict[str, Any]] = []
+    seen_titles: set[str] = set()
+    feature_ids = {item.get("id"): item for item in loss_features + profit_features if item.get("id")}
+
+    def add_suggestion(title: str, description: str, dsl_patch: dict[str, Any]) -> None:
+        if title in seen_titles:
+            return
+        seen_titles.add(title)
+        suggestions.append(
+            {
+                "title": title,
+                "description": description,
+                "dsl_patch": dsl_patch,
+            }
+        )
+
+    if any(feature_id in feature_ids for feature_id in {"loss_intraday_chase", "loss_first_15m_hot"}):
+        add_suggestion(
+            "收紧盘中过热追入",
+            "亏损样本更常出现在开盘前15分钟已经明显拉升的场景。建议增加盘中过热过滤，只在前15分钟不过热时允许开仓。",
+            {
+                "filters": {
+                    "intraday_entry_timing": {
+                        "enabled": True,
+                        "max_first_15m_return_pct": 1.0,
+                    }
+                }
+            },
+        )
+    if any(feature_id in feature_ids for feature_id in {"loss_close_weak", "loss_bar_structure_weak", "profit_last_15m_stable"}):
+        add_suggestion(
+            "加入盘中结构确认",
+            "分钟级样本显示亏损更常伴随窗口末端走弱。建议只在窗口收盘位置和阳线占比都达标时保留开仓。",
+            {
+                "filters": {
+                    "intraday_structure": {
+                        "enabled": True,
+                        "min_close_position_pct": 50,
+                        "min_up_bar_ratio": 0.5,
+                    }
+                }
+            },
+        )
+    if any(feature_id in feature_ids for feature_id in {"loss_volume_chase", "loss_after_extended_move"}):
+        add_suggestion(
+            "避免高位放量后追入",
+            "日线样本显示亏损更常出现在短期涨幅过大或量能过热后。建议限制入场前窗口涨幅和量比上限。",
+            {
+                "filters": {
+                    "extension_guard": {
+                        "enabled": True,
+                        "max_prior_return_pct": 4.0,
+                    },
+                    "volume_heat_guard": {
+                        "enabled": True,
+                        "max_value": 1.8,
+                    },
+                }
+            },
+        )
+    if any(feature_id in feature_ids for feature_id in {"loss_range_regime", "profit_trend_regime", "profit_above_ma5"}):
+        add_suggestion(
+            "只在趋势环境里保留开仓",
+            "样本显示趋势环境和站上均线时更容易保留盈利结构。建议把趋势环境和均线同向作为硬过滤。",
+            {
+                "filters": {
+                    "market_regime": {
+                        "enabled": True,
+                        "preferred": "trend",
+                    },
+                    "trend_confirmation": {
+                        "enabled": True,
+                        "timeframe": "1d",
+                        "rule": "only_trade_above_ma5_in_trend",
+                    },
+                }
+            },
+        )
+    if any(feature_id in feature_ids for feature_id in {"loss_high_pe", "loss_higher_debt", "profit_higher_roe", "profit_higher_margin", "profit_higher_growth"}):
+        add_suggestion(
+            "加入基本面质量过滤",
+            "基本面样本显示高负债、弱盈利质量的标的更容易拖累结果。建议把 ROE、毛利率、营收增速和资产负债率加入开仓过滤。",
+            {
+                "filters": {
+                    "fundamental_guard": {
+                        "enabled": True,
+                        "max_pe_ttm": 35,
+                        "max_debt_to_assets": 55,
+                    },
+                    "quality_filter": {
+                        "enabled": True,
+                        "min_roe": 10,
+                        "min_grossprofit_margin": 25,
+                        "min_op_yoy": 0,
+                    },
+                }
+            },
+        )
+    return suggestions
 
 
 def _build_replay_parameter_changes(
@@ -5213,6 +5449,26 @@ def _build_replay_parameter_changes(
                     "reason": rule.get("title", "复盘建议"),
                 }
             )
+        volume_heat_guard = filters.get("volume_heat_guard") or {}
+        if "max_value" in volume_heat_guard:
+            items.append(
+                {
+                    "parameter": "量比上限",
+                    "old_value": "当前未明确限制",
+                    "new_value": volume_heat_guard["max_value"],
+                    "reason": rule.get("title", "复盘建议"),
+                }
+            )
+        extension_guard = filters.get("extension_guard") or {}
+        if "max_prior_return_pct" in extension_guard:
+            items.append(
+                {
+                    "parameter": "入场前窗口涨幅上限",
+                    "old_value": "当前未明确限制",
+                    "new_value": extension_guard["max_prior_return_pct"],
+                    "reason": rule.get("title", "复盘建议"),
+                }
+            )
         trend_confirmation = filters.get("trend_confirmation") or {}
         if "timeframe" in trend_confirmation or "entry_timeframe" in trend_confirmation:
             items.append(
@@ -5221,6 +5477,92 @@ def _build_replay_parameter_changes(
                     "old_value": "当前未明确限制",
                     "new_value": trend_confirmation.get("entry_timeframe")
                     or trend_confirmation.get("timeframe"),
+                    "reason": rule.get("title", "复盘建议"),
+                }
+            )
+        intraday_entry_timing = filters.get("intraday_entry_timing") or {}
+        if "max_first_15m_return_pct" in intraday_entry_timing:
+            items.append(
+                {
+                    "parameter": "前15分钟涨幅上限",
+                    "old_value": "当前未明确限制",
+                    "new_value": intraday_entry_timing["max_first_15m_return_pct"],
+                    "reason": rule.get("title", "复盘建议"),
+                }
+            )
+        intraday_structure = filters.get("intraday_structure") or {}
+        if "min_close_position_pct" in intraday_structure:
+            items.append(
+                {
+                    "parameter": "分钟窗口收盘位置下限",
+                    "old_value": "当前未明确限制",
+                    "new_value": intraday_structure["min_close_position_pct"],
+                    "reason": rule.get("title", "复盘建议"),
+                }
+            )
+        if "min_up_bar_ratio" in intraday_structure:
+            items.append(
+                {
+                    "parameter": "分钟阳线占比下限",
+                    "old_value": "当前未明确限制",
+                    "new_value": intraday_structure["min_up_bar_ratio"],
+                    "reason": rule.get("title", "复盘建议"),
+                }
+            )
+        market_regime = filters.get("market_regime") or {}
+        if "preferred" in market_regime:
+            items.append(
+                {
+                    "parameter": "市场环境偏好",
+                    "old_value": "当前未明确限制",
+                    "new_value": market_regime["preferred"],
+                    "reason": rule.get("title", "复盘建议"),
+                }
+            )
+        fundamental_guard = filters.get("fundamental_guard") or {}
+        if "max_pe_ttm" in fundamental_guard:
+            items.append(
+                {
+                    "parameter": "PE(TTM) 上限",
+                    "old_value": "当前未明确限制",
+                    "new_value": fundamental_guard["max_pe_ttm"],
+                    "reason": rule.get("title", "复盘建议"),
+                }
+            )
+        if "max_debt_to_assets" in fundamental_guard:
+            items.append(
+                {
+                    "parameter": "资产负债率上限",
+                    "old_value": "当前未明确限制",
+                    "new_value": fundamental_guard["max_debt_to_assets"],
+                    "reason": rule.get("title", "复盘建议"),
+                }
+            )
+        quality_filter = filters.get("quality_filter") or {}
+        if "min_roe" in quality_filter:
+            items.append(
+                {
+                    "parameter": "ROE 下限",
+                    "old_value": "当前未明确限制",
+                    "new_value": quality_filter["min_roe"],
+                    "reason": rule.get("title", "复盘建议"),
+                }
+            )
+        if "min_grossprofit_margin" in quality_filter:
+            items.append(
+                {
+                    "parameter": "毛利率下限",
+                    "old_value": "当前未明确限制",
+                    "new_value": quality_filter["min_grossprofit_margin"],
+                    "reason": rule.get("title", "复盘建议"),
+                }
+            )
+        if "min_op_yoy" in quality_filter:
+            items.append(
+                {
+                    "parameter": "营收增速下限",
+                    "old_value": "当前未明确限制",
+                    "new_value": quality_filter["min_op_yoy"],
                     "reason": rule.get("title", "复盘建议"),
                 }
             )
@@ -5264,12 +5606,68 @@ def _build_replay_condition_replacements(
                     "reason": rule.get("title", "量能过滤建议"),
                 }
             )
+        if "volume_heat_guard" in filters:
+            replacements.append(
+                {
+                    "from": "原规则未限制量比过热场景",
+                    "to": f"仅在量比 <= {filters['volume_heat_guard'].get('max_value')} 时允许开仓",
+                    "reason": rule.get("title", "量比过热过滤建议"),
+                }
+            )
+        if "extension_guard" in filters:
+            replacements.append(
+                {
+                    "from": "原规则未限制短期涨幅过大后的追入",
+                    "to": (
+                        "仅在入场前窗口涨幅 "
+                        f"<= {filters['extension_guard'].get('max_prior_return_pct')}% 时允许开仓"
+                    ),
+                    "reason": rule.get("title", "短期过热过滤建议"),
+                }
+            )
         if "weak_open_filter" in filters:
             replacements.append(
                 {
                     "from": "原规则未限制弱开场景",
                     "to": "加入弱开过滤，避免开盘承接不足时贸然入场",
                     "reason": rule.get("title", "弱开过滤建议"),
+                }
+            )
+        if "intraday_entry_timing" in filters:
+            replacements.append(
+                {
+                    "from": "原规则未限制开盘前短时拉升后的追入",
+                    "to": (
+                        "仅在前15分钟涨幅 "
+                        f"<= {filters['intraday_entry_timing'].get('max_first_15m_return_pct')}% 时允许开仓"
+                    ),
+                    "reason": rule.get("title", "盘中过热过滤建议"),
+                }
+            )
+        if "intraday_structure" in filters:
+            replacements.append(
+                {
+                    "from": "原规则未要求分钟级结构确认",
+                    "to": (
+                        "仅在分钟窗口收盘位置和阳线占比都达标时保留开仓"
+                    ),
+                    "reason": rule.get("title", "分钟级结构过滤建议"),
+                }
+            )
+        if "market_regime" in filters:
+            replacements.append(
+                {
+                    "from": "原规则未限制市场环境",
+                    "to": f"仅在 {filters['market_regime'].get('preferred')} 环境里保留开仓",
+                    "reason": rule.get("title", "市场环境过滤建议"),
+                }
+            )
+        if "fundamental_guard" in filters or "quality_filter" in filters:
+            replacements.append(
+                {
+                    "from": "原规则未要求基本面质量过滤",
+                    "to": "加入估值、负债率、ROE、毛利率和营收增速的基本面质量过滤",
+                    "reason": rule.get("title", "基本面过滤建议"),
                 }
             )
     return replacements
