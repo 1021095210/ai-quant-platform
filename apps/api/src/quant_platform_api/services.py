@@ -856,6 +856,14 @@ def _extract_strategy_unsupported_items(prompt: str, normalized: str) -> list[di
             "当前表达存在未来函数风险",
             "在“收盘前”使用“收盘价确认”会把尚未形成的最终收盘价当成当下可见信息，需要改写成收盘后确认或使用当前价格条件。",
         )
+    if ("当日涨幅" in prompt or "今日涨幅" in prompt or "最终涨幅" in prompt) and (
+        "买入" in prompt or "开仓" in prompt or "卖出" in prompt
+    ):
+        add(
+            "future_reference_pct_change",
+            "当前表达存在未来函数风险",
+            "直接使用“当日涨幅/今日涨幅/最终涨幅”作为当日盘中决策依据，会把尚未收盘的最终结果当成已知信息。需要改写成当前涨幅或上一周期涨幅。",
+        )
     return items
 
 
@@ -1125,10 +1133,16 @@ def _build_strategy_field_mapping(
     request: StrategyGenerateRequest,
     strategy_dsl: dict[str, Any],
     generation_decision: dict[str, Any],
+    strategy_python: str,
 ) -> list[dict[str, Any]]:
     position_text = "；".join(
         f"{key}={value}" for key, value in strategy_dsl.get("position", {}).items()
     ) or "默认单策略单持仓"
+    entry_rules = strategy_dsl.get("entry", {}).get("all", [])
+    exit_rules = strategy_dsl.get("exit", {}).get("any", [])
+    entry_context = strategy_dsl.get("entry_context", [])
+    def dsl_snippet(value: Any) -> str:
+        return repr(value)
     items: list[dict[str, Any]] = [
         {
             "id": "market_scope",
@@ -1137,6 +1151,18 @@ def _build_strategy_field_mapping(
             "structured_value": strategy_dsl.get("market_scope_label"),
             "dsl_path": "market_scope / market_scope_label",
             "python_mapping": "context.market_scope",
+            "dsl_snippet": dsl_snippet(
+                {
+                    "market_scope": strategy_dsl.get("market_scope"),
+                    "market_scope_label": strategy_dsl.get("market_scope_label"),
+                }
+            ),
+            "python_snippet": "\n".join(
+                [
+                    f"market_scope: str = '{strategy_dsl.get('market_scope')}'",
+                    "        'market_scope': config.market_scope,",
+                ]
+            ),
         },
         {
             "id": "primary_timeframe",
@@ -1145,6 +1171,20 @@ def _build_strategy_field_mapping(
             "structured_value": _timeframe_label(strategy_dsl.get("timeframe", "1d")),
             "dsl_path": "timeframe",
             "python_mapping": "context.primary_timeframe",
+            "dsl_snippet": dsl_snippet(
+                {
+                    "timeframe": strategy_dsl.get("timeframe"),
+                    "timeframes": strategy_dsl.get("timeframes"),
+                }
+            ),
+            "python_snippet": "\n".join(
+                [
+                    f"timeframe: str = '{strategy_dsl.get('timeframe', '1d')}'",
+                    f"timeframes: tuple[str, ...] = {tuple(strategy_dsl.get('timeframes') or [strategy_dsl.get('timeframe', '1d')])!r}",
+                    "        'timeframe': config.timeframe,",
+                    "        'timeframes': list(config.timeframes),",
+                ]
+            ),
         },
         {
             "id": "entry_rules",
@@ -1153,6 +1193,16 @@ def _build_strategy_field_mapping(
             "structured_value": f"{len(strategy_dsl.get('entry', {}).get('all', []))} 条主入场规则",
             "dsl_path": "entry.all",
             "python_mapping": "build_entry_signal()",
+            "dsl_snippet": dsl_snippet(entry_rules[:2] if len(entry_rules) > 2 else entry_rules),
+            "python_snippet": "\n".join(
+                [
+                    "        'entry': {",
+                    "            'all': [",
+                    *[f"                {repr({'indicator': rule.get('indicator'), 'params': rule.get('params', {}), 'operator': rule.get('operator'), 'value': rule.get('value')})}," for rule in entry_rules[:2]],
+                    "            ]",
+                    "        },",
+                ]
+            ),
         },
         {
             "id": "entry_context",
@@ -1161,6 +1211,14 @@ def _build_strategy_field_mapping(
             "structured_value": f"{len(strategy_dsl.get('entry_context', []))} 条入场上下文",
             "dsl_path": "entry_context",
             "python_mapping": "evaluate_entry_context()",
+            "dsl_snippet": dsl_snippet(entry_context[:2] if len(entry_context) > 2 else entry_context),
+            "python_snippet": "\n".join(
+                [
+                    "        'entry_context': [",
+                    *[f"            {repr(rule)}," for rule in entry_context[:2]],
+                    "        ],",
+                ]
+            ) if entry_context else "当前无 entry_context 代码片段",
         },
         {
             "id": "exit_rules",
@@ -1169,6 +1227,16 @@ def _build_strategy_field_mapping(
             "structured_value": f"{len(strategy_dsl.get('exit', {}).get('any', []))} 条离场规则",
             "dsl_path": "exit.any",
             "python_mapping": "build_exit_signal()",
+            "dsl_snippet": dsl_snippet(exit_rules[:2] if len(exit_rules) > 2 else exit_rules),
+            "python_snippet": "\n".join(
+                [
+                    "        'exit': {",
+                    "            'any': [",
+                    *[f"                {repr(rule)}," for rule in exit_rules[:2]],
+                    "            ]",
+                    "        },",
+                ]
+            ),
         },
         {
             "id": "position_rules",
@@ -1177,6 +1245,12 @@ def _build_strategy_field_mapping(
             "structured_value": position_text,
             "dsl_path": "position",
             "python_mapping": "build_position_config()",
+            "dsl_snippet": dsl_snippet(strategy_dsl.get("position", {})),
+            "python_snippet": "\n".join(
+                [
+                    f"        'position': {repr(strategy_dsl.get('position', {}))},",
+                ]
+            ),
         },
     ]
     if generation_decision.get("status") in {"needs_confirmation", "rejected"}:
@@ -1188,6 +1262,8 @@ def _build_strategy_field_mapping(
                 "structured_value": generation_decision.get("label"),
                 "dsl_path": "generation_decision",
                 "python_mapping": "当前先阻断正式代码生成或保存",
+                "dsl_snippet": dsl_snippet(generation_decision),
+                "python_snippet": strategy_python.splitlines()[0] if strategy_python else "当前无 Python 代码片段",
             }
         )
     return items
@@ -1499,11 +1575,6 @@ class StrategyService:
             structured_spec=structured_spec,
             hard_validation=hard_validation,
         )
-        field_mapping = _build_strategy_field_mapping(
-            request=request,
-            strategy_dsl=strategy_dsl,
-            generation_decision=generation_decision,
-        )
         strategy_python = (
             _render_strategy_python(
                 strategy_dsl,
@@ -1513,6 +1584,12 @@ class StrategyService:
             )
             if generation_decision["allow_python_generation"]
             else "# 当前策略存在不支持项或未来函数风险，需先修改后再生成 Python 策略。"
+        )
+        field_mapping = _build_strategy_field_mapping(
+            request=request,
+            strategy_dsl=strategy_dsl,
+            generation_decision=generation_decision,
+            strategy_python=strategy_python,
         )
         if generation_decision["allow_python_generation"]:
             summary_parts = [

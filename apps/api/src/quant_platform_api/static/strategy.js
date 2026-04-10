@@ -346,6 +346,10 @@ function renderFieldMappingView(items) {
           <div class="muted-note">结构化规格：${item.structured_value || "无"}</div>
           <div class="muted-note">DSL 路径：${item.dsl_path || "无"}</div>
           <div class="muted-note">Python 映射：${item.python_mapping || "无"}</div>
+          <pre class="result-box light" style="margin-top: 10px">DSL片段
+${item.dsl_snippet || "无"}</pre>
+          <pre class="result-box light" style="margin-top: 10px">Python片段
+${item.python_snippet || "无"}</pre>
         </div>
       `,
     )

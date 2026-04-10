@@ -999,6 +999,7 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertEqual("natural_language", payload["generation_pipeline"][0]["id"])
         self.assertIn("field_mapping", payload)
         self.assertTrue(any(item["id"] == "entry_rules" for item in payload["field_mapping"]))
+        self.assertTrue(any(item.get("python_snippet") for item in payload["field_mapping"]))
         self.assertEqual("首次仓位 20%", payload["strategy_dsl"]["position"]["clarified_rule"])
         self.assertIn("已应用你补充的条件说明", payload["human_summary"])
 
@@ -1049,6 +1050,15 @@ class QuantPlatformApiTests(unittest.TestCase):
         payload = response.json()["data"]
         self.assertTrue(any(item["id"] == "future_reference_close" for item in payload["unsupported_items"]))
         self.assertTrue(any(item["id"] == "future_function_risk" for item in payload["hard_validation"]["checks"]))
+
+    def test_strategy_page_shows_field_mapping_snippet_labels(self) -> None:
+        client = self._build_client()
+        self._login(client)
+
+        response = client.get("/strategy")
+
+        self.assertEqual(200, response.status_code)
+        self.assertIn("字段级对照解释", response.text)
 
     def test_generate_strategy_teaching_mode_adds_comments_and_understands_terms(self) -> None:
         client = self._build_client()
