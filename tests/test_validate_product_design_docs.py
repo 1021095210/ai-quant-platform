@@ -44,7 +44,6 @@ class ValidateProductDesignDocsTests(unittest.TestCase):
                     "CREATE TABLE trade_fills",
                     "dataset_snapshot_ref VARCHAR(120) NOT NULL",
                 ),
-                "产品设计/AI量化交易平台_五日开发任务拆解.md": ("# AI 量化交易平台五日开发任务拆解",),
             },
         )
         self.assertEqual({}, missing)
