@@ -830,11 +830,31 @@ def _extract_strategy_unsupported_items(prompt: str, normalized: str) -> list[di
             "当前表达存在未来函数风险",
             "用“当日最低价/盘中最低价”作为当日买入触发条件，容易在入场时引用尚未发生的未来信息。需要改写成当下可观察条件。",
         )
+    if ("当日最高价" in prompt or "今日最高价" in prompt or "盘中最高价" in prompt) and ("买入" in prompt or "开仓" in prompt):
+        add(
+            "future_reference_high_entry",
+            "当前表达存在未来函数风险",
+            "用“当日最高价/盘中最高价”辅助当日买入，会在入场决策时引用尚未发生的未来信息。需要改写成当下可观察条件。",
+        )
     if ("当日最高价" in prompt or "今日最高价" in prompt or "盘中最高价" in prompt) and ("卖出" in prompt or "止盈" in prompt):
         add(
             "future_reference_high",
             "当前表达存在未来函数风险",
             "用“当日最高价/盘中最高价”作为离场条件，容易在决策时引用未来信息。需要改写成当下可观察条件。",
+        )
+    if ("当日收盘价" in prompt or "今日收盘价" in prompt) and (
+        "买入" in prompt or "开仓" in prompt or "卖出" in prompt or "止盈" in prompt or "止损" in prompt
+    ):
+        add(
+            "future_reference_close",
+            "当前表达存在未来函数风险",
+            "直接使用“当日收盘价/今日收盘价”作为当日盘中决策依据，容易在尚未收盘时引用未来信息。需要改写成收盘后执行或次日执行条件。",
+        )
+    if ("收盘前" in prompt or "尾盘前" in prompt) and ("确认" in prompt or "判断" in prompt) and ("收盘价" in prompt):
+        add(
+            "future_close_confirmation",
+            "当前表达存在未来函数风险",
+            "在“收盘前”使用“收盘价确认”会把尚未形成的最终收盘价当成当下可见信息，需要改写成收盘后确认或使用当前价格条件。",
         )
     return items
 
@@ -1098,6 +1118,79 @@ def _build_strategy_generation_pipeline(
             else "当前仅保留候选理解结果，不能直接输出可靠可执行的 Python 策略。",
         },
     ]
+
+
+def _build_strategy_field_mapping(
+    *,
+    request: StrategyGenerateRequest,
+    strategy_dsl: dict[str, Any],
+    generation_decision: dict[str, Any],
+) -> list[dict[str, Any]]:
+    position_text = "；".join(
+        f"{key}={value}" for key, value in strategy_dsl.get("position", {}).items()
+    ) or "默认单策略单持仓"
+    items: list[dict[str, Any]] = [
+        {
+            "id": "market_scope",
+            "label": "市场范围",
+            "user_expression": request.market_scope,
+            "structured_value": strategy_dsl.get("market_scope_label"),
+            "dsl_path": "market_scope / market_scope_label",
+            "python_mapping": "context.market_scope",
+        },
+        {
+            "id": "primary_timeframe",
+            "label": "主执行周期",
+            "user_expression": request.timeframe,
+            "structured_value": _timeframe_label(strategy_dsl.get("timeframe", "1d")),
+            "dsl_path": "timeframe",
+            "python_mapping": "context.primary_timeframe",
+        },
+        {
+            "id": "entry_rules",
+            "label": "入场规则",
+            "user_expression": request.prompt,
+            "structured_value": f"{len(strategy_dsl.get('entry', {}).get('all', []))} 条主入场规则",
+            "dsl_path": "entry.all",
+            "python_mapping": "build_entry_signal()",
+        },
+        {
+            "id": "entry_context",
+            "label": "观察层 / 上下文条件",
+            "user_expression": request.prompt,
+            "structured_value": f"{len(strategy_dsl.get('entry_context', []))} 条入场上下文",
+            "dsl_path": "entry_context",
+            "python_mapping": "evaluate_entry_context()",
+        },
+        {
+            "id": "exit_rules",
+            "label": "离场与风控",
+            "user_expression": request.prompt,
+            "structured_value": f"{len(strategy_dsl.get('exit', {}).get('any', []))} 条离场规则",
+            "dsl_path": "exit.any",
+            "python_mapping": "build_exit_signal()",
+        },
+        {
+            "id": "position_rules",
+            "label": "仓位规则",
+            "user_expression": strategy_dsl.get("clarifications", {}).get("position_rule", "默认单策略单持仓"),
+            "structured_value": position_text,
+            "dsl_path": "position",
+            "python_mapping": "build_position_config()",
+        },
+    ]
+    if generation_decision.get("status") in {"needs_confirmation", "rejected"}:
+        items.append(
+            {
+                "id": "generation_gate",
+                "label": "正式生成门槛",
+                "user_expression": request.prompt,
+                "structured_value": generation_decision.get("label"),
+                "dsl_path": "generation_decision",
+                "python_mapping": "当前先阻断正式代码生成或保存",
+            }
+        )
+    return items
 
 
 def _build_strategy_generation_decision(
@@ -1406,6 +1499,11 @@ class StrategyService:
             structured_spec=structured_spec,
             hard_validation=hard_validation,
         )
+        field_mapping = _build_strategy_field_mapping(
+            request=request,
+            strategy_dsl=strategy_dsl,
+            generation_decision=generation_decision,
+        )
         strategy_python = (
             _render_strategy_python(
                 strategy_dsl,
@@ -1460,6 +1558,7 @@ class StrategyService:
             "structured_spec": structured_spec,
             "hard_validation": hard_validation,
             "generation_pipeline": generation_pipeline,
+            "field_mapping": field_mapping,
             "questions_for_user": questions_for_user,
             "unsupported_items": unsupported_items,
             "generation_decision": generation_decision,

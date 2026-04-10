@@ -334,6 +334,7 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertIn("结构化规格", response.text)
         self.assertIn("平台硬校验清单", response.text)
         self.assertIn("生成链路对照", response.text)
+        self.assertIn("字段级对照解释", response.text)
         self.assertIn("应用补充并重新理解", response.text)
         self.assertIn('id="save-project-btn" class="btn disabled" disabled', response.text)
         self.assertIn('id="go-backtests-link" class="btn disabled"', response.text)
@@ -996,6 +997,8 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertEqual("pass", payload["hard_validation"]["checks"][0]["status"])
         self.assertTrue(payload["generation_pipeline"])
         self.assertEqual("natural_language", payload["generation_pipeline"][0]["id"])
+        self.assertIn("field_mapping", payload)
+        self.assertTrue(any(item["id"] == "entry_rules" for item in payload["field_mapping"]))
         self.assertEqual("首次仓位 20%", payload["strategy_dsl"]["position"]["clarified_rule"])
         self.assertIn("已应用你补充的条件说明", payload["human_summary"])
 
@@ -1026,6 +1029,26 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertTrue(any(item["id"] == "timeframe_execution_scope" for item in payload["hard_validation"]["checks"]))
         self.assertIn("generation_pipeline", payload)
         self.assertTrue(any(item["id"] == "dsl" for item in payload["generation_pipeline"]))
+        self.assertTrue(any(item["id"] == "position_rules" for item in payload["field_mapping"]))
+
+    def test_generate_strategy_flags_future_close_reference_risk(self) -> None:
+        client = self._build_client()
+
+        response = client.post(
+            "/api/v1/strategies/generate",
+            json={
+                "prompt": "当日收盘价高于10日均线时尾盘买入，若当日收盘价跌破5日均线则卖出",
+                "market": "600519.SH",
+                "timeframe": "1d",
+                "asset_type": "stock",
+                "preferences": {"side": "long"},
+            },
+        )
+
+        self.assertEqual(200, response.status_code)
+        payload = response.json()["data"]
+        self.assertTrue(any(item["id"] == "future_reference_close" for item in payload["unsupported_items"]))
+        self.assertTrue(any(item["id"] == "future_function_risk" for item in payload["hard_validation"]["checks"]))
 
     def test_generate_strategy_teaching_mode_adds_comments_and_understands_terms(self) -> None:
         client = self._build_client()
