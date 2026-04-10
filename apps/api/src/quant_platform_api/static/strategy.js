@@ -14,6 +14,7 @@ const state = {
   strategySpec: null,
   strategyPython: "",
   platformCapabilities: [],
+  generationDecision: null,
 };
 
 const nodes = {
@@ -37,6 +38,10 @@ const nodes = {
   glossaryPreview: document.querySelector("#glossary-preview"),
   capabilitySummary: document.querySelector("#strategy-capability-summary"),
   capabilityMatrix: document.querySelector("#strategy-capability-matrix"),
+  generationDecision: document.querySelector("#strategy-generation-decision"),
+  understandingCard: document.querySelector("#strategy-understanding-card"),
+  questions: document.querySelector("#strategy-questions"),
+  unsupportedItems: document.querySelector("#strategy-unsupported-items"),
 };
 
 const MARKET_PRESETS = {
@@ -75,11 +80,112 @@ function applyMarketPreset() {
 }
 
 function syncStrategyActionState() {
-  const canProceed = Boolean(state.strategySpec && state.strategyPython);
-  nodes.saveProjectButton.disabled = !canProceed;
-  nodes.saveProjectButton.className = canProceed ? "btn primary" : "btn disabled";
-  nodes.goBacktestsLink.className = canProceed ? "btn primary" : "btn disabled";
-  nodes.goBacktestsLink.setAttribute("aria-disabled", canProceed ? "false" : "true");
+  const canGenerateFollowup = Boolean(state.strategySpec && state.strategyPython);
+  const canSave = Boolean(
+    canGenerateFollowup && state.generationDecision && state.generationDecision.allow_save,
+  );
+  const canGoBacktests = Boolean(
+    canGenerateFollowup &&
+      state.generationDecision &&
+      state.generationDecision.allow_backtest_handoff,
+  );
+  nodes.saveProjectButton.disabled = !canSave;
+  nodes.saveProjectButton.className = canSave ? "btn primary" : "btn disabled";
+  nodes.goBacktestsLink.className = canGoBacktests ? "btn primary" : "btn disabled";
+  nodes.goBacktestsLink.setAttribute("aria-disabled", canGoBacktests ? "false" : "true");
+}
+
+function renderGenerationDecision(decision) {
+  if (!decision) {
+    nodes.generationDecision.textContent = "等待生成策略理解结果。";
+    return;
+  }
+  nodes.generationDecision.innerHTML = `
+    <div class="capability-status capability-${
+      decision.status === "ready"
+        ? "supported"
+        : decision.status === "semantic_only"
+          ? "limited"
+          : "unsupported"
+    }">
+      <strong>${decision.label}</strong>
+      <span>${decision.summary}</span>
+    </div>
+  `;
+}
+
+function renderUnderstandingCard(card) {
+  if (!card) {
+    nodes.understandingCard.textContent = "等待生成结构化理解结果。";
+    return;
+  }
+  const sections = [
+    ["市场", `${card.market_scope_label} / ${card.market}`],
+    ["资产类型", card.asset_type],
+    ["主周期", card.primary_timeframe_label],
+    ["观察周期", (card.timeframe_labels || []).join(" / ") || "未识别"],
+    ["数据依赖", (card.data_dependencies || []).join(" / ") || "未识别"],
+    ["执行假设", (card.execution_assumptions || []).join("；") || "未识别"],
+    [
+      "入场条件",
+      (card.entry_conditions || [])
+        .map((item) => `${item.label} ${item.operator} ${String(item.value)}`)
+        .join("；") || "未识别",
+    ],
+    [
+      "离场条件",
+      (card.exit_conditions || [])
+        .map((item) => `${item.label} ${item.operator} ${String(item.value)}`)
+        .join("；") || "未识别",
+    ],
+  ];
+  nodes.understandingCard.innerHTML = sections
+    .map(
+      ([title, detail]) => `
+        <div class="list-item">
+          <strong>${title}</strong>
+          <div class="muted-note">${detail}</div>
+        </div>
+      `,
+    )
+    .join("");
+}
+
+function renderQuestions(items) {
+  if (!items?.length) {
+    nodes.questions.textContent = "当前没有待补充问题。";
+    return;
+  }
+  nodes.questions.innerHTML = items
+    .map(
+      (item) => `
+        <div class="list-item">
+          <strong>${item.title}</strong>
+          <div class="muted-note">${item.detail}</div>
+          <div class="pill-row" style="margin-top: 10px">
+            ${(item.suggested_choices || []).map((choice) => `<span class="pill">${choice}</span>`).join("")}
+          </div>
+        </div>
+      `,
+    )
+    .join("");
+}
+
+function renderUnsupportedItems(items) {
+  if (!items?.length) {
+    nodes.unsupportedItems.textContent = "当前没有识别到不支持项或未来函数风险。";
+    return;
+  }
+  nodes.unsupportedItems.innerHTML = items
+    .map(
+      (item) => `
+        <div class="list-item">
+          <strong>${item.title}</strong>
+          <div class="muted-note">${item.detail}</div>
+        </div>
+      `,
+    )
+    .join("");
 }
 
 function getCapabilityBase(marketScope) {
@@ -196,9 +302,14 @@ async function generateStrategy() {
   });
   state.strategySpec = payload.data.strategy_dsl;
   state.strategyPython = payload.data.strategy_python;
+  state.generationDecision = payload.data.generation_decision;
   nodes.summary.textContent = payload.data.human_summary;
   nodes.python.textContent = payload.data.strategy_python;
   nodes.spec.textContent = pretty(payload.data.strategy_dsl);
+  renderGenerationDecision(payload.data.generation_decision);
+  renderUnderstandingCard(payload.data.understanding_card);
+  renderQuestions(payload.data.questions_for_user);
+  renderUnsupportedItems(payload.data.unsupported_items);
   nodes.ambiguities.innerHTML = payload.data.ambiguities.length
       ? payload.data.ambiguities.map((item) => `<span class="pill">${item}</span>`).join("")
       : '<span class="pill">无额外歧义</span>';
@@ -218,6 +329,9 @@ async function generateStrategy() {
       requiresCompatibilityNotice:
         payload.data.capability_summary.requires_compatibility_notice || false,
     });
+  }
+  if (payload.data.generation_decision?.summary) {
+    document.querySelector("#status-banner").textContent = payload.data.generation_decision.summary;
   }
   syncStrategyActionState();
   setStatus("策略生成完成。");
@@ -316,5 +430,9 @@ nodes.timeframeOptions.forEach((node) =>
 
 restoreSelection();
 syncTimeframeSelection();
+renderGenerationDecision(null);
+renderUnderstandingCard(null);
+renderQuestions([]);
+renderUnsupportedItems([]);
 syncStrategyActionState();
 loadKnowledgePreview().catch((error) => setStatus(error.message));

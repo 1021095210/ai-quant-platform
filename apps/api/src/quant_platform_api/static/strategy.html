@@ -74,6 +74,25 @@
       <section class="grid two" style="margin-top: 22px">
         <section class="card">
           <div class="panel-header">
+            <h3>系统理解结果</h3>
+            <span class="muted-note">先确认系统理解是否正确，再决定是否保存为正式策略版本</span>
+          </div>
+          <div id="strategy-generation-decision" class="capability-callout empty-state">等待生成策略理解结果。</div>
+          <div id="strategy-understanding-card" class="list empty-state" style="margin-top: 14px">等待生成结构化理解结果。</div>
+        </section>
+        <section class="card">
+          <div class="panel-header">
+            <h3>待补充与风险提示</h3>
+            <span class="muted-note">模糊条件、平台不支持项和未来函数风险都会先在这里拦住</span>
+          </div>
+          <div id="strategy-questions" class="list empty-state">当前还没有待补充问题。</div>
+          <div id="strategy-unsupported-items" class="list empty-state" style="margin-top: 14px">当前还没有识别到不支持项。</div>
+        </section>
+      </section>
+
+      <section class="grid two" style="margin-top: 22px">
+        <section class="card">
+          <div class="panel-header">
             <h3>策略输入</h3>
           </div>
           <div class="form-grid">

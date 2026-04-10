@@ -663,6 +663,223 @@ def _build_context_rules(prompt: str, selected_timeframes: list[str]) -> tuple[l
     return entry_context, exit_context
 
 
+def _extract_strategy_questions(prompt: str, normalized: str) -> list[dict[str, Any]]:
+    questions: list[dict[str, Any]] = []
+
+    def add(question_id: str, title: str, detail: str, suggested_choices: list[str]) -> None:
+        if any(item["id"] == question_id for item in questions):
+            return
+        questions.append(
+            {
+                "id": question_id,
+                "title": title,
+                "detail": detail,
+                "suggested_choices": suggested_choices,
+            }
+        )
+
+    if ("量能放大" in prompt or "放量" in prompt or "量价共振" in prompt) and not re.search(
+        r"(量比|成交量|成交额).{0,8}(\d+(\.\d+)?)",
+        prompt,
+    ):
+        add(
+            "volume_threshold",
+            "量能条件需要补阈值",
+            "当前已识别到量能相关条件，但没有看到明确阈值。建议补充量比、均量倍数或成交额阈值。",
+            ["量比 >= 1.2", "成交量 >= 10日均量的 1.5 倍", "成交额 >= 过去 20 日均值"],
+        )
+    if "不追高" in prompt or "别追高" in prompt or "不要追高" in prompt:
+        add(
+            "chase_guard",
+            "追高限制需要补定义",
+            "当前已识别到“不追高”，但还没有价格边界。建议补充前 15 分钟涨幅上限、开盘涨幅上限或距离前高约束。",
+            ["前 15 分钟涨幅 <= 1%", "开盘涨幅 <= 2%", "距离前高 >= 1% 才允许追入"],
+        )
+    if "确认后" in prompt or "等确认" in prompt or "确认再" in prompt:
+        add(
+            "confirmation_rule",
+            "确认条件需要补充",
+            "当前提到了“确认后再入场”，但没有说明确认依据。建议明确是均线确认、分钟结构确认、放量确认还是收盘确认。",
+            ["15 分钟收盘站上均线", "阳线占比 >= 50%", "量比 >= 1.2 后再入场"],
+        )
+    if "大盘不差" in prompt or "市场环境好" in prompt or "环境允许" in prompt:
+        add(
+            "market_regime",
+            "市场环境条件需要补定义",
+            "当前已识别到环境过滤，但没有给出明确标准。建议补充趋势市、指数均线位置、波动率或行业强弱条件。",
+            ["指数站上 20 日均线", "只在趋势市开仓", "行业强度排名前 30%"],
+        )
+    if "试仓" in prompt and "仓位" not in prompt:
+        add(
+            "position_rule",
+            "试仓规则需要补充",
+            "当前提到了“试仓”，建议补充试仓仓位比例或最大持仓数。",
+            ["首次仓位 20%", "最多 1 只持仓", "分两次加仓"],
+        )
+    return questions
+
+
+def _extract_strategy_unsupported_items(prompt: str, normalized: str) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+
+    def add(item_id: str, title: str, detail: str, level: str = "hard") -> None:
+        if any(entry["id"] == item_id for entry in items):
+            return
+        items.append(
+            {
+                "id": item_id,
+                "title": title,
+                "detail": detail,
+                "level": level,
+            }
+        )
+
+    if any(marker in prompt or marker in normalized for marker in ["盘口", "逐笔", "委托队列", "l2", "orderbook", "tick逐笔"]):
+        add(
+            "market_microstructure",
+            "当前不支持盘口 / 逐笔 / L2 数据驱动策略",
+            "策略里出现了盘口、逐笔成交或委托队列语义。平台当前没有把这类数据接入策略工坊真值层，不能生成可靠可执行版本。",
+        )
+    if ("当日最低价" in prompt or "今日最低价" in prompt or "盘中最低价" in prompt) and ("买入" in prompt or "开仓" in prompt):
+        add(
+            "future_reference_low",
+            "当前表达存在未来函数风险",
+            "用“当日最低价/盘中最低价”作为当日买入触发条件，容易在入场时引用尚未发生的未来信息。需要改写成当下可观察条件。",
+        )
+    if ("当日最高价" in prompt or "今日最高价" in prompt or "盘中最高价" in prompt) and ("卖出" in prompt or "止盈" in prompt):
+        add(
+            "future_reference_high",
+            "当前表达存在未来函数风险",
+            "用“当日最高价/盘中最高价”作为离场条件，容易在决策时引用未来信息。需要改写成当下可观察条件。",
+        )
+    return items
+
+
+def _build_strategy_understanding(
+    *,
+    request: StrategyGenerateRequest,
+    market_scope_label: str,
+    selected_timeframes: list[str],
+    strategy_dsl: dict[str, Any],
+    entry_context: list[dict[str, Any]],
+    exit_context: list[dict[str, Any]],
+    matched_custom_indicators: list[CustomIndicatorRecord],
+    matched_terms: list[GlossaryTermRecord],
+    questions_for_user: list[dict[str, Any]],
+    unsupported_items: list[dict[str, Any]],
+    capability_summary: dict[str, Any],
+) -> dict[str, Any]:
+    entry_conditions = [
+        {
+            "label": item.get("indicator"),
+            "timeframe": _timeframe_label(item.get("timeframe", strategy_dsl["timeframe"])),
+            "operator": item.get("operator"),
+            "value": item.get("value"),
+        }
+        for item in strategy_dsl.get("entry", {}).get("all", [])
+    ]
+    exit_conditions = [
+        {
+            "label": item.get("indicator"),
+            "timeframe": _timeframe_label(item.get("timeframe", strategy_dsl["timeframe"])),
+            "operator": item.get("operator"),
+            "value": item.get("value"),
+        }
+        for item in strategy_dsl.get("exit", {}).get("any", [])
+    ]
+    risk_controls = [
+        {
+            "label": "止盈比例",
+            "value": next(
+                (item.get("value") for item in strategy_dsl.get("exit", {}).get("any", []) if item.get("indicator") == "take_profit_pct"),
+                None,
+            ),
+        },
+        {
+            "label": "止损比例",
+            "value": next(
+                (item.get("value") for item in strategy_dsl.get("exit", {}).get("any", []) if item.get("indicator") == "stop_loss_pct"),
+                None,
+            ),
+        },
+    ]
+    execution_assumptions = [
+        f"当前主执行周期：{_timeframe_label(strategy_dsl['timeframe'])}",
+        f"当前回测兼容层周期：{_timeframe_label(strategy_dsl.get('backtest_timeframe', strategy_dsl['timeframe']))}",
+    ]
+    if capability_summary.get("requires_compatibility_notice"):
+        execution_assumptions.append("混合周期或非日线条件当前会先沉淀为语义层，真实回测仍按日线兼容层理解。")
+    if request.market_scope != "cn_equity":
+        execution_assumptions.append("当前市场只支持策略语义与规则研究，不支持真实回测执行。")
+    return {
+        "market_scope_label": market_scope_label,
+        "market": request.market,
+        "asset_type": request.asset_type,
+        "primary_timeframe_label": _timeframe_label(strategy_dsl["timeframe"]),
+        "timeframe_labels": [_timeframe_label(item) for item in selected_timeframes],
+        "data_dependencies": [
+            f"{market_scope_label} 行情",
+            *([f"{item.name}（自定义指标）" for item in matched_custom_indicators] or []),
+            *([f"{item.term}（术语解释）" for item in matched_terms] or []),
+        ],
+        "entry_conditions": entry_conditions,
+        "entry_context": entry_context,
+        "exit_conditions": exit_conditions,
+        "exit_context": exit_context,
+        "risk_controls": [item for item in risk_controls if item["value"] is not None],
+        "position_rules": strategy_dsl.get("position", {}),
+        "execution_assumptions": execution_assumptions,
+        "ambiguities": [item["title"] for item in questions_for_user],
+        "questions_for_user": questions_for_user,
+        "unsupported_items": unsupported_items,
+        "capability_summary": capability_summary,
+    }
+
+
+def _build_strategy_generation_decision(
+    *,
+    capability_summary: dict[str, Any],
+    questions_for_user: list[dict[str, Any]],
+    unsupported_items: list[dict[str, Any]],
+) -> dict[str, Any]:
+    hard_unsupported = [item for item in unsupported_items if item.get("level", "hard") == "hard"]
+    if hard_unsupported:
+        return {
+            "status": "rejected",
+            "label": "当前应拒绝输出",
+            "summary": "当前策略包含平台暂不支持的数据依赖或明显未来函数风险，不能生成可靠的可执行策略版本。",
+            "allow_python_generation": False,
+            "allow_save": False,
+            "allow_backtest_handoff": False,
+        }
+    if questions_for_user:
+        return {
+            "status": "needs_confirmation",
+            "label": "需补充后再生成正式版本",
+            "summary": "系统已经理解到基础策略方向，但仍有模糊条件或缺参数。当前结果只能作为候选理解，不建议直接保存为正式策略版本。",
+            "allow_python_generation": True,
+            "allow_save": False,
+            "allow_backtest_handoff": False,
+        }
+    if capability_summary.get("backtest_status") != "supported":
+        return {
+            "status": "semantic_only",
+            "label": "当前仅可描述 / 保存，不能直接真实执行",
+            "summary": capability_summary.get("backtest_warning") or "当前策略可生成并保存语义，但真实回测执行仍受平台支持边界限制。",
+            "allow_python_generation": True,
+            "allow_save": True,
+            "allow_backtest_handoff": True,
+        }
+    return {
+        "status": "ready",
+        "label": "可直接生成并保存",
+        "summary": "当前策略表达清晰，平台支持范围也明确，可以继续保存并进入回测中心验证。",
+        "allow_python_generation": True,
+        "allow_save": True,
+        "allow_backtest_handoff": True,
+    }
+
+
 class TaskExecutionError(RuntimeError):
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
@@ -765,6 +982,8 @@ class StrategyService:
             for item in glossary_terms
             if item.term.lower() in normalized or item.term in prompt
         ]
+        questions_for_user = _extract_strategy_questions(prompt, normalized)
+        unsupported_items = _extract_strategy_unsupported_items(prompt, normalized)
 
         if "做空" in prompt or "short" in normalized:
             ambiguities.append("当前中国股票/ETF 默认仅支持做多回测，已自动按做多策略生成。")
@@ -870,15 +1089,42 @@ class StrategyService:
             timeframes=selected_timeframes,
             analysis_mode=strategy_dsl["analysis_mode"],
         )
-        strategy_python = _render_strategy_python(
-            strategy_dsl,
-            teaching_mode=request.teaching_mode,
+        understanding = _build_strategy_understanding(
+            request=request,
+            market_scope_label=market_scope_label,
+            selected_timeframes=selected_timeframes,
+            strategy_dsl=strategy_dsl,
+            entry_context=entry_context,
+            exit_context=exit_context,
             matched_custom_indicators=matched_custom_indicators,
             matched_terms=matched_terms,
+            questions_for_user=questions_for_user,
+            unsupported_items=unsupported_items,
+            capability_summary=capability_summary,
         )
-        summary_parts = [
-            f"已根据描述生成一套面向 {market_scope_label} {request.market} 的 {side} 向 Python 策略，主周期为 {_timeframe_label(primary_timeframe)}。"
-        ]
+        generation_decision = _build_strategy_generation_decision(
+            capability_summary=capability_summary,
+            questions_for_user=questions_for_user,
+            unsupported_items=unsupported_items,
+        )
+        strategy_python = (
+            _render_strategy_python(
+                strategy_dsl,
+                teaching_mode=request.teaching_mode,
+                matched_custom_indicators=matched_custom_indicators,
+                matched_terms=matched_terms,
+            )
+            if generation_decision["allow_python_generation"]
+            else "# 当前策略存在不支持项或未来函数风险，需先修改后再生成 Python 策略。"
+        )
+        if generation_decision["allow_python_generation"]:
+            summary_parts = [
+                f"已根据描述生成一套面向 {market_scope_label} {request.market} 的 {side} 向 Python 策略，主周期为 {_timeframe_label(primary_timeframe)}。"
+            ]
+        else:
+            summary_parts = [
+                f"已识别到一套面向 {market_scope_label} {request.market} 的候选策略理解结果，但当前不允许直接生成正式 Python 策略。"
+            ]
         if len(selected_timeframes) > 1:
             summary_parts.append(
                 "已保留混合周期条件："
@@ -901,10 +1147,18 @@ class StrategyService:
             )
         if entry_context or exit_context:
             summary_parts.append("跨周期观察条件已经显式写入策略规格，便于后续接入更真实的多周期执行引擎。")
+        if questions_for_user:
+            summary_parts.append("当前仍有待补充问题，建议先确认系统理解结果，再保存为正式策略版本。")
+        if unsupported_items:
+            summary_parts.append("当前识别到平台暂不支持或存在未来函数风险的内容，不能直接生成可靠可执行策略。")
         return {
             "strategy_dsl": strategy_dsl,
             "strategy_python": strategy_python,
             "capability_summary": capability_summary,
+            "understanding_card": understanding,
+            "questions_for_user": questions_for_user,
+            "unsupported_items": unsupported_items,
+            "generation_decision": generation_decision,
             "human_summary": " ".join(summary_parts),
             "ambiguities": ambiguities,
             "matched_custom_indicators": [
