@@ -279,12 +279,21 @@ async function parseManualText() {
 
 function renderManualParseSummary(result) {
   const groups = result.group_summaries || [];
+  const aiReview = result.ai_review || {};
+  const warningLines = (aiReview.warnings || []).map((item) => `- ${item}`);
   if (!groups.length) {
-    nodes.manualParseSummary.textContent = result.summary || "长文字智能识别完成，已加入手动记录。";
+    nodes.manualParseSummary.textContent = [
+      result.summary || "长文字智能识别完成，已加入手动记录。",
+      aiReview.mode_label ? `解析方式：${aiReview.mode_label}` : "",
+      ...warningLines,
+    ]
+      .filter(Boolean)
+      .join("\n");
     return;
   }
   const lines = [
     result.summary || "长文字智能识别完成。",
+    aiReview.mode_label ? `解析方式：${aiReview.mode_label}` : "",
     `共识别 ${result.group_count || groups.length} 个日期块，加入 ${result.record_count || 0} 笔记录。`,
     "",
     ...groups.map(
@@ -294,6 +303,7 @@ function renderManualParseSummary(result) {
         `卖出规则：${group.exit_rule}\n` +
         `标的：${(group.symbols || []).join("、")}`,
     ),
+    ...(warningLines.length ? ["", "需要你重点确认：", ...warningLines] : []),
   ];
   nodes.manualParseSummary.textContent = lines.join("\n");
 }

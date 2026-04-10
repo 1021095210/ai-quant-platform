@@ -178,6 +178,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         trade_upload_service=TradeUploadService(
             trade_upload_repository,
             market_data_service=market_data_service,
+            settings=app_settings,
         ),
         workspace_service=WorkspaceService(
             strategy_service=strategy_service,

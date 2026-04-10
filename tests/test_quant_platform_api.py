@@ -3247,6 +3247,61 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertIn("买入规则：当日收盘价买入", data["records"][-1]["notes"])
         self.assertIn("卖出规则：下跌 3% 止损卖出", data["records"][-1]["notes"])
 
+    @patch("quant_platform_api.services.httpx.Client")
+    def test_manual_text_parse_endpoint_can_use_llm_for_complex_group_rules(self, client_mock) -> None:
+        stream_response = Mock()
+        stream_response.iter_lines.return_value = [
+            'data: {"choices":[{"delta":{"content":"{\\"global_entry_rule\\":\\"\\",\\"global_exit_rule\\":\\"\\",\\"groups\\":[{\\"trade_date\\":\\"2025-07-25\\",\\"symbols\\":[\\"603590.SH\\",\\"002225.SZ\\"],\\"entry_rule_text\\":\\"次日开盘价买入\\",\\"exit_rule_text\\":\\"价格低于当日开盘价-0.5倍atr时卖出\\",\\"explicit_exit_date\\":\\"\\",\\"confidence\\":\\"high\\"},{\\"trade_date\\":\\"2025-08-01\\",\\"symbols\\":[\\"603579.SH\\"],\\"entry_rule_text\\":\\"当日收盘价买入\\",\\"exit_rule_text\\":\\"止损3%\\",\\"explicit_exit_date\\":\\"\\",\\"confidence\\":\\"medium\\"}],\\"warnings\\":[\\"第二组规则来自自然语言推断，请人工确认\\"]}"}}]}',
+            "data: [DONE]",
+        ]
+        stream_response.text = ""
+        stream_response.raise_for_status.return_value = None
+
+        stream_context = Mock()
+        stream_context.__enter__ = Mock(return_value=stream_response)
+        stream_context.__exit__ = Mock(return_value=None)
+
+        http_client = Mock()
+        http_client.stream.return_value = stream_context
+        http_context = Mock()
+        http_context.__enter__ = Mock(return_value=http_client)
+        http_context.__exit__ = Mock(return_value=None)
+        client_mock.return_value = http_context
+
+        client = self._build_client(
+            llm_base_url="https://llm.example.test/v1",
+            llm_api_key="sk-test",
+            llm_model_mentor="gpt-5-mini",
+        )
+        self._login(client)
+
+        response = client.post(
+            "/api/v1/trades/uploads/manual/parse-text",
+            json={
+                "text": (
+                    "2025-07-25\n"
+                    "603590.SH, 002225.SZ\n"
+                    "这组等到次日开盘再买，若价格低于开盘价减去半个 ATR 就走。\n\n"
+                    "2025-08-01\n"
+                    "603579.SH\n"
+                    "这组改成当天收盘再买，止损 3%。"
+                ),
+                "market": "cn_equity",
+                "adjustment_mode": "qfq",
+            },
+        )
+
+        self.assertEqual(200, response.status_code)
+        data = response.json()["data"]
+        self.assertEqual("hybrid_llm", data["parse_mode"])
+        self.assertTrue(data["ai_review"]["used"])
+        self.assertEqual("AI 混合解析", data["ai_review"]["mode_label"])
+        self.assertIn("人工确认", data["ai_review"]["warnings"][0])
+        self.assertEqual("次日开盘价买入", data["group_summaries"][0]["entry_rule"])
+        self.assertEqual("下跌 3% 止损卖出", data["group_summaries"][1]["exit_rule"])
+        self.assertIn("买入规则：次日开盘价买入", data["records"][0]["notes"])
+        self.assertIn("卖出规则：下跌 3% 止损卖出", data["records"][-1]["notes"])
+
     def test_screenshot_trade_upload_creates_structured_record(self) -> None:
         client = self._build_client()
         self._login(client)

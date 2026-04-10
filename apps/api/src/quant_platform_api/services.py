@@ -1814,10 +1814,12 @@ class TradeUploadService:
         repository: TradeUploadRepository,
         *,
         market_data_service: MarketDataService | None = None,
+        settings: Settings | None = None,
     ) -> None:
         self._repository = repository
         self._market_data_service = market_data_service
         self._ocr_engine: Any | None = None
+        self._settings = settings or Settings()
 
     def create_upload(
         self,
@@ -1972,6 +1974,11 @@ class TradeUploadService:
         if not normalized_text:
             raise TaskExecutionError("INVALID_ARGUMENT", "请先输入需要识别的长文字内容。")
 
+        llm_parse = self._parse_trade_text_with_llm(
+            text=normalized_text,
+            market=market,
+        )
+
         grouped_candidates = self._extract_grouped_trade_candidates(
             normalized_text,
             market=market,
@@ -1982,6 +1989,7 @@ class TradeUploadService:
                 text=normalized_text,
                 market=market,
                 adjustment_mode=adjustment_mode,
+                llm_parse=llm_parse,
             )
 
         trade_date = self._extract_labeled_trade_date(normalized_text, "买入日期") or self._extract_trade_date(normalized_text)
@@ -1992,9 +2000,25 @@ class TradeUploadService:
         if not symbols:
             raise TaskExecutionError("INVALID_ARGUMENT", "未识别到股票代码，请至少包含一个可识别的标的代码。")
 
-        entry_rule = self._extract_entry_rule(normalized_text)
-        exit_rule = self._extract_exit_rule(normalized_text)
-        explicit_exit_date = self._extract_labeled_trade_date(normalized_text, "卖出日期")
+        ai_single = self._match_llm_group(
+            llm_parse,
+            trade_date=trade_date.isoformat(),
+        )
+        entry_rule = (
+            self._extract_entry_rule_or_none(normalized_text)
+            or self._extract_rule_from_llm_text(ai_single.get("entry_rule_text") if ai_single else None, kind="entry")
+            or self._extract_rule_from_llm_text(llm_parse.get("global_entry_rule") if llm_parse else None, kind="entry")
+            or {"label": "当日开盘价买入", "price_field": "open", "offset": 0}
+        )
+        exit_rule = (
+            self._extract_exit_rule(normalized_text)
+            or self._extract_rule_from_llm_text(ai_single.get("exit_rule_text") if ai_single else None, kind="exit")
+            or self._extract_rule_from_llm_text(llm_parse.get("global_exit_rule") if llm_parse else None, kind="exit")
+        )
+        explicit_exit_date = (
+            self._extract_labeled_trade_date(normalized_text, "卖出日期")
+            or self._extract_iso_date(ai_single.get("explicit_exit_date") if ai_single else None)
+        )
 
         records = [
             self._build_text_trade_record(
@@ -2016,6 +2040,8 @@ class TradeUploadService:
             "entry_rule": entry_rule["label"],
             "exit_rule": exit_rule["label"] if exit_rule else "未提供卖出规则",
             "record_count": len(records),
+            "parse_mode": "hybrid_llm" if llm_parse else "deterministic",
+            "ai_review": self._build_ai_review_summary(llm_parse),
             "records": [item.model_dump(mode="json") for item in records],
             "summary": (
                 f"已识别 {len(records)} 笔交易，日期为 {trade_date.isoformat()}，"
@@ -2030,22 +2056,38 @@ class TradeUploadService:
         text: str,
         market: str,
         adjustment_mode: str,
+        llm_parse: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        global_entry_rule = self._extract_entry_rule_or_none(text)
-        global_exit_rule = self._extract_exit_rule(text)
+        global_entry_rule = (
+            self._extract_entry_rule_or_none(text)
+            or self._extract_rule_from_llm_text(llm_parse.get("global_entry_rule") if llm_parse else None, kind="entry")
+        )
+        global_exit_rule = (
+            self._extract_exit_rule(text)
+            or self._extract_rule_from_llm_text(llm_parse.get("global_exit_rule") if llm_parse else None, kind="exit")
+        )
         records: list[TradeRecordItem] = []
         group_summaries: list[dict[str, Any]] = []
         for group in grouped_candidates:
             trade_date = group["trade_date"]
             symbols = group["symbols"]
             block_text = group["block_text"]
+            llm_group = self._match_llm_group(llm_parse, trade_date=trade_date.isoformat())
             block_entry_rule = (
                 self._extract_entry_rule_or_none(block_text)
+                or self._extract_rule_from_llm_text(llm_group.get("entry_rule_text") if llm_group else None, kind="entry")
                 or global_entry_rule
                 or {"label": "当日开盘价买入", "price_field": "open", "offset": 0}
             )
-            block_exit_rule = self._extract_exit_rule(block_text) or global_exit_rule
-            explicit_exit_date = self._extract_labeled_trade_date(block_text, "卖出日期")
+            block_exit_rule = (
+                self._extract_exit_rule(block_text)
+                or self._extract_rule_from_llm_text(llm_group.get("exit_rule_text") if llm_group else None, kind="exit")
+                or global_exit_rule
+            )
+            explicit_exit_date = (
+                self._extract_labeled_trade_date(block_text, "卖出日期")
+                or self._extract_iso_date(llm_group.get("explicit_exit_date") if llm_group else None)
+            )
             group_records: list[TradeRecordItem] = []
             for index, symbol in enumerate(symbols, start=1):
                 record = self._build_text_trade_record(
@@ -2082,6 +2124,8 @@ class TradeUploadService:
             "entry_rule": global_entry_rule["label"] if global_entry_rule else "按各日期块独立识别",
             "exit_rule": global_exit_rule["label"] if global_exit_rule else "按各日期块独立识别",
             "record_count": len(records),
+            "parse_mode": "hybrid_llm" if llm_parse else "deterministic",
+            "ai_review": self._build_ai_review_summary(llm_parse),
             "group_summaries": group_summaries,
             "records": [item.model_dump(mode="json") for item in records],
             "summary": (
@@ -2542,6 +2586,159 @@ class TradeUploadService:
         if not any(marker in text for marker in markers):
             return None
         return self._extract_entry_rule(text)
+
+    def _llm_ready(self) -> bool:
+        return bool(
+            self._settings.llm_base_url.strip()
+            and self._settings.llm_api_key.strip()
+        )
+
+    def _parse_trade_text_with_llm(self, *, text: str, market: str) -> dict[str, Any] | None:
+        if not self._llm_ready():
+            return None
+        endpoint = self._settings.llm_base_url.rstrip("/")
+        if not endpoint.endswith("/chat/completions"):
+            endpoint = f"{endpoint}/chat/completions"
+        system_prompt = (
+            "你是交易记录文本解析助手。请把中文长文本里的多日期交易清单解析成 JSON。"
+            "不要编造不存在的代码或日期。无法确认就留空。"
+            "输出必须是 JSON 对象，字段固定为：global_entry_rule、global_exit_rule、groups、warnings。"
+            "groups 是数组，每个对象字段固定为：trade_date、symbols、entry_rule_text、exit_rule_text、explicit_exit_date、confidence。"
+            "trade_date 统一用 YYYY-MM-DD，symbols 统一用标准代码。"
+        )
+        request_payload = {
+            "model": self._settings.llm_model_mentor
+            or self._settings.llm_model_summary
+            or self._settings.llm_model_strategy
+            or "gpt-5-mini",
+            "temperature": 0.1,
+            "stream": True,
+            "response_format": {"type": "json_object"},
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {
+                    "role": "user",
+                    "content": json.dumps(
+                        {
+                            "market": market,
+                            "text": text,
+                        },
+                        ensure_ascii=False,
+                    ),
+                },
+            ],
+        }
+        try:
+            with httpx.Client(timeout=45) as client:
+                with client.stream(
+                    "POST",
+                    endpoint,
+                    headers={
+                        "Authorization": f"Bearer {self._settings.llm_api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json=request_payload,
+                ) as response:
+                    response.raise_for_status()
+                    content = self._extract_stream_content(response)
+            parsed = self._extract_json_object(content)
+            groups = parsed.get("groups")
+            if not isinstance(groups, list):
+                return None
+            return {
+                "global_entry_rule": str(parsed.get("global_entry_rule") or "").strip(),
+                "global_exit_rule": str(parsed.get("global_exit_rule") or "").strip(),
+                "groups": [
+                    {
+                        "trade_date": str(item.get("trade_date") or "").strip(),
+                        "symbols": [str(symbol).strip().upper() for symbol in item.get("symbols", []) if str(symbol).strip()],
+                        "entry_rule_text": str(item.get("entry_rule_text") or "").strip(),
+                        "exit_rule_text": str(item.get("exit_rule_text") or "").strip(),
+                        "explicit_exit_date": str(item.get("explicit_exit_date") or "").strip(),
+                        "confidence": str(item.get("confidence") or "").strip(),
+                    }
+                    for item in groups
+                    if isinstance(item, dict)
+                ],
+                "warnings": [str(item).strip() for item in parsed.get("warnings", []) if str(item).strip()],
+            }
+        except Exception:
+            return None
+
+    def _extract_stream_content(self, response: httpx.Response) -> str:
+        content_parts: list[str] = []
+        for raw_line in response.iter_lines():
+            line = raw_line.strip()
+            if not line or not line.startswith("data:"):
+                continue
+            payload_text = line[5:].strip()
+            if payload_text == "[DONE]":
+                break
+            try:
+                chunk = json.loads(payload_text)
+            except json.JSONDecodeError:
+                continue
+            choices = chunk.get("choices") or []
+            if not choices:
+                continue
+            delta = choices[0].get("delta") or {}
+            piece = delta.get("content")
+            if piece:
+                content_parts.append(str(piece))
+        if content_parts:
+            return "".join(content_parts)
+        return response.text
+
+    def _extract_json_object(self, content: str) -> dict[str, Any]:
+        candidate = content.strip()
+        fenced = re.search(r"```(?:json)?\s*(\{.*\})\s*```", candidate, flags=re.S)
+        if fenced:
+            candidate = fenced.group(1)
+        if not candidate.startswith("{"):
+            start = candidate.find("{")
+            end = candidate.rfind("}")
+            if start != -1 and end != -1 and end > start:
+                candidate = candidate[start : end + 1]
+        return json.loads(candidate)
+
+    def _extract_rule_from_llm_text(self, text: str | None, *, kind: str) -> dict[str, Any] | None:
+        if not text:
+            return None
+        if kind == "entry":
+            return self._extract_entry_rule_or_none(text)
+        return self._extract_exit_rule(text)
+
+    def _match_llm_group(self, llm_parse: dict[str, Any] | None, *, trade_date: str) -> dict[str, Any] | None:
+        if not llm_parse:
+            return None
+        for item in llm_parse.get("groups", []):
+            if item.get("trade_date") == trade_date:
+                return item
+        return None
+
+    def _extract_iso_date(self, text: str | None) -> date | None:
+        if not text:
+            return None
+        match = re.search(r"(20\d{2}[-/]\d{2}[-/]\d{2})", text)
+        if match is None:
+            return None
+        return date.fromisoformat(match.group(1).replace("/", "-"))
+
+    def _build_ai_review_summary(self, llm_parse: dict[str, Any] | None) -> dict[str, Any]:
+        if not llm_parse:
+            return {
+                "enabled": False,
+                "used": False,
+                "mode_label": "规则解析",
+                "warnings": [],
+            }
+        return {
+            "enabled": True,
+            "used": True,
+            "mode_label": "AI 混合解析",
+            "group_count": len(llm_parse.get("groups", [])),
+            "warnings": llm_parse.get("warnings", []),
+        }
 
     def _extract_exit_rule(self, text: str) -> dict[str, Any] | None:
         explicit_price_match = re.search(
