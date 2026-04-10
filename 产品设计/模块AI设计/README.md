@@ -17,6 +17,7 @@
 - [用户工作台模块_AI设计.md](/workspace/ai-quant-platform/产品设计/模块AI设计/用户工作台模块_AI设计.md)
 - [管理员工作台模块_AI设计.md](/workspace/ai-quant-platform/产品设计/模块AI设计/管理员工作台模块_AI设计.md)
 - [策略工坊模块_AI设计.md](/workspace/ai-quant-platform/产品设计/模块AI设计/策略工坊模块_AI设计.md)
+- [策略工坊模块_详细查缺补漏.md](/workspace/ai-quant-platform/产品设计/模块AI设计/策略工坊模块_详细查缺补漏.md)
 - [指标设置模块_AI设计.md](/workspace/ai-quant-platform/产品设计/模块AI设计/指标设置模块_AI设计.md)
 - [规则模块_AI设计.md](/workspace/ai-quant-platform/产品设计/模块AI设计/规则模块_AI设计.md)
 - [回测中心模块_AI设计.md](/workspace/ai-quant-platform/产品设计/模块AI设计/回测中心模块_AI设计.md)
