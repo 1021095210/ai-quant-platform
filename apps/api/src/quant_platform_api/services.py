@@ -663,10 +663,18 @@ def _build_context_rules(prompt: str, selected_timeframes: list[str]) -> tuple[l
     return entry_context, exit_context
 
 
-def _extract_strategy_questions(prompt: str, normalized: str) -> list[dict[str, Any]]:
+def _extract_strategy_questions(
+    prompt: str,
+    normalized: str,
+    clarification_answers: dict[str, str] | None = None,
+) -> list[dict[str, Any]]:
     questions: list[dict[str, Any]] = []
+    clarification_answers = clarification_answers or {}
 
     def add(question_id: str, title: str, detail: str, suggested_choices: list[str]) -> None:
+        answer = (clarification_answers.get(question_id) or "").strip()
+        if answer:
+            return
         if any(item["id"] == question_id for item in questions):
             return
         questions.append(
@@ -717,6 +725,82 @@ def _extract_strategy_questions(prompt: str, normalized: str) -> list[dict[str, 
             ["首次仓位 20%", "最多 1 只持仓", "分两次加仓"],
         )
     return questions
+
+
+def _extract_number(text: str) -> float | None:
+    match = re.search(r"(-?\d+(?:\.\d+)?)", text)
+    if not match:
+        return None
+    try:
+        return float(match.group(1))
+    except ValueError:
+        return None
+
+
+def _apply_strategy_clarifications(
+    *,
+    strategy_dsl: dict[str, Any],
+    clarification_answers: dict[str, str],
+    entry_context: list[dict[str, Any]],
+) -> None:
+    cleaned = {
+        key: value.strip()
+        for key, value in clarification_answers.items()
+        if isinstance(value, str) and value.strip()
+    }
+    if not cleaned:
+        return
+
+    strategy_dsl["clarifications"] = cleaned
+    filters = strategy_dsl.setdefault("filters", {})
+
+    volume_answer = cleaned.get("volume_threshold")
+    if volume_answer:
+        numeric = _extract_number(volume_answer)
+        if numeric is not None and not any(item.get("indicator") == "volume_ratio" for item in strategy_dsl.get("entry", {}).get("all", [])):
+            strategy_dsl["entry"]["all"].append(
+                {
+                    "indicator": "volume_ratio",
+                    "params": {"period": 10},
+                    "operator": ">=",
+                    "value": numeric,
+                    "timeframe": strategy_dsl["timeframe"],
+                }
+            )
+
+    chase_answer = cleaned.get("chase_guard")
+    if chase_answer:
+        numeric = _extract_number(chase_answer)
+        if numeric is not None:
+            filters["intraday_entry_timing"] = {
+                "enabled": True,
+                "max_first_15m_return_pct": numeric,
+                "source": "clarification_answer",
+            }
+
+    confirmation_answer = cleaned.get("confirmation_rule")
+    if confirmation_answer:
+        entry_context.append(
+            {
+                "timeframe": strategy_dsl["timeframe"],
+                "expression": f"补充确认规则：{confirmation_answer}",
+                "indicator": "clarified_confirmation_rule",
+                "operator": "==",
+                "value": True,
+            }
+        )
+
+    market_regime_answer = cleaned.get("market_regime")
+    if market_regime_answer:
+        filters["market_regime"] = {
+            "enabled": True,
+            "preferred": market_regime_answer,
+            "source": "clarification_answer",
+        }
+
+    position_answer = cleaned.get("position_rule")
+    if position_answer:
+        strategy_dsl.setdefault("position", {})["clarified_rule"] = position_answer
 
 
 def _extract_strategy_unsupported_items(prompt: str, normalized: str) -> list[dict[str, Any]]:
@@ -828,11 +912,128 @@ def _build_strategy_understanding(
         "exit_context": exit_context,
         "risk_controls": [item for item in risk_controls if item["value"] is not None],
         "position_rules": strategy_dsl.get("position", {}),
+        "clarifications": strategy_dsl.get("clarifications", {}),
         "execution_assumptions": execution_assumptions,
         "ambiguities": [item["title"] for item in questions_for_user],
         "questions_for_user": questions_for_user,
         "unsupported_items": unsupported_items,
         "capability_summary": capability_summary,
+    }
+
+
+def _build_strategy_structured_spec(
+    *,
+    request: StrategyGenerateRequest,
+    market_scope_label: str,
+    strategy_dsl: dict[str, Any],
+    capability_summary: dict[str, Any],
+    questions_for_user: list[dict[str, Any]],
+    unsupported_items: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "market_scope_label": market_scope_label,
+        "market": request.market,
+        "asset_type": request.asset_type,
+        "analysis_mode": strategy_dsl.get("analysis_mode", "single_timeframe"),
+        "primary_timeframe_label": _timeframe_label(strategy_dsl["timeframe"]),
+        "observation_timeframe_labels": [
+            _timeframe_label(item) for item in strategy_dsl.get("timeframes", [])
+        ],
+        "entry_rule_count": len(strategy_dsl.get("entry", {}).get("all", [])),
+        "entry_context_count": len(strategy_dsl.get("entry_context", [])),
+        "exit_rule_count": len(strategy_dsl.get("exit", {}).get("any", [])),
+        "exit_context_count": len(strategy_dsl.get("exit_context", [])),
+        "data_dependencies": capability_summary.get("notes", []),
+        "position": strategy_dsl.get("position", {}),
+        "execution_assumptions": [
+            f"主执行周期：{_timeframe_label(strategy_dsl['timeframe'])}",
+            f"回测兼容层：{_timeframe_label(strategy_dsl.get('backtest_timeframe', strategy_dsl['timeframe']))}",
+        ],
+        "clarifications": strategy_dsl.get("clarifications", {}),
+        "open_questions": [item["title"] for item in questions_for_user],
+        "unsupported_items": [item["title"] for item in unsupported_items],
+    }
+
+
+def _build_strategy_hard_validation(
+    *,
+    capability_summary: dict[str, Any],
+    generation_decision: dict[str, Any],
+    questions_for_user: list[dict[str, Any]],
+    unsupported_items: list[dict[str, Any]],
+) -> dict[str, Any]:
+    checks: list[dict[str, Any]] = []
+
+    def add(check_id: str, title: str, status: str, detail: str) -> None:
+        checks.append(
+            {
+                "id": check_id,
+                "title": title,
+                "status": status,
+                "detail": detail,
+            }
+        )
+
+    backtest_status = capability_summary.get("backtest_status", "unsupported")
+    add(
+        "market_execution_support",
+        "市场与回测支持范围",
+        "pass" if backtest_status == "supported" else "warn",
+        capability_summary.get("backtest_warning")
+        or "当前策略的真实执行范围需要继续确认。",
+    )
+
+    add(
+        "clarification_completeness",
+        "模糊条件与补充信息",
+        "pass" if not questions_for_user else "warn",
+        "当前没有待补充问题。"
+        if not questions_for_user
+        else "仍有模糊条件或缺参数，需要用户补充后再进入正式版本。",
+    )
+
+    future_risk_items = [
+        item for item in unsupported_items if "future_" in item.get("id", "")
+    ]
+    add(
+        "future_function_risk",
+        "未来函数风险",
+        "pass" if not future_risk_items else "fail",
+        "当前没有识别到明显未来函数风险。"
+        if not future_risk_items
+        else "当前表达引用了同日最高价/最低价等未来信息，不能直接生成可靠策略。",
+    )
+
+    microstructure_items = [
+        item for item in unsupported_items if item.get("id") == "market_microstructure"
+    ]
+    add(
+        "unsupported_data_dependency",
+        "平台不支持的数据依赖",
+        "pass" if not microstructure_items else "fail",
+        "当前表达没有依赖平台未接入的盘口 / 逐笔 / L2 数据。"
+        if not microstructure_items
+        else "当前策略依赖盘口 / 逐笔 / L2 数据，平台真值层尚未支持。",
+    )
+
+    add(
+        "formal_generation_state",
+        "正式策略生成资格",
+        "pass" if generation_decision.get("allow_save") else "warn",
+        generation_decision.get("summary")
+        or "当前仍需继续确认后才能进入正式版本。",
+    )
+
+    if any(item.get("status") == "fail" for item in checks):
+        overall_status = "fail"
+    elif any(item.get("status") == "warn" for item in checks):
+        overall_status = "warn"
+    else:
+        overall_status = "pass"
+
+    return {
+        "overall_status": overall_status,
+        "checks": checks,
     }
 
 
@@ -946,6 +1147,11 @@ class StrategyService:
     def generate_strategy(self, request: StrategyGenerateRequest) -> dict[str, Any]:
         prompt = request.prompt
         normalized = prompt.lower()
+        clarification_answers = {
+            key: value.strip()
+            for key, value in (request.clarification_answers or {}).items()
+            if isinstance(value, str) and value.strip()
+        }
         side = "long"
         primary_timeframe = _canonicalize_timeframe(request.timeframe)
         selected_timeframes = _normalize_strategy_timeframes(
@@ -982,7 +1188,11 @@ class StrategyService:
             for item in glossary_terms
             if item.term.lower() in normalized or item.term in prompt
         ]
-        questions_for_user = _extract_strategy_questions(prompt, normalized)
+        questions_for_user = _extract_strategy_questions(
+            prompt,
+            normalized,
+            clarification_answers,
+        )
         unsupported_items = _extract_strategy_unsupported_items(prompt, normalized)
 
         if "做空" in prompt or "short" in normalized:
@@ -1083,6 +1293,11 @@ class StrategyService:
             },
             "position": {"side": side, "max_positions": 1},
         }
+        _apply_strategy_clarifications(
+            strategy_dsl=strategy_dsl,
+            clarification_answers=clarification_answers,
+            entry_context=entry_context,
+        )
         capability_summary = summarize_strategy_capability(
             market_scope=request.market_scope,
             primary_timeframe=primary_timeframe,
@@ -1104,6 +1319,20 @@ class StrategyService:
         )
         generation_decision = _build_strategy_generation_decision(
             capability_summary=capability_summary,
+            questions_for_user=questions_for_user,
+            unsupported_items=unsupported_items,
+        )
+        structured_spec = _build_strategy_structured_spec(
+            request=request,
+            market_scope_label=market_scope_label,
+            strategy_dsl=strategy_dsl,
+            capability_summary=capability_summary,
+            questions_for_user=questions_for_user,
+            unsupported_items=unsupported_items,
+        )
+        hard_validation = _build_strategy_hard_validation(
+            capability_summary=capability_summary,
+            generation_decision=generation_decision,
             questions_for_user=questions_for_user,
             unsupported_items=unsupported_items,
         )
@@ -1133,6 +1362,8 @@ class StrategyService:
             )
         if request.teaching_mode:
             summary_parts.append("教学模式已开启，Python 代码中为主要语句补充了逐行注释。")
+        if clarification_answers:
+            summary_parts.append("已应用你补充的条件说明，并据此重新理解策略。")
         if matched_custom_indicators:
             summary_parts.append(
                 "已调用自定义指标库中的："
@@ -1156,6 +1387,8 @@ class StrategyService:
             "strategy_python": strategy_python,
             "capability_summary": capability_summary,
             "understanding_card": understanding,
+            "structured_spec": structured_spec,
+            "hard_validation": hard_validation,
             "questions_for_user": questions_for_user,
             "unsupported_items": unsupported_items,
             "generation_decision": generation_decision,

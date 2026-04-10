@@ -71,6 +71,30 @@
         </section>
       </section>
 
+      <section class="grid three" style="margin-top: 22px">
+        <section class="card">
+          <div class="panel-header">
+            <h3>自然语言输入</h3>
+            <span class="muted-note">这是用户原始想法，不代表平台已经支持真实执行</span>
+          </div>
+          <pre id="strategy-natural-language-view" class="result-box light">等待输入自然语言策略。</pre>
+        </section>
+        <section class="card">
+          <div class="panel-header">
+            <h3>结构化规格</h3>
+            <span class="muted-note">AI 理解后的真值层，后续 DSL 和代码都从这里生成</span>
+          </div>
+          <div id="strategy-structured-spec-view" class="list empty-state">等待生成结构化规格。</div>
+        </section>
+        <section class="card">
+          <div class="panel-header">
+            <h3>平台硬校验清单</h3>
+            <span class="muted-note">这里由平台规则决定，不交给 AI 自己判断</span>
+          </div>
+          <div id="strategy-hard-validation-view" class="list empty-state">等待生成平台校验结果。</div>
+        </section>
+      </section>
+
       <section class="grid two" style="margin-top: 22px">
         <section class="card">
           <div class="panel-header">
@@ -85,7 +109,11 @@
             <h3>待补充与风险提示</h3>
             <span class="muted-note">模糊条件、平台不支持项和未来函数风险都会先在这里拦住</span>
           </div>
+          <div class="muted-note" style="margin-bottom: 12px">如果系统提示“需补充后再生成正式版本”，可以先在下面补充条件说明，再重新生成理解结果。</div>
           <div id="strategy-questions" class="list empty-state">当前还没有待补充问题。</div>
+          <div class="actions" style="margin-top: 14px">
+            <button id="apply-clarifications-btn" class="btn secondary disabled" disabled>应用补充并重新理解</button>
+          </div>
           <div id="strategy-unsupported-items" class="list empty-state" style="margin-top: 14px">当前还没有识别到不支持项。</div>
         </section>
       </section>
