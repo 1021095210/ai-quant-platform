@@ -18,6 +18,7 @@ const state = {
   clarificationAnswers: {},
   structuredSpec: null,
   hardValidation: null,
+  generationPipeline: [],
 };
 
 const nodes = {
@@ -49,6 +50,7 @@ const nodes = {
   naturalLanguageView: document.querySelector("#strategy-natural-language-view"),
   structuredSpecView: document.querySelector("#strategy-structured-spec-view"),
   hardValidationView: document.querySelector("#strategy-hard-validation-view"),
+  generationPipelineView: document.querySelector("#strategy-generation-pipeline-view"),
 };
 
 const MARKET_PRESETS = {
@@ -301,6 +303,33 @@ function renderHardValidationView(validation) {
     .join("");
 }
 
+function renderGenerationPipelineView(items) {
+  if (!items?.length) {
+    nodes.generationPipelineView.textContent = "等待生成链路结果。";
+    return;
+  }
+  nodes.generationPipelineView.innerHTML = items
+    .map(
+      (item) => `
+        <div class="list-item">
+          <strong>${item.title}</strong>
+          <div class="pill-row" style="margin: 8px 0">
+            <span class="pill">${
+              item.status === "pass"
+                ? "通过"
+                : item.status === "warn"
+                  ? "需确认"
+                  : "拒绝"
+            }</span>
+          </div>
+          <div class="muted-note">${item.summary}</div>
+          <div class="muted-note" style="margin-top: 6px">${item.detail}</div>
+        </div>
+      `,
+    )
+    .join("");
+}
+
 function getCapabilityBase(marketScope) {
   return (
     state.platformCapabilities.find((item) => item.market_scope === marketScope) || {
@@ -422,6 +451,7 @@ async function generateStrategy() {
   state.generationDecision = payload.data.generation_decision;
   state.structuredSpec = payload.data.structured_spec;
   state.hardValidation = payload.data.hard_validation;
+  state.generationPipeline = payload.data.generation_pipeline || [];
   nodes.summary.textContent = payload.data.human_summary;
   nodes.python.textContent = payload.data.strategy_python;
   nodes.spec.textContent = pretty(payload.data.strategy_dsl);
@@ -430,6 +460,7 @@ async function generateStrategy() {
   renderUnderstandingCard(payload.data.understanding_card);
   renderStructuredSpecView(payload.data.structured_spec);
   renderHardValidationView(payload.data.hard_validation);
+  renderGenerationPipelineView(payload.data.generation_pipeline);
   renderQuestions(payload.data.questions_for_user);
   renderUnsupportedItems(payload.data.unsupported_items);
   nodes.ambiguities.innerHTML = payload.data.ambiguities.length
@@ -566,6 +597,7 @@ renderUnderstandingCard(null);
 renderNaturalLanguageView();
 renderStructuredSpecView(null);
 renderHardValidationView(null);
+renderGenerationPipelineView([]);
 renderQuestions([]);
 renderUnsupportedItems([]);
 syncStrategyActionState();

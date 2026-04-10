@@ -333,6 +333,7 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertIn("自然语言输入", response.text)
         self.assertIn("结构化规格", response.text)
         self.assertIn("平台硬校验清单", response.text)
+        self.assertIn("生成链路对照", response.text)
         self.assertIn("应用补充并重新理解", response.text)
         self.assertIn('id="save-project-btn" class="btn disabled" disabled', response.text)
         self.assertIn('id="go-backtests-link" class="btn disabled"', response.text)
@@ -993,6 +994,8 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertEqual("A股", payload["structured_spec"]["market_scope_label"])
         self.assertEqual("1d", payload["strategy_dsl"]["timeframe"])
         self.assertEqual("pass", payload["hard_validation"]["checks"][0]["status"])
+        self.assertTrue(payload["generation_pipeline"])
+        self.assertEqual("natural_language", payload["generation_pipeline"][0]["id"])
         self.assertEqual("首次仓位 20%", payload["strategy_dsl"]["position"]["clarified_rule"])
         self.assertIn("已应用你补充的条件说明", payload["human_summary"])
 
@@ -1020,6 +1023,9 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertIn("hard_validation", payload)
         self.assertTrue(payload["hard_validation"]["checks"])
         self.assertTrue(any(item["id"] == "market_execution_support" for item in payload["hard_validation"]["checks"]))
+        self.assertTrue(any(item["id"] == "timeframe_execution_scope" for item in payload["hard_validation"]["checks"]))
+        self.assertIn("generation_pipeline", payload)
+        self.assertTrue(any(item["id"] == "dsl" for item in payload["generation_pipeline"]))
 
     def test_generate_strategy_teaching_mode_adds_comments_and_understands_terms(self) -> None:
         client = self._build_client()
