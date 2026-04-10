@@ -328,6 +328,8 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertIn("当前能力声明", response.text)
         self.assertIn("市场支持状态", response.text)
         self.assertIn("区分“可描述”和“可真实执行”", response.text)
+        self.assertIn("系统理解结果", response.text)
+        self.assertIn("待补充与风险提示", response.text)
         self.assertIn('id="save-project-btn" class="btn disabled" disabled', response.text)
         self.assertIn('id="go-backtests-link" class="btn disabled"', response.text)
 
@@ -876,6 +878,10 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertEqual(["1d"], payload["strategy_dsl"]["timeframes"])
         self.assertTrue(payload["strategy_dsl"]["entry"]["all"])
         self.assertIn("def build_strategy()", payload["strategy_python"])
+        self.assertEqual("ready", payload["generation_decision"]["status"])
+        self.assertTrue(payload["generation_decision"]["allow_save"])
+        self.assertIn("understanding_card", payload)
+        self.assertEqual("A股", payload["understanding_card"]["market_scope_label"])
 
     def test_generate_strategy_supports_multi_market_and_mixed_timeframes(self) -> None:
         client = self._build_client()
@@ -908,6 +914,50 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertTrue(any("60均线" in item["expression"] for item in strategy_dsl["exit_context"]))
         self.assertIn("混合周期条件", payload["human_summary"])
         self.assertTrue(any("混合周期策略" in item for item in payload["ambiguities"]))
+        self.assertEqual("semantic_only", payload["generation_decision"]["status"])
+        self.assertTrue(payload["generation_decision"]["allow_save"])
+
+    def test_generate_strategy_with_ambiguous_prompt_requires_confirmation(self) -> None:
+        client = self._build_client()
+
+        response = client.post(
+            "/api/v1/strategies/generate",
+            json={
+                "prompt": "放量后不追高，确认后再买，大盘不差的时候试仓",
+                "market": "600519.SH",
+                "timeframe": "1d",
+                "asset_type": "stock",
+                "preferences": {"side": "long"},
+            },
+        )
+
+        self.assertEqual(200, response.status_code)
+        payload = response.json()["data"]
+        self.assertEqual("needs_confirmation", payload["generation_decision"]["status"])
+        self.assertFalse(payload["generation_decision"]["allow_save"])
+        self.assertTrue(payload["questions_for_user"])
+        self.assertTrue(any(item["id"] == "chase_guard" for item in payload["questions_for_user"]))
+
+    def test_generate_strategy_rejects_unsupported_market_microstructure_prompt(self) -> None:
+        client = self._build_client()
+
+        response = client.post(
+            "/api/v1/strategies/generate",
+            json={
+                "prompt": "当盘口委托队列明显增强且逐笔成交放量时买入",
+                "market": "600519.SH",
+                "timeframe": "1d",
+                "asset_type": "stock",
+                "preferences": {"side": "long"},
+            },
+        )
+
+        self.assertEqual(200, response.status_code)
+        payload = response.json()["data"]
+        self.assertEqual("rejected", payload["generation_decision"]["status"])
+        self.assertFalse(payload["generation_decision"]["allow_save"])
+        self.assertTrue(any(item["id"] == "market_microstructure" for item in payload["unsupported_items"]))
+        self.assertIn("不能直接生成可靠可执行策略", payload["human_summary"])
 
     def test_generate_strategy_teaching_mode_adds_comments_and_understands_terms(self) -> None:
         client = self._build_client()
