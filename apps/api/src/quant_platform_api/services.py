@@ -984,6 +984,17 @@ def _build_strategy_hard_validation(
     )
 
     add(
+        "timeframe_execution_scope",
+        "周期与执行兼容范围",
+        "pass"
+        if not capability_summary.get("requires_compatibility_notice")
+        else "warn",
+        "当前周期组合处于平台真实执行主链路内。"
+        if not capability_summary.get("requires_compatibility_notice")
+        else "当前策略包含混合周期或非日线条件，当前真实回测仍按日线兼容层理解。",
+    )
+
+    add(
         "clarification_completeness",
         "模糊条件与补充信息",
         "pass" if not questions_for_user else "warn",
@@ -1035,6 +1046,58 @@ def _build_strategy_hard_validation(
         "overall_status": overall_status,
         "checks": checks,
     }
+
+
+def _build_strategy_generation_pipeline(
+    *,
+    request: StrategyGenerateRequest,
+    strategy_dsl: dict[str, Any],
+    generation_decision: dict[str, Any],
+    structured_spec: dict[str, Any],
+    hard_validation: dict[str, Any],
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "id": "natural_language",
+            "title": "自然语言策略想法",
+            "status": "pass",
+            "summary": "用户原始输入，作为策略理解起点。",
+            "detail": request.prompt.strip(),
+        },
+        {
+            "id": "structured_spec",
+            "title": "结构化策略规格",
+            "status": "pass" if not structured_spec.get("open_questions") else "warn",
+            "summary": "平台真值层，后续 DSL 与代码都基于这层生成。",
+            "detail": f"市场={structured_spec['market_scope_label']}，主周期={structured_spec['primary_timeframe_label']}，入场规则={structured_spec['entry_rule_count']} 条，离场规则={structured_spec['exit_rule_count']} 条。",
+        },
+        {
+            "id": "hard_validation",
+            "title": "平台硬校验",
+            "status": hard_validation["overall_status"],
+            "summary": "由平台规则判断是否可进入正式版本，不交给 AI 自己决定。",
+            "detail": "；".join(
+                f"{item['title']}：{'通过' if item['status'] == 'pass' else '需确认' if item['status'] == 'warn' else '拒绝'}"
+                for item in hard_validation["checks"]
+            ),
+        },
+        {
+            "id": "dsl",
+            "title": "DSL / 结构化执行规格",
+            "status": "pass",
+            "summary": "回测与保存当前以这份 DSL 作为主执行规格。",
+            "detail": f"analysis_mode={strategy_dsl.get('analysis_mode')}，backtest_timeframe={strategy_dsl.get('backtest_timeframe')}，entry_context={len(strategy_dsl.get('entry_context', []))}，exit_context={len(strategy_dsl.get('exit_context', []))}。",
+        },
+        {
+            "id": "python",
+            "title": "Python 策略代码",
+            "status": "pass" if generation_decision.get("allow_python_generation") else "fail",
+            "summary": "Python 代码是 DSL 的派生表达，不应反向作为真值来源。",
+            "detail": "当前允许生成正式 Python 策略代码。"
+            if generation_decision.get("allow_python_generation")
+            else "当前仅保留候选理解结果，不能直接输出可靠可执行的 Python 策略。",
+        },
+    ]
 
 
 def _build_strategy_generation_decision(
@@ -1336,6 +1399,13 @@ class StrategyService:
             questions_for_user=questions_for_user,
             unsupported_items=unsupported_items,
         )
+        generation_pipeline = _build_strategy_generation_pipeline(
+            request=request,
+            strategy_dsl=strategy_dsl,
+            generation_decision=generation_decision,
+            structured_spec=structured_spec,
+            hard_validation=hard_validation,
+        )
         strategy_python = (
             _render_strategy_python(
                 strategy_dsl,
@@ -1389,6 +1459,7 @@ class StrategyService:
             "understanding_card": understanding,
             "structured_spec": structured_spec,
             "hard_validation": hard_validation,
+            "generation_pipeline": generation_pipeline,
             "questions_for_user": questions_for_user,
             "unsupported_items": unsupported_items,
             "generation_decision": generation_decision,
