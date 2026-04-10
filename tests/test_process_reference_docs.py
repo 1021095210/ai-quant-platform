@@ -65,6 +65,41 @@ class ProcessReferenceDocsTests(unittest.TestCase):
         self.assertIn("资源提供部门需要重点确认什么", one_pager_text)
         self.assertIn("平台默认优先读取 `ADS / DWD`", one_pager_text)
 
+    def test_module_ai_design_folder_and_key_docs_exist(self):
+        folder = ROOT / "产品设计" / "模块AI设计"
+        readme = folder / "README.md"
+        strategy_doc = folder / "策略工坊模块_AI设计.md"
+        replay_doc = folder / "交易复盘模块_AI设计.md"
+        mentor_doc = folder / "金融导师模块_AI设计.md"
+        assistant_doc = folder / "金融助手模块_AI设计.md"
+
+        self.assertTrue(folder.exists())
+        self.assertTrue(readme.exists())
+        self.assertTrue(strategy_doc.exists())
+        self.assertTrue(replay_doc.exists())
+        self.assertTrue(mentor_doc.exists())
+        self.assertTrue(assistant_doc.exists())
+
+        readme_text = readme.read_text(encoding="utf-8")
+        self.assertIn("全平台哪些模块要接 AI", readme_text)
+        self.assertIn("AI 负责理解、整理、生成候选结果", readme_text)
+        self.assertIn("人工确认或拒答", readme_text)
+
+        strategy_text = strategy_doc.read_text(encoding="utf-8")
+        self.assertIn("结构化真值层", strategy_text)
+        self.assertIn("不能直接“自然语言 -> Python”", strategy_text)
+        self.assertIn("混合周期边界必须由平台规则判断", strategy_text)
+
+        replay_text = replay_doc.read_text(encoding="utf-8")
+        self.assertIn("规则解析 + AI 混合解析 + 人工确认", replay_text)
+        self.assertIn("真实成交记录必须经过结构化校验和人工确认", replay_text)
+
+        mentor_text = mentor_doc.read_text(encoding="utf-8")
+        self.assertIn("不能直接产出无证据的事实数据结论", mentor_text)
+
+        assistant_text = assistant_doc.read_text(encoding="utf-8")
+        self.assertIn("事实层必须来自平台数据中心", assistant_text)
+
 
 if __name__ == "__main__":
     unittest.main()
