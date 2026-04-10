@@ -20,6 +20,7 @@ const state = {
   hardValidation: null,
   generationPipeline: [],
   fieldMapping: [],
+  clarificationRound: null,
 };
 
 const nodes = {
@@ -48,6 +49,8 @@ const nodes = {
   questions: document.querySelector("#strategy-questions"),
   unsupportedItems: document.querySelector("#strategy-unsupported-items"),
   applyClarificationsButton: document.querySelector("#apply-clarifications-btn"),
+  clarificationProgress: document.querySelector("#strategy-clarification-progress"),
+  clarificationAnswered: document.querySelector("#strategy-clarification-answered"),
   naturalLanguageView: document.querySelector("#strategy-natural-language-view"),
   structuredSpecView: document.querySelector("#strategy-structured-spec-view"),
   hardValidationView: document.querySelector("#strategy-hard-validation-view"),
@@ -178,7 +181,6 @@ function renderUnderstandingCard(card) {
 function renderQuestions(items) {
   if (!items?.length) {
     nodes.questions.textContent = "当前没有待补充问题。";
-    state.clarificationAnswers = {};
     return;
   }
   state.clarificationAnswers = Object.fromEntries(
@@ -217,6 +219,43 @@ function renderQuestions(items) {
       }
     });
   });
+}
+
+function renderClarificationRound(summary) {
+  if (!summary) {
+    nodes.clarificationProgress.textContent = "等待澄清进度。";
+    nodes.clarificationAnswered.textContent = "当前还没有已确认的补充项。";
+    return;
+  }
+  const statusClass =
+    summary.status === "completed"
+      ? "supported"
+      : summary.status === "followup_pending"
+        ? "limited"
+        : "unsupported";
+  nodes.clarificationProgress.innerHTML = `
+    <div class="capability-status capability-${statusClass}">
+      <strong>${summary.stage_label}</strong>
+      <span>${summary.guidance}</span>
+    </div>
+    <div class="pill-row" style="margin-top: 10px">
+      <span class="pill">已确认 ${summary.answered_count || 0} 项</span>
+      <span class="pill">待补充 ${summary.pending_count || 0} 项</span>
+    </div>
+  `;
+  const answered = summary.answered_items || [];
+  nodes.clarificationAnswered.innerHTML = answered.length
+    ? answered
+        .map(
+          (item) => `
+            <div class="list-item">
+              <strong>${item.title}</strong>
+              <div class="muted-note">${item.answer}</div>
+            </div>
+          `,
+        )
+        .join("")
+    : "当前还没有已确认的补充项。";
 }
 
 function renderUnsupportedItems(items) {
@@ -479,6 +518,7 @@ async function generateStrategy() {
   state.hardValidation = payload.data.hard_validation;
   state.generationPipeline = payload.data.generation_pipeline || [];
   state.fieldMapping = payload.data.field_mapping || [];
+  state.clarificationRound = payload.data.clarification_round || null;
   nodes.summary.textContent = payload.data.human_summary;
   nodes.python.textContent = payload.data.strategy_python;
   nodes.spec.textContent = pretty(payload.data.strategy_dsl);
@@ -489,6 +529,7 @@ async function generateStrategy() {
   renderHardValidationView(payload.data.hard_validation);
   renderGenerationPipelineView(payload.data.generation_pipeline);
   renderFieldMappingView(payload.data.field_mapping);
+  renderClarificationRound(payload.data.clarification_round);
   renderQuestions(payload.data.questions_for_user);
   renderUnsupportedItems(payload.data.unsupported_items);
   nodes.ambiguities.innerHTML = payload.data.ambiguities.length
@@ -627,6 +668,7 @@ renderStructuredSpecView(null);
 renderHardValidationView(null);
 renderGenerationPipelineView([]);
 renderFieldMappingView([]);
+renderClarificationRound(null);
 renderQuestions([]);
 renderUnsupportedItems([]);
 syncStrategyActionState();
