@@ -2031,25 +2031,44 @@ class TradeUploadService:
         market: str,
         adjustment_mode: str,
     ) -> dict[str, Any]:
-        entry_rule = self._extract_entry_rule(text)
-        exit_rule = self._extract_exit_rule(text)
+        global_entry_rule = self._extract_entry_rule_or_none(text)
+        global_exit_rule = self._extract_exit_rule(text)
         records: list[TradeRecordItem] = []
+        group_summaries: list[dict[str, Any]] = []
         for group in grouped_candidates:
             trade_date = group["trade_date"]
             symbols = group["symbols"]
+            block_text = group["block_text"]
+            block_entry_rule = (
+                self._extract_entry_rule_or_none(block_text)
+                or global_entry_rule
+                or {"label": "当日开盘价买入", "price_field": "open", "offset": 0}
+            )
+            block_exit_rule = self._extract_exit_rule(block_text) or global_exit_rule
+            explicit_exit_date = self._extract_labeled_trade_date(block_text, "卖出日期")
+            group_records: list[TradeRecordItem] = []
             for index, symbol in enumerate(symbols, start=1):
-                records.append(
-                    self._build_text_trade_record(
-                        trade_date=trade_date,
-                        symbol=symbol,
-                        market=market,
-                        adjustment_mode=adjustment_mode,
-                        entry_rule=entry_rule,
-                        exit_rule=exit_rule,
-                        explicit_exit_date=None,
-                        index=len(records) + 1,
-                    )
+                record = self._build_text_trade_record(
+                    trade_date=trade_date,
+                    symbol=symbol,
+                    market=market,
+                    adjustment_mode=adjustment_mode,
+                    entry_rule=block_entry_rule,
+                    exit_rule=block_exit_rule,
+                    explicit_exit_date=explicit_exit_date,
+                    index=len(records) + 1,
                 )
+                records.append(record)
+                group_records.append(record)
+            group_summaries.append(
+                {
+                    "trade_date": trade_date.isoformat(),
+                    "record_count": len(group_records),
+                    "symbols": symbols,
+                    "entry_rule": block_entry_rule["label"],
+                    "exit_rule": block_exit_rule["label"] if block_exit_rule else "未提供卖出规则",
+                }
+            )
 
         if not records:
             raise TaskExecutionError("INVALID_ARGUMENT", "未识别到可生成成交记录的日期和标的代码。")
@@ -2059,13 +2078,15 @@ class TradeUploadService:
             "market": market,
             "trade_date": trade_dates[0],
             "trade_dates": trade_dates,
-            "entry_rule": entry_rule["label"],
-            "exit_rule": exit_rule["label"] if exit_rule else "未提供卖出规则",
+            "group_count": len(grouped_candidates),
+            "entry_rule": global_entry_rule["label"] if global_entry_rule else "按各日期块独立识别",
+            "exit_rule": global_exit_rule["label"] if global_exit_rule else "按各日期块独立识别",
             "record_count": len(records),
+            "group_summaries": group_summaries,
             "records": [item.model_dump(mode="json") for item in records],
             "summary": (
                 f"已识别 {len(grouped_candidates)} 个交易日期、{len(records)} 笔交易，"
-                f"买入规则按“{entry_rule['label']}”理解。"
+                "识别结果已按日期块分别整理。"
             ),
         }
 
@@ -2370,6 +2391,7 @@ class TradeUploadService:
                     {
                         "trade_date": trade_date,
                         "symbols": symbols,
+                        "block_text": block,
                     }
                 )
         return groups
@@ -2505,6 +2527,21 @@ class TradeUploadService:
         if "当日收盘价买入" in text:
             return {"label": "当日收盘价买入", "price_field": "close", "offset": 0}
         return {"label": "当日开盘价买入", "price_field": "open", "offset": 0}
+
+    def _extract_entry_rule_or_none(self, text: str) -> dict[str, Any] | None:
+        markers = (
+            "买入方式",
+            "买入价",
+            "买入价格",
+            "次日开盘价买入",
+            "次日收盘价买入",
+            "当日收盘价买入",
+            "当日开盘价买入",
+            "第",
+        )
+        if not any(marker in text for marker in markers):
+            return None
+        return self._extract_entry_rule(text)
 
     def _extract_exit_rule(self, text: str) -> dict[str, Any] | None:
         explicit_price_match = re.search(

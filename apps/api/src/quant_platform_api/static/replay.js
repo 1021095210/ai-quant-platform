@@ -63,6 +63,7 @@ const nodes = {
   manualMarket: document.querySelector("#trade-manual-market"),
   manualAdjustment: document.querySelector("#trade-manual-adjustment"),
   manualSmartText: document.querySelector("#trade-manual-smart-text"),
+  manualParseSummary: document.querySelector("#trade-manual-parse-summary"),
   manualList: document.querySelector("#manual-trade-list"),
   uploadId: document.querySelector("#current-upload-id"),
   recordsBody: document.querySelector("#replay-records-body"),
@@ -250,7 +251,7 @@ async function parseManualText() {
   if (!nodes.manualSmartText.value.trim()) {
     throw new Error("请先输入需要识别的长文字内容。");
   }
-  setStatus("正在识别长文字中的股票代码、日期和买卖规则...");
+  setStatus("正在识别长文字中的股票代码、日期和买卖规则。大批量文本会按日期块逐组处理，请稍等...");
   const payload = await api("/api/v1/trades/uploads/manual/parse-text", {
     method: "POST",
     body: JSON.stringify({
@@ -271,8 +272,30 @@ async function parseManualText() {
     notes: item.notes || "来源：长文字智能识别",
   })));
   renderManualTrades();
+  renderManualParseSummary(payload.data);
   syncReplayActionState();
   setStatus(payload.data.summary || "长文字智能识别完成，已加入手动记录。");
+}
+
+function renderManualParseSummary(result) {
+  const groups = result.group_summaries || [];
+  if (!groups.length) {
+    nodes.manualParseSummary.textContent = result.summary || "长文字智能识别完成，已加入手动记录。";
+    return;
+  }
+  const lines = [
+    result.summary || "长文字智能识别完成。",
+    `共识别 ${result.group_count || groups.length} 个日期块，加入 ${result.record_count || 0} 笔记录。`,
+    "",
+    ...groups.map(
+      (group, index) =>
+        `${index + 1}. ${group.trade_date} · ${group.record_count} 笔\n` +
+        `买入规则：${group.entry_rule}\n` +
+        `卖出规则：${group.exit_rule}\n` +
+        `标的：${(group.symbols || []).join("、")}`,
+    ),
+  ];
+  nodes.manualParseSummary.textContent = lines.join("\n");
 }
 
 function renderRecords(items) {
