@@ -330,6 +330,10 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertIn("区分“可描述”和“可真实执行”", response.text)
         self.assertIn("系统理解结果", response.text)
         self.assertIn("待补充与风险提示", response.text)
+        self.assertIn("自然语言输入", response.text)
+        self.assertIn("结构化规格", response.text)
+        self.assertIn("平台硬校验清单", response.text)
+        self.assertIn("应用补充并重新理解", response.text)
         self.assertIn('id="save-project-btn" class="btn disabled" disabled', response.text)
         self.assertIn('id="go-backtests-link" class="btn disabled"', response.text)
 
@@ -958,6 +962,64 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertFalse(payload["generation_decision"]["allow_save"])
         self.assertTrue(any(item["id"] == "market_microstructure" for item in payload["unsupported_items"]))
         self.assertIn("不能直接生成可靠可执行策略", payload["human_summary"])
+
+    def test_generate_strategy_applies_clarification_answers_and_becomes_ready(self) -> None:
+        client = self._build_client()
+
+        response = client.post(
+            "/api/v1/strategies/generate",
+            json={
+                "prompt": "放量后不追高，确认后再买，大盘不差的时候试仓",
+                "market": "600519.SH",
+                "timeframe": "1d",
+                "asset_type": "stock",
+                "preferences": {"side": "long"},
+                "clarification_answers": {
+                    "volume_threshold": "量比 >= 1.3",
+                    "chase_guard": "前 15 分钟涨幅 <= 1%",
+                    "confirmation_rule": "15 分钟收盘站上均线后再入场",
+                    "market_regime": "指数站上 20 日均线时开仓",
+                    "position_rule": "首次仓位 20%",
+                },
+            },
+        )
+
+        self.assertEqual(200, response.status_code)
+        payload = response.json()["data"]
+        self.assertEqual("ready", payload["generation_decision"]["status"])
+        self.assertTrue(payload["generation_decision"]["allow_save"])
+        self.assertFalse(payload["questions_for_user"])
+        self.assertEqual("量比 >= 1.3", payload["understanding_card"]["clarifications"]["volume_threshold"])
+        self.assertEqual("A股", payload["structured_spec"]["market_scope_label"])
+        self.assertEqual("1d", payload["strategy_dsl"]["timeframe"])
+        self.assertEqual("pass", payload["hard_validation"]["checks"][0]["status"])
+        self.assertEqual("首次仓位 20%", payload["strategy_dsl"]["position"]["clarified_rule"])
+        self.assertIn("已应用你补充的条件说明", payload["human_summary"])
+
+    def test_generate_strategy_returns_structured_spec_and_hard_validation_checks(self) -> None:
+        client = self._build_client()
+
+        response = client.post(
+            "/api/v1/strategies/generate",
+            json={
+                "prompt": "昨日最低价小于10日均线，昨日收盘价大于10日均线，今日15分钟KDJ金叉时买入；当现价低于15分钟60均线时卖出。",
+                "market_scope": "cn_equity",
+                "market": "600519.SH",
+                "timeframe": "15m",
+                "timeframes": ["15m", "1d"],
+                "asset_type": "stock",
+                "preferences": {"side": "long"},
+            },
+        )
+
+        self.assertEqual(200, response.status_code)
+        payload = response.json()["data"]
+        self.assertIn("structured_spec", payload)
+        self.assertEqual("A股", payload["structured_spec"]["market_scope_label"])
+        self.assertEqual("multi_timeframe", payload["structured_spec"]["analysis_mode"])
+        self.assertIn("hard_validation", payload)
+        self.assertTrue(payload["hard_validation"]["checks"])
+        self.assertTrue(any(item["id"] == "market_execution_support" for item in payload["hard_validation"]["checks"]))
 
     def test_generate_strategy_teaching_mode_adds_comments_and_understands_terms(self) -> None:
         client = self._build_client()

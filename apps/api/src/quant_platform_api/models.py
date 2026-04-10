@@ -154,6 +154,7 @@ class StrategyGenerateRequest(BaseModel):
     asset_type: str = "stock"
     preferences: dict[str, Any] = Field(default_factory=dict)
     teaching_mode: bool = False
+    clarification_answers: dict[str, str] = Field(default_factory=dict)
 
 
 class StrategyProjectListItem(BaseModel):

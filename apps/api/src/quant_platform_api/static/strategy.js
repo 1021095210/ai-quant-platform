@@ -15,6 +15,9 @@ const state = {
   strategyPython: "",
   platformCapabilities: [],
   generationDecision: null,
+  clarificationAnswers: {},
+  structuredSpec: null,
+  hardValidation: null,
 };
 
 const nodes = {
@@ -42,6 +45,10 @@ const nodes = {
   understandingCard: document.querySelector("#strategy-understanding-card"),
   questions: document.querySelector("#strategy-questions"),
   unsupportedItems: document.querySelector("#strategy-unsupported-items"),
+  applyClarificationsButton: document.querySelector("#apply-clarifications-btn"),
+  naturalLanguageView: document.querySelector("#strategy-natural-language-view"),
+  structuredSpecView: document.querySelector("#strategy-structured-spec-view"),
+  hardValidationView: document.querySelector("#strategy-hard-validation-view"),
 };
 
 const MARKET_PRESETS = {
@@ -93,6 +100,13 @@ function syncStrategyActionState() {
   nodes.saveProjectButton.className = canSave ? "btn primary" : "btn disabled";
   nodes.goBacktestsLink.className = canGoBacktests ? "btn primary" : "btn disabled";
   nodes.goBacktestsLink.setAttribute("aria-disabled", canGoBacktests ? "false" : "true");
+  const canApplyClarifications = Boolean(
+    state.generationDecision?.status === "needs_confirmation",
+  );
+  nodes.applyClarificationsButton.disabled = !canApplyClarifications;
+  nodes.applyClarificationsButton.className = canApplyClarifications
+    ? "btn secondary"
+    : "btn secondary disabled";
 }
 
 function renderGenerationDecision(decision) {
@@ -125,6 +139,12 @@ function renderUnderstandingCard(card) {
     ["主周期", card.primary_timeframe_label],
     ["观察周期", (card.timeframe_labels || []).join(" / ") || "未识别"],
     ["数据依赖", (card.data_dependencies || []).join(" / ") || "未识别"],
+    [
+      "已补充说明",
+      Object.entries(card.clarifications || {})
+        .map(([key, value]) => `${key}: ${value}`)
+        .join("；") || "无",
+    ],
     ["执行假设", (card.execution_assumptions || []).join("；") || "未识别"],
     [
       "入场条件",
@@ -154,21 +174,45 @@ function renderUnderstandingCard(card) {
 function renderQuestions(items) {
   if (!items?.length) {
     nodes.questions.textContent = "当前没有待补充问题。";
+    state.clarificationAnswers = {};
     return;
   }
+  state.clarificationAnswers = Object.fromEntries(
+    items.map((item) => [item.id, state.clarificationAnswers[item.id] || ""]),
+  );
   nodes.questions.innerHTML = items
     .map(
       (item) => `
         <div class="list-item">
           <strong>${item.title}</strong>
           <div class="muted-note">${item.detail}</div>
+          <label class="field" style="margin-top: 10px">
+            <span>补充说明</span>
+            <input data-question-id="${item.id}" value="${state.clarificationAnswers[item.id] || ""}" placeholder="在这里补充更具体的定义或阈值" />
+          </label>
           <div class="pill-row" style="margin-top: 10px">
-            ${(item.suggested_choices || []).map((choice) => `<span class="pill">${choice}</span>`).join("")}
+            ${(item.suggested_choices || []).map((choice) => `<button type="button" class="pill strategy-choice-pill" data-question-id="${item.id}" data-choice="${choice}">${choice}</button>`).join("")}
           </div>
         </div>
       `,
     )
     .join("");
+  nodes.questions.querySelectorAll("input[data-question-id]").forEach((node) => {
+    node.addEventListener("input", (event) => {
+      state.clarificationAnswers[node.dataset.questionId] = event.target.value;
+    });
+  });
+  nodes.questions.querySelectorAll(".strategy-choice-pill").forEach((node) => {
+    node.addEventListener("click", () => {
+      const questionId = node.dataset.questionId;
+      const choice = node.dataset.choice || "";
+      state.clarificationAnswers[questionId] = choice;
+      const input = nodes.questions.querySelector(`input[data-question-id="${questionId}"]`);
+      if (input) {
+        input.value = choice;
+      }
+    });
+  });
 }
 
 function renderUnsupportedItems(items) {
@@ -181,6 +225,75 @@ function renderUnsupportedItems(items) {
       (item) => `
         <div class="list-item">
           <strong>${item.title}</strong>
+          <div class="muted-note">${item.detail}</div>
+        </div>
+      `,
+    )
+    .join("");
+}
+
+function renderNaturalLanguageView() {
+  nodes.naturalLanguageView.textContent = nodes.prompt.value.trim() || "等待输入自然语言策略。";
+}
+
+function renderStructuredSpecView(spec) {
+  if (!spec) {
+    nodes.structuredSpecView.textContent = "等待生成结构化规格。";
+    return;
+  }
+  const sections = [
+    ["市场", `${spec.market_scope_label} / ${spec.market}`],
+    ["资产类型", spec.asset_type],
+    ["分析模式", spec.analysis_mode === "multi_timeframe" ? "混合周期" : "单周期"],
+    ["主周期", spec.primary_timeframe_label],
+    ["观察周期", (spec.observation_timeframe_labels || []).join(" / ") || "无"],
+    ["入场规则数", String(spec.entry_rule_count || 0)],
+    ["入场上下文", String(spec.entry_context_count || 0)],
+    ["离场规则数", String(spec.exit_rule_count || 0)],
+    ["离场上下文", String(spec.exit_context_count || 0)],
+    [
+      "仓位与持仓",
+      Object.entries(spec.position || {})
+        .map(([key, value]) => `${key}: ${String(value)}`)
+        .join("；") || "无",
+    ],
+    ["执行假设", (spec.execution_assumptions || []).join("；") || "无"],
+    [
+      "待补充项",
+      (spec.open_questions || []).join("；") || "当前无待补充项",
+    ],
+  ];
+  nodes.structuredSpecView.innerHTML = sections
+    .map(
+      ([title, detail]) => `
+        <div class="list-item">
+          <strong>${title}</strong>
+          <div class="muted-note">${detail}</div>
+        </div>
+      `,
+    )
+    .join("");
+}
+
+function renderHardValidationView(validation) {
+  if (!validation) {
+    nodes.hardValidationView.textContent = "等待生成平台校验结果。";
+    return;
+  }
+  nodes.hardValidationView.innerHTML = (validation.checks || [])
+    .map(
+      (item) => `
+        <div class="list-item">
+          <strong>${item.title}</strong>
+          <div class="pill-row" style="margin: 8px 0">
+            <span class="pill">${
+              item.status === "pass"
+                ? "通过"
+                : item.status === "warn"
+                  ? "需确认"
+                  : "拒绝"
+            }</span>
+          </div>
           <div class="muted-note">${item.detail}</div>
         </div>
       `,
@@ -286,6 +399,9 @@ function syncStrategyCapabilityState(summary = summarizeSelectedCapability()) {
 }
 
 async function generateStrategy() {
+  const clarificationAnswers = Object.fromEntries(
+    Object.entries(state.clarificationAnswers).filter(([, value]) => String(value || "").trim()),
+  );
   setStatus("正在生成 Python 策略...");
   const payload = await api("/api/v1/strategies/generate", {
     method: "POST",
@@ -298,16 +414,22 @@ async function generateStrategy() {
       asset_type: nodes.assetType.value,
       preferences: { side: "long" },
       teaching_mode: nodes.teachingMode.checked,
+      clarification_answers: clarificationAnswers,
     }),
   });
   state.strategySpec = payload.data.strategy_dsl;
   state.strategyPython = payload.data.strategy_python;
   state.generationDecision = payload.data.generation_decision;
+  state.structuredSpec = payload.data.structured_spec;
+  state.hardValidation = payload.data.hard_validation;
   nodes.summary.textContent = payload.data.human_summary;
   nodes.python.textContent = payload.data.strategy_python;
   nodes.spec.textContent = pretty(payload.data.strategy_dsl);
+  renderNaturalLanguageView();
   renderGenerationDecision(payload.data.generation_decision);
   renderUnderstandingCard(payload.data.understanding_card);
+  renderStructuredSpecView(payload.data.structured_spec);
+  renderHardValidationView(payload.data.hard_validation);
   renderQuestions(payload.data.questions_for_user);
   renderUnsupportedItems(payload.data.unsupported_items);
   nodes.ambiguities.innerHTML = payload.data.ambiguities.length
@@ -363,6 +485,13 @@ async function saveProject() {
   setStatus("项目已保存，当前可以去回测中心继续回测。");
 }
 
+async function applyClarifications() {
+  if (state.generationDecision?.status !== "needs_confirmation") {
+    return;
+  }
+  await generateStrategy();
+}
+
 function restoreSelection() {
   const { versionId, versionLabel, title } = getSelectedVersion();
   if (versionId) {
@@ -416,6 +545,7 @@ document
 document
   .querySelector("#save-project-btn")
   .addEventListener("click", handle(saveProject));
+nodes.applyClarificationsButton.addEventListener("click", handle(applyClarifications));
 nodes.goBacktestsLink.addEventListener("click", (event) => {
   if (nodes.goBacktestsLink.getAttribute("aria-disabled") === "true") {
     event.preventDefault();
@@ -424,6 +554,7 @@ nodes.goBacktestsLink.addEventListener("click", (event) => {
 nodes.timeframe.addEventListener("change", syncTimeframeSelection);
 nodes.timeframe.addEventListener("change", () => syncStrategyCapabilityState());
 nodes.marketScope.addEventListener("change", applyMarketPreset);
+nodes.prompt.addEventListener("input", renderNaturalLanguageView);
 nodes.timeframeOptions.forEach((node) =>
   node.addEventListener("change", () => syncStrategyCapabilityState()),
 );
@@ -432,6 +563,9 @@ restoreSelection();
 syncTimeframeSelection();
 renderGenerationDecision(null);
 renderUnderstandingCard(null);
+renderNaturalLanguageView();
+renderStructuredSpecView(null);
+renderHardValidationView(null);
 renderQuestions([]);
 renderUnsupportedItems([]);
 syncStrategyActionState();
