@@ -69,6 +69,7 @@ class ProcessReferenceDocsTests(unittest.TestCase):
         folder = ROOT / "产品设计" / "模块AI设计"
         readme = folder / "README.md"
         strategy_doc = folder / "策略工坊模块_AI设计.md"
+        strategy_gap_doc = folder / "策略工坊模块_详细查缺补漏.md"
         replay_doc = folder / "交易复盘模块_AI设计.md"
         mentor_doc = folder / "金融导师模块_AI设计.md"
         assistant_doc = folder / "金融助手模块_AI设计.md"
@@ -76,6 +77,7 @@ class ProcessReferenceDocsTests(unittest.TestCase):
         self.assertTrue(folder.exists())
         self.assertTrue(readme.exists())
         self.assertTrue(strategy_doc.exists())
+        self.assertTrue(strategy_gap_doc.exists())
         self.assertTrue(replay_doc.exists())
         self.assertTrue(mentor_doc.exists())
         self.assertTrue(assistant_doc.exists())
@@ -84,11 +86,19 @@ class ProcessReferenceDocsTests(unittest.TestCase):
         self.assertIn("全平台哪些模块要接 AI", readme_text)
         self.assertIn("AI 负责理解、整理、生成候选结果", readme_text)
         self.assertIn("人工确认或拒答", readme_text)
+        self.assertIn("策略工坊模块_详细查缺补漏", readme_text)
 
         strategy_text = strategy_doc.read_text(encoding="utf-8")
         self.assertIn("结构化真值层", strategy_text)
         self.assertIn("不能直接“自然语言 -> Python”", strategy_text)
         self.assertIn("混合周期边界必须由平台规则判断", strategy_text)
+
+        strategy_gap_text = strategy_gap_doc.read_text(encoding="utf-8")
+        self.assertIn("结构化理解确认卡", strategy_gap_text)
+        self.assertIn("待补充问题 / 待确认项", strategy_gap_text)
+        self.assertIn("不能直接“自然语言 -> Python”", strategy_gap_text)
+        self.assertIn("可直接生成", strategy_gap_text)
+        self.assertIn("拒绝输出", strategy_gap_text)
 
         replay_text = replay_doc.read_text(encoding="utf-8")
         self.assertIn("规则解析 + AI 混合解析 + 人工确认", replay_text)
