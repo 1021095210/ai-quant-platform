@@ -19,6 +19,7 @@ const state = {
   structuredSpec: null,
   hardValidation: null,
   generationPipeline: [],
+  fieldMapping: [],
 };
 
 const nodes = {
@@ -51,6 +52,7 @@ const nodes = {
   structuredSpecView: document.querySelector("#strategy-structured-spec-view"),
   hardValidationView: document.querySelector("#strategy-hard-validation-view"),
   generationPipelineView: document.querySelector("#strategy-generation-pipeline-view"),
+  fieldMappingView: document.querySelector("#strategy-field-mapping-view"),
 };
 
 const MARKET_PRESETS = {
@@ -330,6 +332,26 @@ function renderGenerationPipelineView(items) {
     .join("");
 }
 
+function renderFieldMappingView(items) {
+  if (!items?.length) {
+    nodes.fieldMappingView.textContent = "等待生成字段级对照。";
+    return;
+  }
+  nodes.fieldMappingView.innerHTML = items
+    .map(
+      (item) => `
+        <div class="list-item">
+          <strong>${item.label}</strong>
+          <div class="muted-note">用户表达：${item.user_expression || "无"}</div>
+          <div class="muted-note">结构化规格：${item.structured_value || "无"}</div>
+          <div class="muted-note">DSL 路径：${item.dsl_path || "无"}</div>
+          <div class="muted-note">Python 映射：${item.python_mapping || "无"}</div>
+        </div>
+      `,
+    )
+    .join("");
+}
+
 function getCapabilityBase(marketScope) {
   return (
     state.platformCapabilities.find((item) => item.market_scope === marketScope) || {
@@ -452,6 +474,7 @@ async function generateStrategy() {
   state.structuredSpec = payload.data.structured_spec;
   state.hardValidation = payload.data.hard_validation;
   state.generationPipeline = payload.data.generation_pipeline || [];
+  state.fieldMapping = payload.data.field_mapping || [];
   nodes.summary.textContent = payload.data.human_summary;
   nodes.python.textContent = payload.data.strategy_python;
   nodes.spec.textContent = pretty(payload.data.strategy_dsl);
@@ -461,6 +484,7 @@ async function generateStrategy() {
   renderStructuredSpecView(payload.data.structured_spec);
   renderHardValidationView(payload.data.hard_validation);
   renderGenerationPipelineView(payload.data.generation_pipeline);
+  renderFieldMappingView(payload.data.field_mapping);
   renderQuestions(payload.data.questions_for_user);
   renderUnsupportedItems(payload.data.unsupported_items);
   nodes.ambiguities.innerHTML = payload.data.ambiguities.length
@@ -598,6 +622,7 @@ renderNaturalLanguageView();
 renderStructuredSpecView(null);
 renderHardValidationView(null);
 renderGenerationPipelineView([]);
+renderFieldMappingView([]);
 renderQuestions([]);
 renderUnsupportedItems([]);
 syncStrategyActionState();
