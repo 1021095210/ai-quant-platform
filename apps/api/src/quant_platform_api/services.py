@@ -724,6 +724,65 @@ def _extract_strategy_questions(
             "当前提到了“试仓”，建议补充试仓仓位比例或最大持仓数。",
             ["首次仓位 20%", "最多 1 只持仓", "分两次加仓"],
         )
+
+    volume_answer = (clarification_answers.get("volume_threshold") or "").strip()
+    if volume_answer and _extract_number(volume_answer) is None:
+        add(
+            "volume_threshold_followup",
+            "量能规则仍需明确数值或比较口径",
+            "当前已经补了量能说明，但还缺少可执行的数值阈值。建议直接给出量比、均量倍数或成交额门槛。",
+            ["量比 >= 1.2", "成交量 >= 10日均量的 1.5 倍", "成交额 >= 20日均值"],
+        )
+
+    chase_answer = (clarification_answers.get("chase_guard") or "").strip()
+    if chase_answer and _extract_number(chase_answer) is None:
+        add(
+            "chase_guard_followup",
+            "追高限制仍需明确边界",
+            "当前已经补了追高说明，但还缺少可执行阈值。建议直接给出涨幅上限、距离前高比例或分钟窗口边界。",
+            ["前 15 分钟涨幅 <= 1%", "距离前高 >= 1% 才允许追入", "开盘涨幅 <= 2%"],
+        )
+
+    confirmation_answer = (clarification_answers.get("confirmation_rule") or "").strip()
+    if confirmation_answer and "均线" in confirmation_answer and not re.search(
+        r"(\d+\s*(日|分钟|m|h)?\s*均线|ma\s*\d+)",
+        confirmation_answer,
+        flags=re.IGNORECASE,
+    ) and not re.search(
+        r"(收盘|站上|突破|回踩|15分钟|30分钟|60分钟|日线|周线|月线|主周期)",
+        confirmation_answer,
+    ):
+        add(
+            "confirmation_ma_period",
+            "确认规则里的均线周期仍需补充",
+            "你已经说明要做均线确认，但还没有说明具体均线周期。建议补充 5 日、10 日、20 日或分钟均线周期。",
+            ["15 分钟收盘站上 5 均线", "15 分钟收盘站上 10 均线", "日线站上 20 日均线"],
+        )
+
+    market_regime_answer = (clarification_answers.get("market_regime") or "").strip()
+    if market_regime_answer and not re.search(
+        r"(均线|排名|波动率|强度|涨幅|beta|百分位|量能|行业)",
+        market_regime_answer,
+        flags=re.IGNORECASE,
+    ):
+        add(
+            "market_regime_metric",
+            "市场环境条件还缺少判定标准",
+            "你已经说明需要环境过滤，但还没有给出平台可执行的判定标准。建议补充指数均线、行业排名、波动率或资金强度条件。",
+            ["指数站上 20 日均线", "行业强度排名前 30%", "波动率低于过去 20 日 70% 分位"],
+        )
+
+    position_answer = (clarification_answers.get("position_rule") or "").strip()
+    if position_answer and ("加仓" in position_answer or "分两次" in position_answer) and not re.search(
+        r"(回踩|突破|盈利|亏损|涨|跌|触发|超过|低于)",
+        position_answer,
+    ):
+        add(
+            "pyramiding_rule",
+            "加仓规则仍需补触发条件",
+            "当前已识别到分批建仓或加仓，但还没有看到何时加仓。建议补充突破、回踩、盈利扩张或风险收敛条件。",
+            ["首次 20%，突破前高后再加 20%", "首次 30%，回踩均线确认后再加仓", "首次 20%，浮盈 2% 后再加仓"],
+        )
     return questions
 
 
@@ -801,6 +860,104 @@ def _apply_strategy_clarifications(
     position_answer = cleaned.get("position_rule")
     if position_answer:
         strategy_dsl.setdefault("position", {})["clarified_rule"] = position_answer
+
+    volume_followup_answer = cleaned.get("volume_threshold_followup")
+    if volume_followup_answer:
+        numeric = _extract_number(volume_followup_answer)
+        if numeric is not None:
+            for item in strategy_dsl.get("entry", {}).get("all", []):
+                if item.get("indicator") == "volume_ratio":
+                    item["operator"] = ">="
+                    item["value"] = numeric
+                    break
+
+    chase_followup_answer = cleaned.get("chase_guard_followup")
+    if chase_followup_answer:
+        numeric = _extract_number(chase_followup_answer)
+        if numeric is not None:
+            filters["intraday_entry_timing"] = {
+                "enabled": True,
+                "max_first_15m_return_pct": numeric,
+                "source": "clarification_answer",
+            }
+
+    confirmation_period_answer = cleaned.get("confirmation_ma_period")
+    if confirmation_period_answer:
+        entry_context.append(
+            {
+                "timeframe": strategy_dsl["timeframe"],
+                "expression": f"补充均线确认：{confirmation_period_answer}",
+                "indicator": "clarified_confirmation_period",
+                "operator": "==",
+                "value": True,
+            }
+        )
+
+    market_regime_metric_answer = cleaned.get("market_regime_metric")
+    if market_regime_metric_answer:
+        filters["market_regime"] = {
+            "enabled": True,
+            "preferred": market_regime_metric_answer,
+            "source": "clarification_answer",
+        }
+
+    pyramiding_answer = cleaned.get("pyramiding_rule")
+    if pyramiding_answer:
+        strategy_dsl.setdefault("position", {})["pyramiding_rule"] = pyramiding_answer
+
+
+def _build_strategy_clarification_round(
+    *,
+    clarification_answers: dict[str, str],
+    questions_for_user: list[dict[str, Any]],
+) -> dict[str, Any]:
+    title_map = {
+        "volume_threshold": "量能阈值",
+        "volume_threshold_followup": "量能阈值补充",
+        "chase_guard": "追高限制",
+        "chase_guard_followup": "追高限制补充",
+        "confirmation_rule": "确认规则",
+        "confirmation_ma_period": "确认均线周期",
+        "market_regime": "市场环境条件",
+        "market_regime_metric": "市场环境判定标准",
+        "position_rule": "试仓/仓位规则",
+        "pyramiding_rule": "加仓触发规则",
+    }
+    answered_items = [
+        {
+            "id": key,
+            "title": title_map.get(key, key),
+            "answer": value,
+        }
+        for key, value in clarification_answers.items()
+        if isinstance(value, str) and value.strip()
+    ]
+    pending_count = len(questions_for_user)
+    answered_count = len(answered_items)
+    if pending_count == 0 and answered_count == 0:
+        status = "no_questions"
+        stage_label = "当前无需澄清"
+        guidance = "当前策略表达已经足够清晰，没有待补充问题。"
+    elif pending_count == 0:
+        status = "completed"
+        stage_label = "澄清完成"
+        guidance = "当前补充项已经足够，系统可以据此进入正式理解与生成链路。"
+    elif answered_count == 0:
+        status = "first_round_pending"
+        stage_label = "第一轮澄清"
+        guidance = "请先补充这些关键条件，系统才能判断是否能生成正式策略版本。"
+    else:
+        status = "followup_pending"
+        stage_label = "继续澄清"
+        guidance = "系统已吸收你上一轮补充结果，但仍有下一轮待确认项。继续补充后再生成正式版本。"
+    return {
+        "status": status,
+        "stage_label": stage_label,
+        "guidance": guidance,
+        "answered_count": answered_count,
+        "pending_count": pending_count,
+        "answered_items": answered_items,
+    }
 
 
 def _extract_strategy_unsupported_items(prompt: str, normalized: str) -> list[dict[str, Any]]:
@@ -1425,6 +1582,10 @@ class StrategyService:
             normalized,
             clarification_answers,
         )
+        clarification_round = _build_strategy_clarification_round(
+            clarification_answers=clarification_answers,
+            questions_for_user=questions_for_user,
+        )
         unsupported_items = _extract_strategy_unsupported_items(prompt, normalized)
 
         if "做空" in prompt or "short" in normalized:
@@ -1609,6 +1770,8 @@ class StrategyService:
             summary_parts.append("教学模式已开启，Python 代码中为主要语句补充了逐行注释。")
         if clarification_answers:
             summary_parts.append("已应用你补充的条件说明，并据此重新理解策略。")
+            if questions_for_user:
+                summary_parts.append("当前补充后仍有下一轮待确认项，建议继续澄清后再保存为正式版本。")
         if matched_custom_indicators:
             summary_parts.append(
                 "已调用自定义指标库中的："
@@ -1637,6 +1800,7 @@ class StrategyService:
             "generation_pipeline": generation_pipeline,
             "field_mapping": field_mapping,
             "questions_for_user": questions_for_user,
+            "clarification_round": clarification_round,
             "unsupported_items": unsupported_items,
             "generation_decision": generation_decision,
             "human_summary": " ".join(summary_parts),

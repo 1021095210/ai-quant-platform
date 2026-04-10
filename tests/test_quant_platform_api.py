@@ -1003,6 +1003,38 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertEqual("首次仓位 20%", payload["strategy_dsl"]["position"]["clarified_rule"])
         self.assertIn("已应用你补充的条件说明", payload["human_summary"])
 
+    def test_generate_strategy_can_enter_followup_clarification_round(self) -> None:
+        client = self._build_client()
+
+        response = client.post(
+            "/api/v1/strategies/generate",
+            json={
+                "prompt": "放量后不追高，确认后再买，大盘不差的时候试仓",
+                "market": "600519.SH",
+                "timeframe": "1d",
+                "asset_type": "stock",
+                "preferences": {"side": "long"},
+                "clarification_answers": {
+                    "volume_threshold": "量能要明显放大",
+                    "chase_guard": "不要追得太高",
+                    "confirmation_rule": "15 分钟收盘站上均线后再入场",
+                    "market_regime": "只在趋势市开仓",
+                    "position_rule": "分两次加仓",
+                },
+            },
+        )
+
+        self.assertEqual(200, response.status_code)
+        payload = response.json()["data"]
+        self.assertEqual("needs_confirmation", payload["generation_decision"]["status"])
+        self.assertEqual("followup_pending", payload["clarification_round"]["status"])
+        self.assertEqual(5, payload["clarification_round"]["answered_count"])
+        self.assertGreaterEqual(payload["clarification_round"]["pending_count"], 1)
+        self.assertTrue(any(item["id"] == "volume_threshold_followup" for item in payload["questions_for_user"]))
+        self.assertTrue(any(item["id"] == "market_regime_metric" for item in payload["questions_for_user"]))
+        self.assertTrue(any(item["id"] == "pyramiding_rule" for item in payload["questions_for_user"]))
+        self.assertTrue(payload["clarification_round"]["answered_items"])
+
     def test_generate_strategy_returns_structured_spec_and_hard_validation_checks(self) -> None:
         client = self._build_client()
 
@@ -1059,6 +1091,7 @@ class QuantPlatformApiTests(unittest.TestCase):
 
         self.assertEqual(200, response.status_code)
         self.assertIn("字段级对照解释", response.text)
+        self.assertIn("等待澄清进度", response.text)
 
     def test_generate_strategy_teaching_mode_adds_comments_and_understands_terms(self) -> None:
         client = self._build_client()
