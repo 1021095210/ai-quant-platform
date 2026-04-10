@@ -3212,6 +3212,40 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertIn("002174.SZ", symbols)
         self.assertNotIn("000.SH", symbols)
         self.assertTrue(all("长文字智能识别" in item["notes"] for item in data["records"]))
+        self.assertEqual(2, data["group_count"])
+        self.assertEqual("当日开盘价买入", data["group_summaries"][0]["entry_rule"])
+
+    def test_manual_text_parse_endpoint_supports_per_group_rules(self) -> None:
+        client = self._build_client()
+        self._login(client)
+
+        response = client.post(
+            "/api/v1/trades/uploads/manual/parse-text",
+            json={
+                "text": (
+                    "2025-07-25\n"
+                    "买入方式：次日开盘价买入；卖出方式：第3个交易日收盘价卖出\n"
+                    "标的：603590.SH, 002225.SZ\n\n"
+                    "2025-08-01\n"
+                    "买入方式：当日收盘价买入；卖出方式：止损3%\n"
+                    "标的：603579.SH"
+                ),
+                "market": "cn_equity",
+                "adjustment_mode": "qfq",
+            },
+        )
+
+        self.assertEqual(200, response.status_code)
+        data = response.json()["data"]
+        self.assertEqual(2, data["group_count"])
+        self.assertEqual("次日开盘价买入", data["group_summaries"][0]["entry_rule"])
+        self.assertEqual("第 3 个交易日收盘价卖出", data["group_summaries"][0]["exit_rule"])
+        self.assertEqual("当日收盘价买入", data["group_summaries"][1]["entry_rule"])
+        self.assertEqual("下跌 3% 止损卖出", data["group_summaries"][1]["exit_rule"])
+        self.assertIn("买入规则：次日开盘价买入", data["records"][0]["notes"])
+        self.assertIn("卖出规则：第 3 个交易日收盘价卖出", data["records"][0]["notes"])
+        self.assertIn("买入规则：当日收盘价买入", data["records"][-1]["notes"])
+        self.assertIn("卖出规则：下跌 3% 止损卖出", data["records"][-1]["notes"])
 
     def test_screenshot_trade_upload_creates_structured_record(self) -> None:
         client = self._build_client()
@@ -3276,6 +3310,7 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertIn("加入手动记录", response.text)
         self.assertIn("长文字智能识别", response.text)
         self.assertIn("智能识别并加入记录", response.text)
+        self.assertIn("长文字识别完成后，这里会展示日期分组、识别到的规则和加入记录数摘要。", response.text)
         self.assertIn("价格口径", response.text)
         self.assertIn("精简结论", response.text)
         self.assertIn("复盘概览", response.text)
