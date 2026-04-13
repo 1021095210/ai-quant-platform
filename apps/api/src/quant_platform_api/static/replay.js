@@ -643,6 +643,7 @@ function renderReplayParameterStability(stability) {
       ${renderReplayNeighborCandidates(stability.neighbor_candidates || [])}
       ${renderReplayParameterSensitivity(stability.sensitivity_axes || [])}
       ${renderReplayParameterHeatmaps(stability.heatmap_axes || [])}
+      ${renderReplayParameterPairHeatmaps(stability.heatmap_pairs || [])}
       ${
         topCandidates.length
           ? `
@@ -664,6 +665,54 @@ function renderReplayParameterStability(stability) {
       }
       ${renderReplayRollingWindows(stability.rolling_windows || [], "滚动窗口稳定性")}
       ${renderReplayRollingWindows(stability.market_regime_windows || [], "市场状态稳定性")}
+    </div>
+  `;
+}
+
+function renderReplayParameterPairHeatmaps(items) {
+  if (!items.length) {
+    return "";
+  }
+  return `
+    <div class="result-box light" style="margin-top:12px;">
+      <strong>二维参数热力图</strong>
+      ${items
+        .map(
+          (item) => `
+            <div class="muted-note" style="margin-top:8px;">纵轴 ${item.y_label} · 横轴 ${item.x_label}</div>
+            <div style="overflow:auto; margin-top:10px;">
+              <table>
+                <thead>
+                  <tr>
+                    <th>${item.y_label} \\ ${item.x_label}</th>
+                    ${(item.x_values || []).map((value) => `<th>${value}</th>`).join("")}
+                  </tr>
+                </thead>
+                <tbody>
+                  ${(item.matrix || [])
+                    .map(
+                      (row) => `
+                        <tr>
+                          <th>${row.y_value}</th>
+                          ${(row.cells || [])
+                            .map((cell) => {
+                              if (cell.avg_score == null) {
+                                return `<td>-</td>`;
+                              }
+                              const alpha = 0.12 + Math.max(0, Math.min(1, Number(cell.intensity || 0))) * 0.48;
+                              return `<td style="background:rgba(15,118,110,${alpha});">${cell.avg_score}<br><span style="font-size:11px;color:#4b5563;">n=${cell.count}</span></td>`;
+                            })
+                            .join("")}
+                        </tr>
+                      `,
+                    )
+                    .join("")}
+                </tbody>
+              </table>
+            </div>
+          `,
+        )
+        .join("")}
     </div>
   `;
 }

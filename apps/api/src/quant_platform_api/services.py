@@ -7227,6 +7227,7 @@ def _build_replay_parameter_stability(
             "neighbor_candidates": [],
             "sensitivity_axes": [],
             "heatmap_axes": [],
+            "heatmap_pairs": [],
             "rolling_windows": [],
             "market_regime_windows": [],
         }
@@ -7269,6 +7270,7 @@ def _build_replay_parameter_stability(
         "neighbor_candidates": _build_replay_neighbor_candidates(scored_candidates, best_score),
         "sensitivity_axes": _build_replay_parameter_sensitivity_axes(scored_candidates),
         "heatmap_axes": _build_replay_parameter_heatmap_axes(scored_candidates),
+        "heatmap_pairs": _build_replay_parameter_pair_heatmaps(scored_candidates),
         "rolling_windows": _build_replay_rolling_window_stability(
             records=records or [],
             selected_patch=selected_patch or {},
@@ -7399,6 +7401,69 @@ def _build_replay_parameter_heatmap_axes(
             }
         )
     return result
+
+
+def _build_replay_parameter_pair_heatmaps(
+    scored_candidates: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    sensitivity_axes = _build_replay_parameter_sensitivity_axes(scored_candidates)
+    if len(sensitivity_axes) < 2:
+        return []
+    axis_labels = [str(axis["label"]) for axis in sensitivity_axes[:2]]
+    x_label, y_label = axis_labels[0], axis_labels[1]
+    grouped: dict[tuple[str, str], list[float]] = {}
+    for candidate in scored_candidates:
+        focus = _summarize_replay_patch_focus(candidate["patch"])
+        if x_label not in focus or y_label not in focus:
+            continue
+        key = (str(focus[x_label]), str(focus[y_label]))
+        grouped.setdefault(key, []).append(float(candidate["score"]))
+    if not grouped:
+        return []
+
+    x_values = sorted({key[0] for key in grouped.keys()})
+    y_values = sorted({key[1] for key in grouped.keys()})
+    avg_scores = {
+        key: sum(scores) / len(scores)
+        for key, scores in grouped.items()
+    }
+    best = max(avg_scores.values())
+    worst = min(avg_scores.values())
+    spread = max(best - worst, 0.0001)
+    matrix: list[dict[str, Any]] = []
+    for y_value in y_values:
+        row_cells = []
+        for x_value in x_values:
+            avg_score = avg_scores.get((x_value, y_value))
+            if avg_score is None:
+                row_cells.append(
+                    {
+                        "x_value": x_value,
+                        "y_value": y_value,
+                        "avg_score": None,
+                        "intensity": 0.0,
+                        "count": 0,
+                    }
+                )
+                continue
+            row_cells.append(
+                {
+                    "x_value": x_value,
+                    "y_value": y_value,
+                    "avg_score": round(avg_score, 4),
+                    "intensity": round((avg_score - worst) / spread, 3),
+                    "count": len(grouped[(x_value, y_value)]),
+                }
+            )
+        matrix.append({"y_value": y_value, "cells": row_cells})
+    return [
+        {
+            "x_label": x_label,
+            "y_label": y_label,
+            "x_values": x_values,
+            "matrix": matrix,
+        }
+    ]
 
 
 def _build_replay_rolling_window_stability(
