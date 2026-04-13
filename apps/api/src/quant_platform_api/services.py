@@ -6524,6 +6524,7 @@ def _build_replay_objective_versions(
             replay_market=replay_market,
             market_data_service=market_data_service,
             selected_patch=selected_patch,
+            candidate_leaderboard=search_summary.get("candidate_leaderboard") or [],
             minute_context_by_trade_id=minute_context_by_trade_id,
             fundamental_context_by_trade_id=fundamental_context_by_trade_id,
         )
@@ -6582,6 +6583,7 @@ def _build_replay_objective_counterfactual_summary(
     replay_market: str,
     market_data_service: MarketDataService | None,
     selected_patch: dict[str, Any],
+    candidate_leaderboard: list[dict[str, Any]] | None,
     minute_context_by_trade_id: dict[str, dict[str, Any]],
     fundamental_context_by_trade_id: dict[str, dict[str, Any]],
 ) -> dict[str, Any]:
@@ -6596,6 +6598,7 @@ def _build_replay_objective_counterfactual_summary(
             "focused_cases": [],
             "total_case_count": 0,
             "display_case_count": 0,
+            "search_linked_summary": {},
             "available": False,
         }
 
@@ -6614,6 +6617,7 @@ def _build_replay_objective_counterfactual_summary(
             "focused_cases": [],
             "total_case_count": 0,
             "display_case_count": 0,
+            "search_linked_summary": {},
             "available": True,
         }
 
@@ -6686,6 +6690,13 @@ def _build_replay_objective_counterfactual_summary(
         "focused_cases": focused_cases,
         "total_case_count": len(cases),
         "display_case_count": len(focused_cases),
+        "search_linked_summary": _build_replay_search_linked_counterfactual_summary(
+            losing_records=losing_records,
+            market_data_service=market_data_service,
+            candidate_leaderboard=candidate_leaderboard or [],
+            minute_context_by_trade_id=minute_context_by_trade_id,
+            fundamental_context_by_trade_id=fundamental_context_by_trade_id,
+        ),
         "available": True,
     }
 
@@ -6730,6 +6741,17 @@ def _build_replay_counterfactual_template_summary(
             {
                 "key": bucket["key"],
                 "title": bucket["title"],
+                "focus": _summarize_replay_patch_focus(
+                    next(
+                        (
+                            alternative.get("patch") or {}
+                            for case in cases
+                            for alternative in case.get("alternatives") or []
+                            if str(alternative.get("key") or "unknown") == bucket["key"]
+                        ),
+                        {},
+                    )
+                ),
                 "improved_count": int(bucket["improved_count"]),
                 "skipped_count": int(bucket["skipped_count"]),
                 "worsened_count": int(bucket["worsened_count"]),
@@ -7047,6 +7069,89 @@ def _build_counterfactual_alternative_result(
     }
 
 
+def _build_replay_search_linked_counterfactual_summary(
+    *,
+    losing_records: list[TradeRecordItem],
+    market_data_service: MarketDataService | None,
+    candidate_leaderboard: list[dict[str, Any]],
+    minute_context_by_trade_id: dict[str, dict[str, Any]],
+    fundamental_context_by_trade_id: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    if market_data_service is None or not candidate_leaderboard:
+        return {}
+    focused_candidates = [item for item in candidate_leaderboard[:3] if item.get("patch")]
+    if not focused_candidates:
+        return {}
+    cases: list[dict[str, Any]] = []
+    improved_count = 0
+    skipped_count = 0
+    worsened_count = 0
+    for item in losing_records:
+        best_case: dict[str, Any] | None = None
+        for candidate in focused_candidates:
+            rerun_trade = _rerun_single_replay_trade(
+                item=item,
+                market_data_service=market_data_service,
+                rule_patch=candidate["patch"],
+                minute_context=minute_context_by_trade_id.get(item.trade_id),
+                fundamental_context=fundamental_context_by_trade_id.get(item.trade_id),
+            )
+            if rerun_trade is None:
+                pnl_delta = round(-float(item.pnl), 2)
+                result = {
+                    "trade_id": item.trade_id,
+                    "symbol": item.symbol,
+                    "candidate_label": candidate.get("label") or "候选版本",
+                    "candidate_score": candidate.get("score"),
+                    "focus": candidate.get("focus") or {},
+                    "result_type": "skipped",
+                    "original_pnl": round(float(item.pnl), 2),
+                    "counterfactual_pnl": 0.0,
+                    "pnl_delta": pnl_delta,
+                    "summary": "当前候选版本会直接过滤掉这笔亏损交易。",
+                }
+            else:
+                new_pnl = round(float(rerun_trade["pnl"]), 2)
+                pnl_delta = round(new_pnl - float(item.pnl), 2)
+                result = {
+                    "trade_id": item.trade_id,
+                    "symbol": item.symbol,
+                    "candidate_label": candidate.get("label") or "候选版本",
+                    "candidate_score": candidate.get("score"),
+                    "focus": candidate.get("focus") or {},
+                    "result_type": "rerun",
+                    "original_pnl": round(float(item.pnl), 2),
+                    "counterfactual_pnl": new_pnl,
+                    "pnl_delta": pnl_delta,
+                    "summary": f"该候选版本会把结果从 {float(item.pnl):.2f} 变为 {new_pnl:.2f}。",
+                }
+            if best_case is None or float(result["pnl_delta"]) > float(best_case["pnl_delta"]):
+                best_case = result
+        if best_case is None:
+            continue
+        if best_case["result_type"] == "skipped":
+            skipped_count += 1
+            if float(best_case["pnl_delta"]) > 0:
+                improved_count += 1
+        elif float(best_case["pnl_delta"]) > 0:
+            improved_count += 1
+        else:
+            worsened_count += 1
+        cases.append(best_case)
+    cases.sort(key=lambda row: float(row.get("pnl_delta") or 0.0), reverse=True)
+    if not cases:
+        return {}
+    return {
+        "summary": "已对全样本亏损单补充对照前几组参数候选，帮助确认哪些单笔还能继续优化。",
+        "considered_count": len(losing_records),
+        "improved_count": improved_count,
+        "skipped_count": skipped_count,
+        "worsened_count": worsened_count,
+        "cases": cases,
+        "focused_cases": cases[:5],
+    }
+
+
 def _normalize_counterfactual_time_value(value: Any) -> str | None:
     if not isinstance(value, str):
         return None
@@ -7071,7 +7176,7 @@ def _rerun_replay_records_on_market_data(
         suggestion_rules=suggestion_rules,
         objective=objective,
     )
-    optimized_patch, evaluated_variants, parameter_stability = _optimize_replay_rule_patch(
+    optimized_patch, evaluated_variants, parameter_stability, candidate_leaderboard = _optimize_replay_rule_patch(
         records=records,
         replay_market=replay_market,
         objective=objective,
@@ -7123,6 +7228,7 @@ def _rerun_replay_records_on_market_data(
             ),
             "objective_score": round(_score_replay_objective_metrics(metrics, objective=objective), 4),
             "parameter_stability": parameter_stability,
+            "candidate_leaderboard": candidate_leaderboard,
         },
     }
 
@@ -7165,9 +7271,9 @@ def _optimize_replay_rule_patch(
     daily_context_by_trade_id: dict[str, dict[str, Any]],
     minute_context_by_trade_id: dict[str, dict[str, Any]],
     fundamental_context_by_trade_id: dict[str, dict[str, Any]],
-) -> tuple[dict[str, Any], int, dict[str, Any]]:
+) -> tuple[dict[str, Any], int, dict[str, Any], list[dict[str, Any]]]:
     if replay_market != "cn_a_share":
-        return base_patch, 0, _build_replay_parameter_stability([])
+        return base_patch, 0, _build_replay_parameter_stability([]), []
 
     risk = base_patch.get("risk") or {}
     filters = base_patch.get("filters") or {}
@@ -7261,7 +7367,7 @@ def _optimize_replay_rule_patch(
             }
         )
     if not scored_candidates:
-        return base_patch, len(variants), _build_replay_parameter_stability([])
+        return base_patch, len(variants), _build_replay_parameter_stability([]), []
     ranked_candidates = sorted(scored_candidates, key=lambda item: float(item["score"]), reverse=True)
     best_patch = ranked_candidates[0]["patch"]
     parameter_stability = _build_replay_parameter_stability(
@@ -7273,7 +7379,16 @@ def _optimize_replay_rule_patch(
         minute_context_by_trade_id=minute_context_by_trade_id,
         fundamental_context_by_trade_id=fundamental_context_by_trade_id,
     )
-    return best_patch, len(variants), parameter_stability
+    candidate_leaderboard = [
+        {
+            "label": f"候选 {index + 1}",
+            "score": round(float(item["score"]), 4),
+            "focus": _summarize_replay_patch_focus(item["patch"]),
+            "patch": item["patch"],
+        }
+        for index, item in enumerate(ranked_candidates[:5])
+    ]
+    return best_patch, len(variants), parameter_stability, candidate_leaderboard
 
 
 def _build_replay_parameter_stability(

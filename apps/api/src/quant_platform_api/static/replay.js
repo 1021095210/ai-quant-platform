@@ -575,6 +575,8 @@ function renderReplayObjectiveCounterfactual(summary) {
   const focusedCases = summary.focused_cases || summary.cases || [];
   const allCases = summary.cases || [];
   const extraCaseCount = Math.max((summary.total_case_count || allCases.length) - focusedCases.length, 0);
+  const searchLinked = summary.search_linked_summary || {};
+  const searchLinkedCases = searchLinked.focused_cases || [];
   return `
     <div class="result-box light" style="margin-top:12px;">
       <strong>这套版本对 Top 亏损单的影响</strong>
@@ -625,6 +627,35 @@ function renderReplayObjectiveCounterfactual(summary) {
                   .join("")}
               </div>
             </details>
+          `
+          : ""
+      }
+      ${
+        searchLinkedCases.length
+          ? `
+            <div class="result-box light" style="margin-top:12px;">
+              <strong>全样本亏损单的参数候选联动</strong>
+              <div class="muted-note" style="margin-top:6px;">${searchLinked.summary || "暂无说明"}</div>
+              <div class="muted-note">
+                对照 ${searchLinked.considered_count ?? 0} 笔 · 改善 ${searchLinked.improved_count ?? 0} 笔 ·
+                过滤 ${searchLinked.skipped_count ?? 0} 笔 · 变差 ${searchLinked.worsened_count ?? 0} 笔
+              </div>
+              <div class="list" style="margin-top:10px;">
+                ${searchLinkedCases
+                  .map(
+                    (item) => `
+                      <div class="list-item compact-item">
+                        <strong>${item.symbol}</strong>
+                        <div class="muted-note">${item.candidate_label} · 评分 ${item.candidate_score ?? "-"}</div>
+                        <div class="muted-note">${item.summary || "暂无说明"}</div>
+                        <div class="muted-note">原始盈亏 ${item.original_pnl} · 候选结果 ${item.counterfactual_pnl} · 变化 ${formatSignedValue(item.pnl_delta)}</div>
+                        <div class="muted-note">关键参数：${renderReplayPatchFocus(item.focus || {})}</div>
+                      </div>
+                    `,
+                  )
+                  .join("")}
+              </div>
+            </div>
           `
           : ""
       }
@@ -986,6 +1017,7 @@ function renderReplayCounterfactualCases(items, templateSummary) {
                   <strong>${item.title}</strong>
                   <div class="muted-note">样本 ${item.sample_count} · 改善 ${item.improved_count} · 过滤 ${item.skipped_count} · 变差 ${item.worsened_count}</div>
                   <div class="muted-note">被推荐为优先路径 ${item.best_choice_count} 次 · 平均盈亏变化 ${formatSignedValue(item.avg_pnl_improvement)}</div>
+                  <div class="muted-note">关联参数：${renderReplayPatchFocus(item.focus || {})}</div>
                 </div>
               `,
             )
