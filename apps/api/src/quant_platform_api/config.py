@@ -30,7 +30,7 @@ class Settings:
     llm_deepseek_model: str = ""
     llm_volcengine_base_url: str = "https://ark.cn-beijing.volces.com/api/v3"
     llm_volcengine_api_key: str = ""
-    llm_volcengine_model: str = ""
+    llm_volcengine_model: str = "deepseek-v3-2-251201"
     allowed_llm_export_fields: str = "symbol,side,entry_time,exit_time,pnl,feature_snapshot"
     backtest_engine_version: str = "engine_v1"
     strategy_prompt_version: str = "v1"
