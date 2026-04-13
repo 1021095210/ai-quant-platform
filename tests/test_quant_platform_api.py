@@ -2714,6 +2714,7 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertIn("top_candidates", stability)
         self.assertTrue(stability["top_candidates"])
         self.assertIn("focus", stability["top_candidates"][0])
+        self.assertIn("sensitivity_axes", stability)
         self.assertIn("rolling_windows", stability)
         self.assertIn("market_regime_windows", stability)
 
@@ -2869,7 +2870,107 @@ class QuantPlatformApiTests(unittest.TestCase):
         )
 
         self.assertEqual(2, summary["considered_count"])
-        self.assertLessEqual(len(summary["cases"]), 5)
+        self.assertEqual(2, summary["total_case_count"])
+        self.assertEqual(2, len(summary["cases"]))
+        self.assertEqual(2, len(summary["focused_cases"]))
+
+    def test_replay_parameter_stability_includes_sensitivity_axes(self) -> None:
+        class FakeMarketDataService:
+            def load_daily_bars(self, *, ts_code, start_date, end_date, adjustment_mode):
+                return (
+                    [
+                        MarketBar(
+                            ts_code=ts_code,
+                            asset_type="stock",
+                            adjustment_mode="qfq",
+                            trade_date="2024-05-01",
+                            open=10.0,
+                            high=10.3,
+                            low=9.9,
+                            close=10.1,
+                            volume=1000,
+                            amount=10000,
+                            pct_chg=0.0,
+                            turnover=1.0,
+                            data_source="internal_clickhouse_dwd",
+                            fetched_at="2026-04-09T00:00:00",
+                        ),
+                        MarketBar(
+                            ts_code=ts_code,
+                            asset_type="stock",
+                            adjustment_mode="qfq",
+                            trade_date="2024-05-02",
+                            open=10.1,
+                            high=10.8,
+                            low=10.0,
+                            close=10.7,
+                            volume=1300,
+                            amount=11000,
+                            pct_chg=0.0,
+                            turnover=1.2,
+                            data_source="internal_clickhouse_dwd",
+                            fetched_at="2026-04-09T00:00:00",
+                        ),
+                        MarketBar(
+                            ts_code=ts_code,
+                            asset_type="stock",
+                            adjustment_mode="qfq",
+                            trade_date="2024-05-03",
+                            open=10.7,
+                            high=10.9,
+                            low=10.2,
+                            close=10.4,
+                            volume=1400,
+                            amount=12000,
+                            pct_chg=0.0,
+                            turnover=1.3,
+                            data_source="internal_clickhouse_dwd",
+                            fetched_at="2026-04-09T00:00:00",
+                        ),
+                    ],
+                    {"provider": "internal_clickhouse_dwd", "status": "ready"},
+                )
+
+            def load_minute_window(self, *, ts_code, start_time, end_time, adjustment_mode):
+                return [], {"provider": "internal_clickhouse_dwd", "status": "unavailable"}
+
+        trade = TradeRecordItem(
+            trade_id="trade_sensitivity",
+            symbol="600519.SH",
+            side="long",
+            entry_time=datetime.fromisoformat("2024-05-01T09:30:00+00:00"),
+            exit_time=datetime.fromisoformat("2024-05-03T15:00:00+00:00"),
+            pnl=400.0,
+            entry_price=10.0,
+            exit_price=10.4,
+        )
+        rerun = _rerun_replay_records_on_market_data(
+            records=[trade],
+            replay_market="cn_a_share",
+            objective="sharpe_max",
+            market_data_service=FakeMarketDataService(),
+            suggestion_rules=[
+                {
+                    "title": "分钟结构 + 基本止损",
+                    "dsl_patch": {
+                        "filters": {
+                            "intraday_entry_timing": {"enabled": True, "max_first_15m_return_pct": 1.0},
+                            "intraday_structure": {"enabled": True, "min_close_position_pct": 50},
+                        },
+                        "risk": {"max_holding_bars": 8, "stop_loss_pct": -0.02},
+                    },
+                }
+            ],
+            daily_context_by_trade_id={"trade_sensitivity": {"trend_regime": "trend"}},
+            minute_context_by_trade_id={"trade_sensitivity": {"first_15m_return_pct": 0.3, "close_position_pct": 62}},
+            fundamental_context_by_trade_id={},
+        )
+
+        self.assertIsNotNone(rerun)
+        assert rerun is not None
+        axes = rerun["search_summary"]["parameter_stability"]["sensitivity_axes"]
+        self.assertTrue(isinstance(axes, list))
+        self.assertTrue(axes)
 
     def test_replay_analysis_returns_analysis_scope_and_daily_context_features(self) -> None:
         client = self._build_client()

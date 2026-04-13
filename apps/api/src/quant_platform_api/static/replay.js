@@ -569,7 +569,9 @@ function renderReplayObjectiveCounterfactual(summary) {
   if (!summary || Object.keys(summary).length === 0) {
     return "";
   }
-  const cases = summary.cases || [];
+  const focusedCases = summary.focused_cases || summary.cases || [];
+  const allCases = summary.cases || [];
+  const extraCaseCount = Math.max((summary.total_case_count || allCases.length) - focusedCases.length, 0);
   return `
     <div class="result-box light" style="margin-top:12px;">
       <strong>这套版本对 Top 亏损单的影响</strong>
@@ -579,10 +581,10 @@ function renderReplayObjectiveCounterfactual(summary) {
         过滤 ${summary.skipped_count ?? 0} 笔 · 变差 ${summary.worsened_count ?? 0} 笔
       </div>
       ${
-        cases.length
+        focusedCases.length
           ? `
             <div class="list" style="margin-top:12px;">
-              ${cases
+              ${focusedCases
                 .map(
                   (item) => `
                     <div class="list-item compact-item">
@@ -596,6 +598,30 @@ function renderReplayObjectiveCounterfactual(summary) {
                 )
                 .join("")}
             </div>
+          `
+          : ""
+      }
+      ${
+        extraCaseCount > 0
+          ? `
+            <details class="result-box light" style="margin-top:12px;">
+              <summary>查看全部逐笔反事实明细（另有 ${extraCaseCount} 笔）</summary>
+              <div class="list" style="margin-top:12px; max-height: 320px; overflow: auto;">
+                ${allCases
+                  .map(
+                    (item) => `
+                      <div class="list-item compact-item">
+                        <strong>${item.symbol}</strong>
+                        <div class="muted-note">${item.summary || "暂无说明"}</div>
+                        <div class="muted-note">
+                          原始盈亏 ${item.original_pnl} · 反事实盈亏 ${item.counterfactual_pnl} · 变化 ${formatSignedValue(item.pnl_delta)}
+                        </div>
+                      </div>
+                    `,
+                  )
+                  .join("")}
+              </div>
+            </details>
           `
           : ""
       }
@@ -614,6 +640,7 @@ function renderReplayParameterStability(stability) {
       <div class="muted-note" style="margin-top:6px;">${stability.label || "暂无稳定性结论"}</div>
       <div class="muted-note">${stability.summary || ""}</div>
       <div class="muted-note">接近当前最优的候选版本：${stability.near_best_count ?? 0} 组</div>
+      ${renderReplayParameterSensitivity(stability.sensitivity_axes || [])}
       ${
         topCandidates.length
           ? `
@@ -635,6 +662,34 @@ function renderReplayParameterStability(stability) {
       }
       ${renderReplayRollingWindows(stability.rolling_windows || [], "滚动窗口稳定性")}
       ${renderReplayRollingWindows(stability.market_regime_windows || [], "市场状态稳定性")}
+    </div>
+  `;
+}
+
+function renderReplayParameterSensitivity(items) {
+  if (!items.length) {
+    return "";
+  }
+  return `
+    <div class="result-box light" style="margin-top:12px;">
+      <strong>参数敏感性</strong>
+      <div class="list" style="margin-top:10px;">
+        ${items
+          .map(
+            (item) => `
+              <div class="list-item compact-item">
+                <strong>${item.label}</strong>
+                <div class="muted-note">最优值 ${item.best_value} · 分差 ${item.score_spread} · ${item.sensitivity}</div>
+                <div class="muted-note">
+                  ${((item.values || [])
+                    .map((value) => `${value.value}（均分 ${value.avg_score}，样本 ${value.count}）`)
+                    .join("；")) || "暂无参数分层摘要"}
+                </div>
+              </div>
+            `,
+          )
+          .join("")}
+      </div>
     </div>
   `;
 }
