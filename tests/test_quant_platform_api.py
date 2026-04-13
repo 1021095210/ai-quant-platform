@@ -2714,6 +2714,8 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertIn("top_candidates", stability)
         self.assertTrue(stability["top_candidates"])
         self.assertIn("focus", stability["top_candidates"][0])
+        self.assertIn("neighbor_candidates", stability)
+        self.assertIn("heatmap_axes", stability)
         self.assertIn("sensitivity_axes", stability)
         self.assertIn("rolling_windows", stability)
         self.assertIn("market_regime_windows", stability)
@@ -2971,6 +2973,76 @@ class QuantPlatformApiTests(unittest.TestCase):
         axes = rerun["search_summary"]["parameter_stability"]["sensitivity_axes"]
         self.assertTrue(isinstance(axes, list))
         self.assertTrue(axes)
+        self.assertTrue(rerun["search_summary"]["parameter_stability"]["neighbor_candidates"])
+        self.assertTrue(rerun["search_summary"]["parameter_stability"]["heatmap_axes"])
+
+    def test_replay_counterfactual_cases_include_extended_templates(self) -> None:
+        class FakeMarketDataService:
+            def load_daily_bars(self, *, ts_code, start_date, end_date, adjustment_mode):
+                return (
+                    [
+                        MarketBar(
+                            ts_code=ts_code,
+                            asset_type="stock",
+                            adjustment_mode="qfq",
+                            trade_date="2024-05-01",
+                            open=10.0,
+                            high=10.4,
+                            low=9.8,
+                            close=9.9,
+                            volume=1000,
+                            amount=10000,
+                            pct_chg=0.0,
+                            turnover=1.0,
+                            data_source="internal_clickhouse_dwd",
+                            fetched_at="2026-04-09T00:00:00",
+                        ),
+                        MarketBar(
+                            ts_code=ts_code,
+                            asset_type="stock",
+                            adjustment_mode="qfq",
+                            trade_date="2024-05-02",
+                            open=9.9,
+                            high=10.1,
+                            low=9.4,
+                            close=9.6,
+                            volume=1200,
+                            amount=11000,
+                            pct_chg=0.0,
+                            turnover=1.2,
+                            data_source="internal_clickhouse_dwd",
+                            fetched_at="2026-04-09T00:00:00",
+                        ),
+                    ],
+                    {"provider": "internal_clickhouse_dwd", "status": "ready"},
+                )
+
+            def load_minute_window(self, *, ts_code, start_time, end_time, adjustment_mode):
+                return [], {"provider": "internal_clickhouse_dwd", "status": "unavailable"}
+
+        trade = TradeRecordItem(
+            trade_id="loss_template_1",
+            symbol="600519.SH",
+            side="long",
+            entry_time=datetime.fromisoformat("2024-05-01T09:35:00+08:00"),
+            exit_time=datetime.fromisoformat("2024-05-02T15:00:00+08:00"),
+            pnl=-320.0,
+            entry_price=10.4,
+            exit_price=9.82,
+        )
+        cases = _build_replay_counterfactual_cases(
+            records=[trade],
+            replay_market="cn_a_share",
+            market_data_service=FakeMarketDataService(),
+            daily_context_by_trade_id={"loss_template_1": {"trend_regime": "range", "above_ma5": False}},
+            minute_context_by_trade_id={"loss_template_1": {"first_15m_return_pct": 0.2, "close_position_pct": 48.0}},
+            fundamental_context_by_trade_id={},
+        )
+
+        self.assertEqual(1, len(cases))
+        titles = [item["title"] for item in cases[0]["alternatives"]]
+        self.assertIn("时间止盈 / 持仓上限收紧", titles)
+        self.assertIn("仅在趋势环境开仓", titles)
 
     def test_replay_analysis_returns_analysis_scope_and_daily_context_features(self) -> None:
         client = self._build_client()

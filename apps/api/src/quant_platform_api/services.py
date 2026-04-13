@@ -6750,7 +6750,7 @@ def _build_single_trade_counterfactuals(
             f" 当前最值得优先验证的是“{recommended['title']}”。"
         ),
         "original_trade": original_trade,
-        "alternatives": alternatives[:5],
+        "alternatives": alternatives[:6],
         "recommended_alternative_key": recommended["key"],
         "recommended_summary": recommended["summary"],
     }
@@ -6763,7 +6763,7 @@ def _build_counterfactual_rule_candidates(
     minute_context: dict[str, Any] | None,
     fundamental_context: dict[str, Any] | None,
 ) -> list[dict[str, Any]]:
-    return [
+    candidates = [
         _build_counterfactual_skip_candidate(
             daily_context=daily_context,
             minute_context=minute_context,
@@ -6796,19 +6796,53 @@ def _build_counterfactual_rule_candidates(
             },
         },
         {
-            "key": "take_profit_optimization",
-            "title": "提前止盈保护",
+            "key": "time_based_exit",
+            "title": "时间止盈 / 持仓上限收紧",
             "kind": "modified_exit",
             "patch": {
                 "filters": {},
                 "risk": {
-                    "take_profit_pct": 0.04,
-                    "stop_loss_pct": -0.02,
-                    "max_holding_bars": 8,
+                    "max_holding_bars": 3,
+                    "take_profit_pct": 0.025,
+                    "stop_loss_pct": -0.018,
                 },
             },
         },
     ]
+    if daily_context and daily_context.get("trend_regime") == "range":
+        candidates.append(
+            {
+                "key": "trend_only_environment",
+                "title": "仅在趋势环境开仓",
+                "kind": "environment_filter",
+                "patch": {
+                    "filters": {
+                        "market_regime": {"enabled": True, "preferred": "trend"},
+                        "trend_confirmation": {"enabled": True, "timeframe": "1d"},
+                    },
+                    "risk": {},
+                },
+            }
+        )
+    elif fundamental_context and (
+        float(fundamental_context.get("debt_to_assets") or 0.0) >= 60.0
+        or float(fundamental_context.get("roe") or 100.0) < 8.0
+    ):
+        candidates.append(
+            {
+                "key": "quality_guard_filter",
+                "title": "基本面质量过滤",
+                "kind": "environment_filter",
+                "patch": {
+                    "filters": {
+                        "fundamental_guard": {"enabled": True, "max_debt_to_assets": 55},
+                        "quality_filter": {"enabled": True, "min_roe": 8},
+                    },
+                    "risk": {},
+                },
+            }
+        )
+    return candidates
 
 
 def _build_counterfactual_skip_candidate(
@@ -7190,7 +7224,9 @@ def _build_replay_parameter_stability(
             "summary": "当前没有足够的候选版本可用于稳定性判断。",
             "near_best_count": 0,
             "top_candidates": [],
+            "neighbor_candidates": [],
             "sensitivity_axes": [],
+            "heatmap_axes": [],
             "rolling_windows": [],
             "market_regime_windows": [],
         }
@@ -7230,7 +7266,9 @@ def _build_replay_parameter_stability(
         "summary": summary,
         "near_best_count": near_best_count,
         "top_candidates": top_candidates,
+        "neighbor_candidates": _build_replay_neighbor_candidates(scored_candidates, best_score),
         "sensitivity_axes": _build_replay_parameter_sensitivity_axes(scored_candidates),
+        "heatmap_axes": _build_replay_parameter_heatmap_axes(scored_candidates),
         "rolling_windows": _build_replay_rolling_window_stability(
             records=records or [],
             selected_patch=selected_patch or {},
@@ -7247,6 +7285,27 @@ def _build_replay_parameter_stability(
             fundamental_context_by_trade_id=fundamental_context_by_trade_id or {},
         ),
     }
+
+
+def _build_replay_neighbor_candidates(
+    scored_candidates: list[dict[str, Any]],
+    best_score: float,
+) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for candidate in scored_candidates[:5]:
+        score = round(float(candidate["score"]), 4)
+        items.append(
+            {
+                "score": score,
+                "score_delta": round(score - best_score, 4),
+                "focus": _summarize_replay_patch_focus(candidate["patch"]),
+                "trade_count": int(candidate["metrics"].get("trade_count") or 0),
+                "win_rate_pct": round(float(candidate["metrics"].get("win_rate_pct") or 0.0), 2),
+                "max_drawdown_pct": round(float(candidate["metrics"].get("max_drawdown_pct") or 0.0), 2),
+                "sharpe_like": round(float(candidate["metrics"].get("sharpe_like") or 0.0), 2),
+            }
+        )
+    return items
 
 
 def _build_replay_parameter_sensitivity_axes(
@@ -7307,6 +7366,39 @@ def _build_replay_parameter_sensitivity_axes(
         )
     axes.sort(key=lambda item: float(item["score_spread"]), reverse=True)
     return axes[:6]
+
+
+def _build_replay_parameter_heatmap_axes(
+    scored_candidates: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    axes = _build_replay_parameter_sensitivity_axes(scored_candidates)
+    if not axes:
+        return []
+    result: list[dict[str, Any]] = []
+    for axis in axes:
+        values = axis.get("values") or []
+        if not values:
+            continue
+        best = max(float(item["avg_score"]) for item in values)
+        worst = min(float(item["avg_score"]) for item in values)
+        spread = max(best - worst, 0.0001)
+        heat_values = []
+        for item in values:
+            intensity = (float(item["avg_score"]) - worst) / spread
+            heat_values.append(
+                {
+                    **item,
+                    "intensity": round(intensity, 3),
+                }
+            )
+        result.append(
+            {
+                "label": axis["label"],
+                "best_value": axis["best_value"],
+                "values": heat_values,
+            }
+        )
+    return result
 
 
 def _build_replay_rolling_window_stability(
