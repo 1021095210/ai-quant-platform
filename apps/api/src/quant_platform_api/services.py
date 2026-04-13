@@ -5456,6 +5456,9 @@ def build_replay_result(
             minute_context_by_trade_id=_group_replay_contexts_by_trade_id(minute_contexts),
             fundamental_context_by_trade_id=_group_replay_contexts_by_trade_id(fundamental_contexts),
         )
+        counterfactual_template_summary = _build_replay_counterfactual_template_summary(
+            counterfactual_cases
+        )
         concise_summary = _build_replay_concise_summary(
             total_count=total_count,
             win_rate=win_rate,
@@ -5516,6 +5519,7 @@ def build_replay_result(
             "profit_features": profit_features,
             "objective_versions": objective_versions,
             "counterfactual_cases": counterfactual_cases,
+            "counterfactual_template_summary": counterfactual_template_summary,
             "parameter_changes": parameter_changes,
             "condition_replacements": condition_replacements,
             "trade_records": trade_records,
@@ -6686,6 +6690,70 @@ def _build_replay_objective_counterfactual_summary(
     }
 
 
+def _build_replay_counterfactual_template_summary(
+    cases: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    grouped: dict[str, dict[str, Any]] = {}
+    for case in cases:
+        recommended_key = case.get("recommended_alternative_key")
+        for alternative in case.get("alternatives") or []:
+            key = str(alternative.get("key") or "unknown")
+            title = str(alternative.get("title") or key)
+            bucket = grouped.setdefault(
+                key,
+                {
+                    "key": key,
+                    "title": title,
+                    "improved_count": 0,
+                    "skipped_count": 0,
+                    "worsened_count": 0,
+                    "best_choice_count": 0,
+                    "total_pnl_improvement": 0.0,
+                    "sample_count": 0,
+                },
+            )
+            improvement = float(alternative.get("pnl_improvement") or 0.0)
+            bucket["sample_count"] += 1
+            bucket["total_pnl_improvement"] += improvement
+            if alternative.get("result_type") == "skipped":
+                bucket["skipped_count"] += 1
+            elif improvement > 0:
+                bucket["improved_count"] += 1
+            elif improvement < 0:
+                bucket["worsened_count"] += 1
+            if key == recommended_key:
+                bucket["best_choice_count"] += 1
+    items: list[dict[str, Any]] = []
+    for bucket in grouped.values():
+        sample_count = int(bucket["sample_count"] or 0)
+        items.append(
+            {
+                "key": bucket["key"],
+                "title": bucket["title"],
+                "improved_count": int(bucket["improved_count"]),
+                "skipped_count": int(bucket["skipped_count"]),
+                "worsened_count": int(bucket["worsened_count"]),
+                "best_choice_count": int(bucket["best_choice_count"]),
+                "avg_pnl_improvement": round(
+                    float(bucket["total_pnl_improvement"]) / sample_count,
+                    2,
+                )
+                if sample_count
+                else 0.0,
+                "sample_count": sample_count,
+            }
+        )
+    items.sort(
+        key=lambda item: (
+            int(item["best_choice_count"]),
+            int(item["improved_count"]) + int(item["skipped_count"]),
+            float(item["avg_pnl_improvement"]),
+        ),
+        reverse=True,
+    )
+    return items[:6]
+
+
 def _build_single_trade_counterfactuals(
     *,
     item: TradeRecordItem,
@@ -7225,6 +7293,7 @@ def _build_replay_parameter_stability(
             "near_best_count": 0,
             "top_candidates": [],
             "neighbor_candidates": [],
+            "neighbor_bands": [],
             "sensitivity_axes": [],
             "heatmap_axes": [],
             "heatmap_pairs": [],
@@ -7268,6 +7337,7 @@ def _build_replay_parameter_stability(
         "near_best_count": near_best_count,
         "top_candidates": top_candidates,
         "neighbor_candidates": _build_replay_neighbor_candidates(scored_candidates, best_score),
+        "neighbor_bands": _build_replay_neighbor_bands(scored_candidates, best_score),
         "sensitivity_axes": _build_replay_parameter_sensitivity_axes(scored_candidates),
         "heatmap_axes": _build_replay_parameter_heatmap_axes(scored_candidates),
         "heatmap_pairs": _build_replay_parameter_pair_heatmaps(scored_candidates),
@@ -7308,6 +7378,53 @@ def _build_replay_neighbor_candidates(
             }
         )
     return items
+
+
+def _build_replay_neighbor_bands(
+    scored_candidates: list[dict[str, Any]],
+    best_score: float,
+) -> list[dict[str, Any]]:
+    if not scored_candidates:
+        return []
+    thresholds = [
+        ("贴近最优", max(abs(best_score) * 0.03, 0.03)),
+        ("次近邻", max(abs(best_score) * 0.08, 0.08)),
+    ]
+    bands = [
+        {"label": "贴近最优", "count": 0, "score_deltas": [], "trade_counts": []},
+        {"label": "次近邻", "count": 0, "score_deltas": [], "trade_counts": []},
+        {"label": "明显回落", "count": 0, "score_deltas": [], "trade_counts": []},
+    ]
+    for candidate in scored_candidates:
+        score = float(candidate["score"])
+        score_delta = round(score - best_score, 4)
+        distance = best_score - score
+        if distance <= thresholds[0][1]:
+            band = bands[0]
+        elif distance <= thresholds[1][1]:
+            band = bands[1]
+        else:
+            band = bands[2]
+        band["count"] += 1
+        band["score_deltas"].append(score_delta)
+        band["trade_counts"].append(int(candidate["metrics"].get("trade_count") or 0))
+    result: list[dict[str, Any]] = []
+    for band in bands:
+        if not band["count"]:
+            continue
+        avg_delta = sum(band["score_deltas"]) / len(band["score_deltas"])
+        avg_trades = sum(band["trade_counts"]) / len(band["trade_counts"])
+        result.append(
+            {
+                "label": band["label"],
+                "count": int(band["count"]),
+                "avg_score_delta": round(avg_delta, 4),
+                "best_score_delta": round(max(band["score_deltas"]), 4),
+                "worst_score_delta": round(min(band["score_deltas"]), 4),
+                "avg_trade_count": round(avg_trades, 1),
+            }
+        )
+    return result
 
 
 def _build_replay_parameter_sensitivity_axes(

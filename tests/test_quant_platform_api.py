@@ -36,6 +36,7 @@ try:
         FinancialAssistantService,
         MentorService,
         _build_replay_counterfactual_cases,
+        _build_replay_counterfactual_template_summary,
         _build_replay_context_suggestions,
         _build_replay_fundamental_features,
         _build_replay_minute_context_features,
@@ -58,6 +59,7 @@ except ModuleNotFoundError:  # pragma: no cover - handled by skip
     FinancialAssistantService = None
     MentorService = None
     _build_replay_counterfactual_cases = None
+    _build_replay_counterfactual_template_summary = None
     _build_replay_context_suggestions = None
     _build_replay_minute_context_features = None
     _build_replay_fundamental_features = None
@@ -2519,6 +2521,7 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertTrue(data["profit_features"])
         self.assertTrue(data["objective_versions"])
         self.assertIn("counterfactual_cases", data)
+        self.assertIn("counterfactual_template_summary", data)
         self.assertTrue(data["parameter_changes"])
         self.assertTrue(data["condition_replacements"])
         self.assertTrue(data["trade_records"])
@@ -2540,7 +2543,9 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertIn("removed_profits", data["objective_versions"][0]["trade_set_changes"])
         self.assertFalse(data["objective_versions"][0]["trade_set_changes"]["added_trades_supported"])
         self.assertIn("parameter_stability", data["objective_versions"][0]["search_summary"])
+        self.assertIn("neighbor_bands", data["objective_versions"][0]["search_summary"]["parameter_stability"])
         self.assertIn("summary", data["objective_versions"][0]["objective_counterfactual"])
+        self.assertTrue(isinstance(data["counterfactual_template_summary"], list))
         self.assertIn("样本筛选回放", data["objective_versions"][0]["comparison_note"])
         self.assertIn("上下文评分", data["objective_versions"][0]["comparison_note"])
         self.assertIn("entry_price", data["trade_records"][0])
@@ -2975,8 +2980,54 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertTrue(isinstance(axes, list))
         self.assertTrue(axes)
         self.assertTrue(rerun["search_summary"]["parameter_stability"]["neighbor_candidates"])
+        self.assertTrue(rerun["search_summary"]["parameter_stability"]["neighbor_bands"])
         self.assertTrue(rerun["search_summary"]["parameter_stability"]["heatmap_axes"])
         self.assertTrue(rerun["search_summary"]["parameter_stability"]["heatmap_pairs"])
+
+    def test_replay_counterfactual_template_summary_groups_template_effects(self) -> None:
+        summary = _build_replay_counterfactual_template_summary(
+            [
+                {
+                    "recommended_alternative_key": "skip_trade_filter",
+                    "alternatives": [
+                        {
+                            "key": "skip_trade_filter",
+                            "title": "不开仓过滤",
+                            "result_type": "skipped",
+                            "pnl_improvement": 3.2,
+                        },
+                        {
+                            "key": "tighter_stop_loss",
+                            "title": "收紧止损",
+                            "result_type": "rerun",
+                            "pnl_improvement": 1.1,
+                        },
+                    ],
+                },
+                {
+                    "recommended_alternative_key": "tighter_stop_loss",
+                    "alternatives": [
+                        {
+                            "key": "skip_trade_filter",
+                            "title": "不开仓过滤",
+                            "result_type": "skipped",
+                            "pnl_improvement": 2.0,
+                        },
+                        {
+                            "key": "tighter_stop_loss",
+                            "title": "收紧止损",
+                            "result_type": "rerun",
+                            "pnl_improvement": -0.5,
+                        },
+                    ],
+                },
+            ]
+        )
+
+        self.assertTrue(summary)
+        self.assertEqual("不开仓过滤", summary[0]["title"])
+        self.assertEqual(2, summary[0]["sample_count"])
+        self.assertEqual(2, summary[0]["skipped_count"])
 
     def test_replay_counterfactual_cases_include_extended_templates(self) -> None:
         class FakeMarketDataService:

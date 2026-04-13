@@ -409,7 +409,10 @@ async function runReplay() {
   renderReplayFeatureList(nodes.profitFeatures, result.profit_features || [], "尚未提取盈利特征。");
   renderReplayObjectiveTabs();
   renderReplayObjectiveDetail();
-  renderReplayCounterfactualCases(result.counterfactual_cases || []);
+  renderReplayCounterfactualCases(
+    result.counterfactual_cases || [],
+    result.counterfactual_template_summary || [],
+  );
   renderReplayParameterChanges(result.parameter_changes || []);
   renderReplayConditionReplacements(result.condition_replacements || []);
   renderReplayRules(result.suggestion_rules || []);
@@ -641,6 +644,7 @@ function renderReplayParameterStability(stability) {
       <div class="muted-note">${stability.summary || ""}</div>
       <div class="muted-note">接近当前最优的候选版本：${stability.near_best_count ?? 0} 组</div>
       ${renderReplayNeighborCandidates(stability.neighbor_candidates || [])}
+      ${renderReplayNeighborBands(stability.neighbor_bands || [])}
       ${renderReplayParameterSensitivity(stability.sensitivity_axes || [])}
       ${renderReplayParameterHeatmaps(stability.heatmap_axes || [])}
       ${renderReplayParameterPairHeatmaps(stability.heatmap_pairs || [])}
@@ -733,6 +737,32 @@ function renderReplayNeighborCandidates(items) {
                 <div class="muted-note">评分 ${item.score} · 与最优差值 ${formatSignedValue(item.score_delta)} · 交易数 ${item.trade_count}</div>
                 <div class="muted-note">胜率 ${item.win_rate_pct}% · 回撤 ${item.max_drawdown_pct}% · 夏普近似 ${item.sharpe_like}</div>
                 <div class="muted-note">关键参数：${renderReplayPatchFocus(item.focus || {})}</div>
+              </div>
+            `,
+          )
+          .join("")}
+      </div>
+    </div>
+  `;
+}
+
+function renderReplayNeighborBands(items) {
+  if (!items.length) {
+    return "";
+  }
+  return `
+    <div class="result-box light" style="margin-top:12px;">
+      <strong>邻域敏感性分层</strong>
+      <div class="grid-3" style="margin-top:10px;">
+        ${items
+          .map(
+            (item) => `
+              <div class="result-box light">
+                <strong>${item.label}</strong>
+                <div class="muted-note" style="margin-top:6px;">候选数 ${item.count}</div>
+                <div class="muted-note">平均分差 ${formatSignedValue(item.avg_score_delta)}</div>
+                <div class="muted-note">最佳分差 ${formatSignedValue(item.best_score_delta)} · 最弱分差 ${formatSignedValue(item.worst_score_delta)}</div>
+                <div class="muted-note">平均交易数 ${item.avg_trade_count}</div>
               </div>
             `,
           )
@@ -943,10 +973,32 @@ function renderReplayParameterChanges(items) {
     : "尚未生成参数改动列表。";
 }
 
-function renderReplayCounterfactualCases(items) {
-  nodes.counterfactualCases.innerHTML = items.length
-    ? items
-        .map(
+function renderReplayCounterfactualCases(items, templateSummary) {
+  const summaryHtml = templateSummary?.length
+    ? `
+      <div class="result-box light" style="margin-bottom:12px;">
+        <strong>反事实模板命中摘要</strong>
+        <div class="list" style="margin-top:10px;">
+          ${templateSummary
+            .map(
+              (item) => `
+                <div class="list-item compact-item">
+                  <strong>${item.title}</strong>
+                  <div class="muted-note">样本 ${item.sample_count} · 改善 ${item.improved_count} · 过滤 ${item.skipped_count} · 变差 ${item.worsened_count}</div>
+                  <div class="muted-note">被推荐为优先路径 ${item.best_choice_count} 次 · 平均盈亏变化 ${formatSignedValue(item.avg_pnl_improvement)}</div>
+                </div>
+              `,
+            )
+            .join("")}
+        </div>
+      </div>
+    `
+    : "";
+  nodes.counterfactualCases.innerHTML =
+    summaryHtml +
+    (items.length
+      ? items
+          .map(
           (item) => `
             <details class="list-item">
               <summary>
@@ -996,9 +1048,9 @@ function renderReplayCounterfactualCases(items) {
               </div>
             </details>
           `,
-        )
-        .join("")
-    : "尚未生成单笔反事实复盘。";
+          )
+          .join("")
+      : "尚未生成单笔反事实复盘。");
 }
 
 function renderReplayConditionReplacements(items) {
