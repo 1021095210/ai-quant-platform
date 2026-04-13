@@ -324,6 +324,7 @@ function renderStructuredSpecView(spec) {
     nodes.structuredSpecView.textContent = "等待生成结构化规格。";
     return;
   }
+  const aiHints = spec.ai_structured_hints || {};
   const sections = [
     ["市场", `${spec.market_scope_label} / ${spec.market}`],
     ["资产类型", spec.asset_type],
@@ -344,6 +345,15 @@ function renderStructuredSpecView(spec) {
     ["澄清上下文记忆", spec.clarification_memory || "当前无已确认补充项"],
     ["AI 候选摘要", spec.ai_candidate_summary || "当前无 AI 候选摘要"],
     ["AI 模型", spec.ai_profile_label || "当前未显式显示"],
+    ["AI 市场理解", aiHints.market_scope_hint || "当前无"],
+    ["AI 周期提示", (aiHints.timeframe_hints || []).join(" / ") || "当前无"],
+    ["AI 数据依赖", (aiHints.data_dependencies || []).join("；") || "当前无"],
+    ["AI 入场意图", (aiHints.entry_intent || []).join("；") || "当前无"],
+    ["AI 过滤意图", (aiHints.filter_intent || []).join("；") || "当前无"],
+    ["AI 离场意图", (aiHints.exit_intent || []).join("；") || "当前无"],
+    ["AI 风控意图", (aiHints.risk_controls || []).join("；") || "当前无"],
+    ["AI 仓位意图", aiHints.position_intent || "当前无"],
+    ["AI 执行假设", (aiHints.execution_assumptions || []).join("；") || "当前无"],
     ["AI 待确认项", (spec.ai_unresolved_items || []).join("；") || "无"],
     [
       "待补充项",

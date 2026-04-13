@@ -1199,10 +1199,13 @@ class QuantPlatformApiTests(unittest.TestCase):
             "summary": "AI 理解到这是一个放量回踩确认后再试仓的日线策略。",
             "llm_profile": "module_default",
             "llm_profile_label": "模块默认模型",
+            "market_scope_hint": "A股",
+            "timeframe_hints": ["1d", "15m"],
             "data_dependencies": ["A股行情", "量比"],
             "entry_intent": ["放量后回踩确认入场"],
             "exit_intent": ["跌破均线离场"],
             "risk_controls": ["需要明确止损比例"],
+            "filter_intent": ["大盘不差时再开仓"],
             "position_intent": "试仓后再考虑加仓",
             "execution_assumptions": ["当前按日线主链路理解"],
             "unresolved_items": [
@@ -1241,10 +1244,66 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertEqual("llm_assisted", payload["understanding_card"]["parse_mode"])
         self.assertEqual("AI 理解到这是一个放量回踩确认后再试仓的日线策略。", payload["structured_spec"]["ai_candidate_summary"])
         self.assertEqual("模块默认模型", payload["structured_spec"]["ai_profile_label"])
+        self.assertEqual("A股", payload["structured_spec"]["ai_structured_hints"]["market_scope_hint"])
+        self.assertEqual(["日线", "15分钟"], payload["structured_spec"]["ai_structured_hints"]["timeframe_hints"])
+        self.assertIn("大盘不差时再开仓", payload["structured_spec"]["ai_structured_hints"]["filter_intent"])
         self.assertIn("回踩幅度需要补充", payload["structured_spec"]["ai_unresolved_items"])
         self.assertTrue(any(item["id"] == "ai_understanding" for item in payload["generation_pipeline"]))
         self.assertTrue(any(item["title"] == "回踩幅度需要补充" for item in payload["questions_for_user"]))
         self.assertEqual("needs_confirmation", payload["generation_decision"]["status"])
+
+    @patch("quant_platform_api.services.StrategyService._parse_strategy_with_llm")
+    def test_generate_strategy_merges_ai_unresolved_items_into_existing_question_ids(self, llm_parse_mock) -> None:
+        llm_parse_mock.return_value = {
+            "mode": "llm_assisted",
+            "llm_profile": "module_default",
+            "llm_profile_label": "模块默认模型",
+            "summary": "AI 理解到这是一个放量但不追高的策略。",
+            "market_scope_hint": "A股",
+            "timeframe_hints": ["1d"],
+            "data_dependencies": [],
+            "entry_intent": [],
+            "exit_intent": [],
+            "risk_controls": [],
+            "filter_intent": [],
+            "position_intent": "",
+            "execution_assumptions": [],
+            "unresolved_items": [
+                {
+                    "title": "量能阈值需要明确",
+                    "detail": "需要说明量比或均量倍数。",
+                    "suggested_choices": ["量比 >= 1.2"],
+                },
+                {
+                    "title": "追高限制需要明确",
+                    "detail": "需要说明前 15 分钟涨幅上限。",
+                    "suggested_choices": ["前 15 分钟涨幅 <= 1%"],
+                },
+            ],
+            "risky_items": [],
+        }
+        client = self._build_client(
+            llm_base_url="https://llm.example.test/v1",
+            llm_api_key="sk-test",
+            llm_model_strategy="gpt-5-strategy",
+        )
+
+        response = client.post(
+            "/api/v1/strategies/generate",
+            json={
+                "prompt": "放量后不追高再买",
+                "market": "600519.SH",
+                "timeframe": "1d",
+                "asset_type": "stock",
+                "preferences": {"side": "long"},
+                "llm_profile": "module_default",
+            },
+        )
+
+        self.assertEqual(200, response.status_code)
+        question_ids = {item["id"] for item in response.json()["data"]["questions_for_user"]}
+        self.assertIn("volume_threshold", question_ids)
+        self.assertIn("chase_guard", question_ids)
 
     def test_strategy_page_shows_field_mapping_snippet_labels(self) -> None:
         client = self._build_client()

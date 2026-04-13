@@ -1420,6 +1420,11 @@ def _build_strategy_structured_spec(
     unsupported_items: list[dict[str, Any]],
     ai_interpretation: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    ai_hints = _build_strategy_ai_structured_hints(
+        ai_interpretation=ai_interpretation,
+        market_scope_label=market_scope_label,
+        selected_timeframes=strategy_dsl.get("timeframes", []),
+    )
     return {
         "market_scope_label": market_scope_label,
         "market": request.market,
@@ -1453,6 +1458,7 @@ def _build_strategy_structured_spec(
             for item in (ai_interpretation or {}).get("unresolved_items", [])
             if item.get("title")
         ],
+        "ai_structured_hints": ai_hints,
     }
 
 
@@ -1635,6 +1641,21 @@ def _merge_strategy_questions(
 ) -> list[dict[str, Any]]:
     if not ai_interpretation:
         return existing_questions
+
+    def classify_question_id(title: str, detail: str) -> str | None:
+        text = f"{title} {detail}".lower()
+        if any(marker in text for marker in ["量能", "量比", "成交量", "成交额"]):
+            return "volume_threshold"
+        if any(marker in text for marker in ["追高", "高开", "涨幅上限", "距离前高"]):
+            return "chase_guard"
+        if any(marker in text for marker in ["确认", "金叉", "站上", "回踩", "均线确认"]):
+            return "confirmation_rule"
+        if any(marker in text for marker in ["环境", "趋势市", "指数", "行业强弱", "市场状态"]):
+            return "market_regime"
+        if any(marker in text for marker in ["试仓", "仓位", "加仓", "分批建仓", "持仓比例"]):
+            return "position_rule"
+        return None
+
     merged = list(existing_questions)
     seen_ids = {item["id"] for item in merged}
     seen_titles = {item["title"] for item in merged}
@@ -1643,7 +1664,7 @@ def _merge_strategy_questions(
         detail = str(item.get("detail") or "").strip()
         if not title or title in seen_titles:
             continue
-        question_id = str(item.get("id") or f"ai_clarify_{index}").strip() or f"ai_clarify_{index}"
+        question_id = classify_question_id(title, detail) or str(item.get("id") or f"ai_clarify_{index}").strip() or f"ai_clarify_{index}"
         while question_id in seen_ids:
             question_id = f"{question_id}_next"
         merged.append(
@@ -1665,6 +1686,66 @@ def _merge_strategy_questions(
         seen_ids.add(question_id)
         seen_titles.add(title)
     return merged
+
+
+def _build_strategy_ai_structured_hints(
+    *,
+    ai_interpretation: dict[str, Any] | None,
+    market_scope_label: str,
+    selected_timeframes: list[str],
+) -> dict[str, Any]:
+    if not ai_interpretation:
+        return {
+            "market_scope_hint": "",
+            "timeframe_hints": [],
+            "data_dependencies": [],
+            "entry_intent": [],
+            "exit_intent": [],
+            "risk_controls": [],
+            "position_intent": "",
+            "execution_assumptions": [],
+            "filter_intent": [],
+        }
+    timeframe_hints = [
+        _timeframe_label(_canonicalize_timeframe(item))
+        for item in ai_interpretation.get("timeframe_hints", [])
+        if str(item).strip()
+    ]
+    return {
+        "market_scope_hint": str(ai_interpretation.get("market_scope_hint") or market_scope_label).strip(),
+        "timeframe_hints": timeframe_hints,
+        "data_dependencies": [
+            str(item).strip()
+            for item in ai_interpretation.get("data_dependencies", [])
+            if str(item).strip()
+        ],
+        "entry_intent": [
+            str(item).strip()
+            for item in ai_interpretation.get("entry_intent", [])
+            if str(item).strip()
+        ],
+        "exit_intent": [
+            str(item).strip()
+            for item in ai_interpretation.get("exit_intent", [])
+            if str(item).strip()
+        ],
+        "risk_controls": [
+            str(item).strip()
+            for item in ai_interpretation.get("risk_controls", [])
+            if str(item).strip()
+        ],
+        "position_intent": str(ai_interpretation.get("position_intent") or "").strip(),
+        "execution_assumptions": [
+            str(item).strip()
+            for item in ai_interpretation.get("execution_assumptions", [])
+            if str(item).strip()
+        ],
+        "filter_intent": [
+            str(item).strip()
+            for item in ai_interpretation.get("filter_intent", [])
+            if str(item).strip()
+        ],
+    }
 
 
 def _build_strategy_field_mapping(
@@ -2239,7 +2320,7 @@ class StrategyService:
             "你是量化策略语义解析助手。你的职责是把中文自然语言策略理解成候选 JSON，"
             "用于后续平台结构化约束和人工确认。不要直接输出 Python 代码，不要编造平台未明确给出的规则。"
             "无法确认就留空或列为 unresolved_items。"
-            "输出必须是 JSON 对象，字段固定为：summary、data_dependencies、entry_intent、exit_intent、risk_controls、position_intent、execution_assumptions、unresolved_items、risky_items。"
+            "输出必须是 JSON 对象，字段固定为：summary、market_scope_hint、timeframe_hints、data_dependencies、entry_intent、exit_intent、risk_controls、filter_intent、position_intent、execution_assumptions、unresolved_items、risky_items。"
             "其中 unresolved_items 是数组，每项字段固定为：title、detail、suggested_choices。"
             "其中 risky_items 是数组字符串，用于提醒可能存在的语义风险，但不能替代平台硬校验。"
         )
@@ -2288,6 +2369,12 @@ class StrategyService:
             "llm_profile": runtime["profile_id"],
             "llm_profile_label": runtime["label"],
             "summary": str(parsed.get("summary") or "").strip(),
+            "market_scope_hint": str(parsed.get("market_scope_hint") or "").strip(),
+            "timeframe_hints": [
+                str(item).strip()
+                for item in parsed.get("timeframe_hints", [])
+                if str(item).strip()
+            ],
             "data_dependencies": [
                 str(item).strip()
                 for item in parsed.get("data_dependencies", [])
@@ -2306,6 +2393,11 @@ class StrategyService:
             "risk_controls": [
                 str(item).strip()
                 for item in parsed.get("risk_controls", [])
+                if str(item).strip()
+            ],
+            "filter_intent": [
+                str(item).strip()
+                for item in parsed.get("filter_intent", [])
                 if str(item).strip()
             ],
             "position_intent": str(parsed.get("position_intent") or "").strip(),
