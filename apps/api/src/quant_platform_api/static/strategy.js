@@ -1,8 +1,10 @@
 import {
   activateNav,
   api,
+  fetchLlmProfiles,
   getSelectedVersion,
   handle,
+  populateLlmProfileSelect,
   pretty,
   setSelectedVersion,
   setStatus,
@@ -30,6 +32,7 @@ const nodes = {
   assetType: document.querySelector("#strategy-asset-type"),
   timeframe: document.querySelector("#strategy-timeframe"),
   timeframeOptions: document.querySelectorAll('input[name="strategy-timeframes"]'),
+  llmProfile: document.querySelector("#strategy-llm-profile"),
   versionLabel: document.querySelector("#project-version-label"),
   title: document.querySelector("#project-title"),
   teachingMode: document.querySelector("#teaching-mode-toggle"),
@@ -148,6 +151,7 @@ function renderUnderstandingCard(card) {
     ["观察周期", (card.timeframe_labels || []).join(" / ") || "未识别"],
     ["数据依赖", (card.data_dependencies || []).join(" / ") || "未识别"],
     ["AI 候选摘要", card.ai_summary || "当前未启用 AI 候选理解或未得到稳定结果"],
+    ["AI 模型", card.ai_profile_label || "当前未显式显示"],
     [
       "已补充说明",
       Object.entries(card.clarifications || {})
@@ -339,6 +343,7 @@ function renderStructuredSpecView(spec) {
     ["执行假设", (spec.execution_assumptions || []).join("；") || "无"],
     ["澄清上下文记忆", spec.clarification_memory || "当前无已确认补充项"],
     ["AI 候选摘要", spec.ai_candidate_summary || "当前无 AI 候选摘要"],
+    ["AI 模型", spec.ai_profile_label || "当前未显式显示"],
     ["AI 待确认项", (spec.ai_unresolved_items || []).join("；") || "无"],
     [
       "待补充项",
@@ -548,6 +553,7 @@ async function generateStrategy() {
       preferences: { side: "long" },
       teaching_mode: nodes.teachingMode.checked,
       clarification_answers: clarificationAnswers,
+      llm_profile: nodes.llmProfile.value || "module_default",
     }),
   });
   state.strategySpec = payload.data.strategy_dsl;
@@ -645,10 +651,11 @@ function restoreSelection() {
 }
 
 async function loadKnowledgePreview() {
-  const [indicatorPayload, glossaryPayload, capabilityPayload] = await Promise.all([
+  const [indicatorPayload, glossaryPayload, capabilityPayload, llmProfilePayload] = await Promise.all([
     api("/api/v1/indicators/custom"),
     api("/api/v1/rules/glossary"),
     api("/api/v1/platform/capabilities"),
+    fetchLlmProfiles(),
   ]);
   const indicators = indicatorPayload.data.items;
   const glossary = glossaryPayload.data.items.slice(0, 8);
@@ -675,6 +682,7 @@ async function loadKnowledgePreview() {
         )
         .join("")
     : '<span class="pill">暂无术语，去规则模块补充</span>';
+  populateLlmProfileSelect(nodes.llmProfile, llmProfilePayload, "strategy");
   syncStrategyCapabilityState();
 }
 

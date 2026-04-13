@@ -823,6 +823,14 @@
      - AI 只负责补强策略语义理解、补充待确认项和风险提示
      - 平台结构化规格、硬校验和正式生成资格仍由平台规则决定
      - 当前不能让 AI 自由写策略代码并直接作为真值
+   - 当前策略工坊、金融导师、金融助手、交易复盘长文字识别都已新增统一的 `模型选择`：
+     - 接口：`/api/v1/platform/llm-profiles`
+     - 当前支持按模块选择：
+       - 模块默认模型
+       - 策略模型 / 导师模型 / 研究模型
+       - DeepSeek
+       - 火山方舟
+     - 当前模型选择只影响“生成/理解层”，不能改变平台真值层、硬校验和生成资格
    - 当前已新增“字段级对照解释”：
      - 会把用户表达继续映射到：
        - 结构化规格字段
@@ -952,6 +960,20 @@ cp .env.example .env
 - LLM 相关配置
 - 存储路径
 - Redis / MinIO 配置
+
+当前 LLM 相关配置已扩展为：
+
+- `LLM_BASE_URL`
+- `LLM_API_KEY`
+- `LLM_MODEL_STRATEGY`
+- `LLM_MODEL_SUMMARY`
+- `LLM_MODEL_MENTOR`
+- `LLM_DEEPSEEK_BASE_URL`
+- `LLM_DEEPSEEK_API_KEY`
+- `LLM_DEEPSEEK_MODEL`
+- `LLM_VOLCENGINE_BASE_URL`
+- `LLM_VOLCENGINE_API_KEY` 或 `ARK_API_KEY`
+- `LLM_VOLCENGINE_MODEL` 或 `ARK_MODEL`
 
 ### 4. 先跑测试
 

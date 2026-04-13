@@ -61,6 +61,35 @@ export async function api(path, options = {}) {
   }
 }
 
+export async function fetchLlmProfiles() {
+  const payload = await api("/api/v1/platform/llm-profiles");
+  return payload.data || { items: [], defaults: {} };
+}
+
+export function populateLlmProfileSelect(selectNode, profilePayload, moduleKey) {
+  if (!selectNode) {
+    return;
+  }
+  const items = (profilePayload?.items || []).filter((item) => item.enabled);
+  const defaults = profilePayload?.defaults || {};
+  const selectedValue = defaults[moduleKey] || "module_default";
+  if (!items.length) {
+    selectNode.innerHTML = '<option value="module_default">当前无可用 LLM 配置</option>';
+    selectNode.disabled = true;
+    return;
+  }
+  selectNode.innerHTML = items
+    .map((item) => {
+      const suffix = item.model ? ` · ${item.model}` : "";
+      return `<option value="${item.profile_id}">${item.label}${suffix}</option>`;
+    })
+    .join("");
+  selectNode.disabled = false;
+  if (items.some((item) => item.profile_id === selectedValue)) {
+    selectNode.value = selectedValue;
+  }
+}
+
 export async function fetchCurrentUser() {
   const response = await fetch("/api/v1/auth/me", {
     headers: { Accept: "application/json" },

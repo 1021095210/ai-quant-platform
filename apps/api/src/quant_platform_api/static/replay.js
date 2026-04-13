@@ -1,4 +1,12 @@
-import { activateNav, api, handle, pollTask, setStatus } from "/assets/shared.js";
+import {
+  activateNav,
+  api,
+  fetchLlmProfiles,
+  handle,
+  pollTask,
+  populateLlmProfileSelect,
+  setStatus,
+} from "/assets/shared.js";
 
 activateNav("/replay");
 
@@ -62,6 +70,7 @@ const nodes = {
   manualNotes: document.querySelector("#trade-manual-notes"),
   manualMarket: document.querySelector("#trade-manual-market"),
   manualAdjustment: document.querySelector("#trade-manual-adjustment"),
+  manualLlmProfile: document.querySelector("#trade-manual-llm-profile"),
   manualSmartText: document.querySelector("#trade-manual-smart-text"),
   manualParseSummary: document.querySelector("#trade-manual-parse-summary"),
   manualList: document.querySelector("#manual-trade-list"),
@@ -104,6 +113,9 @@ const nodes = {
 applySourceMode("csv");
 renderManualTrades();
 syncReplayActionState();
+fetchLlmProfiles()
+  .then((payload) => populateLlmProfileSelect(nodes.manualLlmProfile, payload, "trade_text_parse"))
+  .catch((error) => setStatus(error.message));
 
 async function uploadTrades() {
   syncReplayActionState({ uploadBusy: true });
@@ -258,6 +270,7 @@ async function parseManualText() {
       text: nodes.manualSmartText.value,
       market: nodes.manualMarket.value,
       adjustment_mode: nodes.manualAdjustment.value,
+      llm_profile: nodes.manualLlmProfile.value || "module_default",
     }),
   });
   const items = payload.data.records || [];
@@ -286,6 +299,7 @@ function renderManualParseSummary(result) {
     nodes.manualParseSummary.textContent = [
       result.summary || "长文字智能识别完成，已加入手动记录。",
       aiReview.mode_label ? `解析方式：${aiReview.mode_label}` : "",
+      aiReview.profile_label ? `使用模型：${aiReview.profile_label}` : "",
       truthSummary.record_count ? `输入真值摘要：共 ${truthSummary.record_count} 笔，需人工确认 ${truthSummary.needs_confirmation_count || 0} 笔` : "",
       ...warningLines,
     ]
@@ -296,6 +310,7 @@ function renderManualParseSummary(result) {
   const lines = [
     result.summary || "长文字智能识别完成。",
     aiReview.mode_label ? `解析方式：${aiReview.mode_label}` : "",
+    aiReview.profile_label ? `使用模型：${aiReview.profile_label}` : "",
     `共识别 ${result.group_count || groups.length} 个日期块，加入 ${result.record_count || 0} 笔记录。`,
     truthSummary.record_count ? `输入真值摘要：共 ${truthSummary.record_count} 笔，需人工确认 ${truthSummary.needs_confirmation_count || 0} 笔。` : "",
     "",

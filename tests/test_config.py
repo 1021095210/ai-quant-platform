@@ -40,6 +40,11 @@ class SettingsTests(unittest.TestCase):
                 "LLM_API_KEY": "sk-test",
                 "LLM_MODEL_STRATEGY": "gpt-4.1",
                 "LLM_MODEL_SUMMARY": "gpt-4.1-mini",
+                "LLM_MODEL_MENTOR": "gpt-4.1-nano",
+                "LLM_DEEPSEEK_API_KEY": "deepseek-test",
+                "LLM_DEEPSEEK_MODEL": "deepseek-chat",
+                "ARK_API_KEY": "ark-test",
+                "ARK_MODEL": "ep-20260413-demo",
                 "ALLOWED_LLM_EXPORT_FIELDS": "symbol,pnl",
                 "JOB_SIMULATION_LATENCY_MS": "250",
             },
@@ -60,6 +65,13 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual("sk-test", settings.llm_api_key)
         self.assertEqual("gpt-4.1", settings.llm_model_strategy)
         self.assertEqual("gpt-4.1-mini", settings.llm_model_summary)
+        self.assertEqual("gpt-4.1-nano", settings.llm_model_mentor)
+        self.assertEqual("https://api.deepseek.com", settings.llm_deepseek_base_url)
+        self.assertEqual("deepseek-test", settings.llm_deepseek_api_key)
+        self.assertEqual("deepseek-chat", settings.llm_deepseek_model)
+        self.assertEqual("https://ark.cn-beijing.volces.com/api/v3", settings.llm_volcengine_base_url)
+        self.assertEqual("ark-test", settings.llm_volcengine_api_key)
+        self.assertEqual("ep-20260413-demo", settings.llm_volcengine_model)
         self.assertEqual("symbol,pnl", settings.allowed_llm_export_fields)
         self.assertEqual(250, settings.job_simulation_latency_ms)
 

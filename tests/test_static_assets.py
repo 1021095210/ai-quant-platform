@@ -94,6 +94,7 @@ class StaticAssetTests(unittest.TestCase):
         self.assertIn('id="replay-minute-window"', replay_html)
         self.assertIn('id="replay-include-minute-features"', replay_html)
         self.assertIn('id="replay-include-fundamentals"', replay_html)
+        self.assertIn('id="trade-manual-llm-profile"', replay_html)
         self.assertIn("/api/v1/trades/uploads/manual/parse-text", replay_js)
         self.assertIn("智能识别并加入记录", replay_js)
 
@@ -162,11 +163,66 @@ class StaticAssetTests(unittest.TestCase):
 
         self.assertIn('id="strategy-capability-summary"', strategy_html)
         self.assertIn('id="strategy-capability-matrix"', strategy_html)
+        self.assertIn('id="strategy-llm-profile"', strategy_html)
         self.assertIn("/api/v1/platform/capabilities", strategy_js)
+        self.assertIn("fetchLlmProfiles", strategy_js)
         self.assertIn('id="backtest-support-summary"', backtests_html)
         self.assertIn('id="backtest-capability-matrix"', backtests_html)
         self.assertIn("/api/v1/platform/capabilities", backtests_js)
         self.assertIn("当前暂不开放真实回测", backtests_js)
+
+    def test_mentor_and_assistant_assets_include_llm_profile_selectors(self) -> None:
+        mentor_html = (
+            WORKSPACE_ROOT
+            / "apps"
+            / "api"
+            / "src"
+            / "quant_platform_api"
+            / "static"
+            / "mentor.html"
+        ).read_text(encoding="utf-8")
+        mentor_js = (
+            WORKSPACE_ROOT
+            / "apps"
+            / "api"
+            / "src"
+            / "quant_platform_api"
+            / "static"
+            / "mentor.js"
+        ).read_text(encoding="utf-8")
+        assistant_html = (
+            WORKSPACE_ROOT
+            / "apps"
+            / "api"
+            / "src"
+            / "quant_platform_api"
+            / "static"
+            / "assistant.html"
+        ).read_text(encoding="utf-8")
+        assistant_js = (
+            WORKSPACE_ROOT
+            / "apps"
+            / "api"
+            / "src"
+            / "quant_platform_api"
+            / "static"
+            / "assistant.js"
+        ).read_text(encoding="utf-8")
+        shared_js = (
+            WORKSPACE_ROOT
+            / "apps"
+            / "api"
+            / "src"
+            / "quant_platform_api"
+            / "static"
+            / "shared.js"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn('id="mentor-llm-profile"', mentor_html)
+        self.assertIn("fetchLlmProfiles", mentor_js)
+        self.assertIn('id="assistant-llm-profile"', assistant_html)
+        self.assertIn("fetchLlmProfiles", assistant_js)
+        self.assertIn("/api/v1/platform/llm-profiles", shared_js)
 
     def test_workspace_assets_include_focus_and_data_hub_sections(self) -> None:
         workspace_html = (
@@ -344,6 +400,22 @@ export async function api(url) {
     };
   }
   return { data: {} };
+}
+export async function fetchLlmProfiles() {
+  return {
+    data: {
+      items: [
+        { profile_id: 'module_default', label: '模块默认模型', enabled: true },
+      ],
+      defaults: { mentor: 'module_default' },
+    },
+  };
+}
+export function populateLlmProfileSelect(node) {
+  if (node) {
+    node.disabled = false;
+    node.value = 'module_default';
+  }
 }
 export function setStatus() {}
                 """,

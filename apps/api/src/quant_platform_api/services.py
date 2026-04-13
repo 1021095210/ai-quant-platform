@@ -489,6 +489,253 @@ def list_platform_capabilities() -> list[dict[str, Any]]:
     return [dict(item) for item in PLATFORM_CAPABILITY_MATRIX.values()]
 
 
+def _llm_endpoint(base_url: str) -> str:
+    endpoint = base_url.rstrip("/")
+    if not endpoint.endswith("/chat/completions"):
+        endpoint = f"{endpoint}/chat/completions"
+    return endpoint
+
+
+def _module_default_llm_model(settings: Settings, module: str) -> str:
+    if module == "strategy":
+        return (
+            settings.llm_model_strategy
+            or settings.llm_model_mentor
+            or settings.llm_model_summary
+            or "gpt-5-mini"
+        )
+    if module == "mentor":
+        return (
+            settings.llm_model_mentor
+            or settings.llm_model_summary
+            or settings.llm_model_strategy
+            or "gpt-5-mini"
+        )
+    if module == "assistant":
+        return (
+            settings.llm_model_summary
+            or settings.llm_model_mentor
+            or settings.llm_model_strategy
+            or "gpt-5-mini"
+        )
+    if module == "trade_text_parse":
+        return (
+            settings.llm_model_mentor
+            or settings.llm_model_summary
+            or settings.llm_model_strategy
+            or "gpt-5-mini"
+        )
+    return (
+        settings.llm_model_summary
+        or settings.llm_model_mentor
+        or settings.llm_model_strategy
+        or "gpt-5-mini"
+    )
+
+
+def list_llm_profiles(settings: Settings) -> list[dict[str, Any]]:
+    default_chain_ready = bool(
+        settings.llm_base_url.strip()
+        and settings.llm_api_key.strip()
+    )
+
+    profiles = [
+        {
+            "profile_id": "module_default",
+            "label": "模块默认模型",
+            "provider": "openai_compatible",
+            "description": "按当前模块使用推荐模型，适合默认场景。",
+            "enabled": default_chain_ready,
+            "model": "",
+            "recommended_modules": [
+                "strategy",
+                "mentor",
+                "assistant",
+                "trade_text_parse",
+            ],
+            "module_model_hints": {
+                "strategy": _module_default_llm_model(settings, "strategy"),
+                "mentor": _module_default_llm_model(settings, "mentor"),
+                "assistant": _module_default_llm_model(settings, "assistant"),
+                "trade_text_parse": _module_default_llm_model(settings, "trade_text_parse"),
+            },
+        },
+        {
+            "profile_id": "strategy_model",
+            "label": "策略模型",
+            "provider": "openai_compatible",
+            "description": "优先使用策略生成链路配置的模型。",
+            "enabled": bool(default_chain_ready and settings.llm_model_strategy.strip()),
+            "model": settings.llm_model_strategy,
+            "recommended_modules": ["strategy"],
+        },
+        {
+            "profile_id": "mentor_model",
+            "label": "导师模型",
+            "provider": "openai_compatible",
+            "description": "优先使用导师/讲解链路配置的模型。",
+            "enabled": bool(default_chain_ready and settings.llm_model_mentor.strip()),
+            "model": settings.llm_model_mentor,
+            "recommended_modules": ["mentor", "trade_text_parse"],
+        },
+        {
+            "profile_id": "summary_model",
+            "label": "研究模型",
+            "provider": "openai_compatible",
+            "description": "优先使用摘要/研究链路配置的模型。",
+            "enabled": bool(default_chain_ready and settings.llm_model_summary.strip()),
+            "model": settings.llm_model_summary,
+            "recommended_modules": ["assistant"],
+        },
+        {
+            "profile_id": "deepseek",
+            "label": "DeepSeek",
+            "provider": "deepseek",
+            "description": "适合成本敏感或需要备用模型时使用。",
+            "enabled": bool(
+                settings.llm_deepseek_base_url.strip()
+                and settings.llm_deepseek_api_key.strip()
+                and settings.llm_deepseek_model.strip()
+            ),
+            "model": settings.llm_deepseek_model,
+            "recommended_modules": [
+                "strategy",
+                "mentor",
+                "assistant",
+                "trade_text_parse",
+            ],
+        },
+        {
+            "profile_id": "volcengine",
+            "label": "火山方舟",
+            "provider": "volcengine",
+            "description": "适合后续切入火山方舟部署模型或 DeepSeek 接入点。",
+            "enabled": bool(
+                settings.llm_volcengine_base_url.strip()
+                and settings.llm_volcengine_api_key.strip()
+                and settings.llm_volcengine_model.strip()
+            ),
+            "model": settings.llm_volcengine_model,
+            "recommended_modules": [
+                "strategy",
+                "mentor",
+                "assistant",
+                "trade_text_parse",
+            ],
+        },
+    ]
+    return profiles
+
+
+def _resolve_llm_runtime(
+    settings: Settings,
+    requested_profile: str | None,
+    *,
+    module: str,
+) -> dict[str, Any] | None:
+    profile_id = (requested_profile or "module_default").strip() or "module_default"
+
+    def _default_runtime() -> dict[str, Any] | None:
+        if not (
+            settings.llm_base_url.strip()
+            and settings.llm_api_key.strip()
+        ):
+            return None
+        return {
+            "profile_id": "module_default",
+            "label": "模块默认模型",
+            "provider": "openai_compatible",
+            "base_url": settings.llm_base_url,
+            "api_key": settings.llm_api_key,
+            "model": _module_default_llm_model(settings, module),
+        }
+
+    if profile_id == "module_default":
+        return _default_runtime()
+
+    if profile_id == "strategy_model":
+        if (
+            settings.llm_base_url.strip()
+            and settings.llm_api_key.strip()
+            and settings.llm_model_strategy.strip()
+        ):
+            return {
+                "profile_id": "strategy_model",
+                "label": "策略模型",
+                "provider": "openai_compatible",
+                "base_url": settings.llm_base_url,
+                "api_key": settings.llm_api_key,
+                "model": settings.llm_model_strategy,
+            }
+        return _default_runtime()
+
+    if profile_id == "mentor_model":
+        if (
+            settings.llm_base_url.strip()
+            and settings.llm_api_key.strip()
+            and settings.llm_model_mentor.strip()
+        ):
+            return {
+                "profile_id": "mentor_model",
+                "label": "导师模型",
+                "provider": "openai_compatible",
+                "base_url": settings.llm_base_url,
+                "api_key": settings.llm_api_key,
+                "model": settings.llm_model_mentor,
+            }
+        return _default_runtime()
+
+    if profile_id == "summary_model":
+        if (
+            settings.llm_base_url.strip()
+            and settings.llm_api_key.strip()
+            and settings.llm_model_summary.strip()
+        ):
+            return {
+                "profile_id": "summary_model",
+                "label": "研究模型",
+                "provider": "openai_compatible",
+                "base_url": settings.llm_base_url,
+                "api_key": settings.llm_api_key,
+                "model": settings.llm_model_summary,
+            }
+        return _default_runtime()
+
+    if profile_id == "deepseek":
+        if (
+            settings.llm_deepseek_base_url.strip()
+            and settings.llm_deepseek_api_key.strip()
+            and settings.llm_deepseek_model.strip()
+        ):
+            return {
+                "profile_id": "deepseek",
+                "label": "DeepSeek",
+                "provider": "deepseek",
+                "base_url": settings.llm_deepseek_base_url,
+                "api_key": settings.llm_deepseek_api_key,
+                "model": settings.llm_deepseek_model,
+            }
+        return _default_runtime()
+
+    if profile_id == "volcengine":
+        if (
+            settings.llm_volcengine_base_url.strip()
+            and settings.llm_volcengine_api_key.strip()
+            and settings.llm_volcengine_model.strip()
+        ):
+            return {
+                "profile_id": "volcengine",
+                "label": "火山方舟",
+                "provider": "volcengine",
+                "base_url": settings.llm_volcengine_base_url,
+                "api_key": settings.llm_volcengine_api_key,
+                "model": settings.llm_volcengine_model,
+            }
+        return _default_runtime()
+
+    return _default_runtime()
+
+
 def summarize_strategy_capability(
     *,
     market_scope: str,
@@ -1157,6 +1404,7 @@ def _build_strategy_understanding(
         "unsupported_items": unsupported_items,
         "capability_summary": capability_summary,
         "ai_summary": ai_summary,
+        "ai_profile_label": (ai_interpretation or {}).get("llm_profile_label", ""),
         "ai_unresolved_items": (ai_interpretation or {}).get("unresolved_items", []),
         "ai_risky_items": (ai_interpretation or {}).get("risky_items", []),
     }
@@ -1199,6 +1447,7 @@ def _build_strategy_structured_spec(
         "open_questions": [item["title"] for item in questions_for_user],
         "unsupported_items": [item["title"] for item in unsupported_items],
         "ai_candidate_summary": (ai_interpretation or {}).get("summary", ""),
+        "ai_profile_label": (ai_interpretation or {}).get("llm_profile_label", ""),
         "ai_unresolved_items": [
             item.get("title", "")
             for item in (ai_interpretation or {}).get("unresolved_items", [])
@@ -1972,23 +2221,20 @@ class StrategyService:
             ],
         }
 
-    def _llm_ready(self) -> bool:
-        return bool(
-            self._settings.llm_base_url.strip()
-            and self._settings.llm_api_key.strip()
-        )
-
     def _parse_strategy_with_llm(
         self,
         *,
         request: StrategyGenerateRequest,
         clarification_answers: dict[str, str],
     ) -> dict[str, Any] | None:
-        if not self._llm_ready():
+        runtime = _resolve_llm_runtime(
+            self._settings,
+            request.llm_profile,
+            module="strategy",
+        )
+        if not runtime:
             return None
-        endpoint = self._settings.llm_base_url.rstrip("/")
-        if not endpoint.endswith("/chat/completions"):
-            endpoint = f"{endpoint}/chat/completions"
+        endpoint = _llm_endpoint(runtime["base_url"])
         system_prompt = (
             "你是量化策略语义解析助手。你的职责是把中文自然语言策略理解成候选 JSON，"
             "用于后续平台结构化约束和人工确认。不要直接输出 Python 代码，不要编造平台未明确给出的规则。"
@@ -1998,10 +2244,7 @@ class StrategyService:
             "其中 risky_items 是数组字符串，用于提醒可能存在的语义风险，但不能替代平台硬校验。"
         )
         request_payload = {
-            "model": self._settings.llm_model_strategy
-            or self._settings.llm_model_mentor
-            or self._settings.llm_model_summary
-            or "gpt-5-mini",
+            "model": runtime["model"],
             "temperature": 0.1,
             "stream": True,
             "response_format": {"type": "json_object"},
@@ -2030,7 +2273,7 @@ class StrategyService:
                     "POST",
                     endpoint,
                     headers={
-                        "Authorization": f"Bearer {self._settings.llm_api_key}",
+                        "Authorization": f"Bearer {runtime['api_key']}",
                         "Content-Type": "application/json",
                     },
                     json=request_payload,
@@ -2042,6 +2285,8 @@ class StrategyService:
             return None
         return {
             "mode": "llm_assisted",
+            "llm_profile": runtime["profile_id"],
+            "llm_profile_label": runtime["label"],
             "summary": str(parsed.get("summary") or "").strip(),
             "data_dependencies": [
                 str(item).strip()
@@ -2588,33 +2833,29 @@ class MentorService:
             "answer_source": "fallback",
             "answer_mode_label": "平台导师兜底",
         }
-        if self._llm_ready():
-            try:
-                llm_payload = self._answer_with_llm(
-                    question=question,
-                    effective_question=effective_question,
-                    experience_level=request.experience_level,
-                    market_scope=market_scope,
-                    current_module=request.current_module,
-                    conversation_history=request.conversation_history,
-                    fallback_response=response,
-                )
+        try:
+            llm_payload = self._answer_with_llm(
+                request=request,
+                question=question,
+                effective_question=effective_question,
+                experience_level=request.experience_level,
+                market_scope=market_scope,
+                current_module=request.current_module,
+                conversation_history=request.conversation_history,
+                fallback_response=response,
+            )
+            if llm_payload:
                 response.update(llm_payload)
                 response["answer_source"] = "llm"
                 response["answer_mode_label"] = "AI 实时回答"
-            except Exception:
-                pass
+        except Exception:
+            pass
         return response
-
-    def _llm_ready(self) -> bool:
-        return bool(
-            self._settings.llm_base_url.strip()
-            and self._settings.llm_api_key.strip()
-        )
 
     def _answer_with_llm(
         self,
         *,
+        request: MentorAskRequest,
         question: str,
         effective_question: str,
         experience_level: str,
@@ -2622,10 +2863,15 @@ class MentorService:
         current_module: str | None,
         conversation_history: list[dict[str, str]],
         fallback_response: dict[str, Any],
-    ) -> dict[str, Any]:
-        endpoint = self._settings.llm_base_url.rstrip("/")
-        if not endpoint.endswith("/chat/completions"):
-            endpoint = f"{endpoint}/chat/completions"
+    ) -> dict[str, Any] | None:
+        runtime = _resolve_llm_runtime(
+            self._settings,
+            request.llm_profile,
+            module="mentor",
+        )
+        if not runtime:
+            return None
+        endpoint = _llm_endpoint(runtime["base_url"])
 
         prompt_payload = {
             "question": question,
@@ -2651,10 +2897,7 @@ class MentorService:
             "其中 action_plan 是 3 条中文步骤数组；glossary 是 2-4 个对象数组，每个对象含 term 和 meaning。"
         )
         request_payload = {
-            "model": self._settings.llm_model_mentor
-            or self._settings.llm_model_summary
-            or self._settings.llm_model_strategy
-            or "gpt-5-mini",
+            "model": runtime["model"],
             "temperature": 0.35,
             "stream": True,
             "response_format": {"type": "json_object"},
@@ -2671,7 +2914,7 @@ class MentorService:
                         "POST",
                         endpoint,
                         headers={
-                            "Authorization": f"Bearer {self._settings.llm_api_key}",
+                            "Authorization": f"Bearer {runtime['api_key']}",
                             "Content-Type": "application/json",
                         },
                         json=request_payload,
@@ -2697,6 +2940,8 @@ class MentorService:
             "glossary": self._normalize_glossary(
                 parsed.get("glossary") or fallback_response["glossary"]
             ),
+            "llm_profile": runtime["profile_id"],
+            "llm_profile_label": runtime["label"],
         }
 
     def _extract_stream_content(self, response: httpx.Response) -> str:
@@ -3181,6 +3426,7 @@ class TradeUploadService:
         text: str,
         market: str,
         adjustment_mode: str,
+        llm_profile: str = "module_default",
         user_id: str,
         workspace_id: str,
     ) -> dict[str, Any]:
@@ -3191,6 +3437,7 @@ class TradeUploadService:
         llm_parse = self._parse_trade_text_with_llm(
             text=normalized_text,
             market=market,
+            llm_profile=llm_profile,
         )
 
         grouped_candidates = self._extract_grouped_trade_candidates(
@@ -3244,6 +3491,7 @@ class TradeUploadService:
                 exit_rule=exit_rule,
                 explicit_exit_date=explicit_exit_date,
                 index=index,
+                llm_used=bool(llm_parse),
             )
             for index, symbol in enumerate(symbols, start=1)
         ]
@@ -3317,6 +3565,7 @@ class TradeUploadService:
                     exit_rule=block_exit_rule,
                     explicit_exit_date=explicit_exit_date,
                     index=len(records) + 1,
+                    llm_used=bool(llm_parse),
                 )
                 records.append(record)
                 group_records.append(record)
@@ -3405,6 +3654,7 @@ class TradeUploadService:
         exit_rule: dict[str, Any] | None,
         explicit_exit_date: date | None,
         index: int,
+        llm_used: bool = False,
     ) -> TradeRecordItem:
         bars, data_source = self._load_trade_bars(
             symbol=symbol,
@@ -3427,14 +3677,10 @@ class TradeUploadService:
         source_label = data_source.get("provider") or "未知数据源"
         notes = f"来源：长文字智能识别；补价来源：{source_label}；买入规则：{entry_rule['label']}"
         derived_fields = ["entry_price"]
-        llm_enabled = bool(
-            self._settings.llm_base_url.strip()
-            and self._settings.llm_api_key.strip()
-        )
         provenance_tags = [
             "text_parse",
             "daily_bar_fill",
-            "llm_hybrid" if llm_enabled else "rule_parser",
+            "llm_hybrid" if llm_used else "rule_parser",
         ]
         conflict_flags: list[str] = []
 
@@ -3471,7 +3717,7 @@ class TradeUploadService:
             entry_price=round(entry_price, 4),
             exit_price=round(exit_price, 4) if exit_price is not None else None,
             notes=notes,
-            source_kind="text_parse_hybrid" if llm_enabled else "text_parse_rule",
+            source_kind="text_parse_hybrid" if llm_used else "text_parse_rule",
             input_confidence="needs_review",
             provenance_tags=provenance_tags,
             derived_fields=derived_fields,
@@ -3830,18 +4076,21 @@ class TradeUploadService:
             return None
         return self._extract_entry_rule(text)
 
-    def _llm_ready(self) -> bool:
-        return bool(
-            self._settings.llm_base_url.strip()
-            and self._settings.llm_api_key.strip()
+    def _parse_trade_text_with_llm(
+        self,
+        *,
+        text: str,
+        market: str,
+        llm_profile: str = "module_default",
+    ) -> dict[str, Any] | None:
+        runtime = _resolve_llm_runtime(
+            self._settings,
+            llm_profile,
+            module="trade_text_parse",
         )
-
-    def _parse_trade_text_with_llm(self, *, text: str, market: str) -> dict[str, Any] | None:
-        if not self._llm_ready():
+        if not runtime:
             return None
-        endpoint = self._settings.llm_base_url.rstrip("/")
-        if not endpoint.endswith("/chat/completions"):
-            endpoint = f"{endpoint}/chat/completions"
+        endpoint = _llm_endpoint(runtime["base_url"])
         system_prompt = (
             "你是交易记录文本解析助手。请把中文长文本里的多日期交易清单解析成 JSON。"
             "不要编造不存在的代码或日期。无法确认就留空。"
@@ -3850,10 +4099,7 @@ class TradeUploadService:
             "trade_date 统一用 YYYY-MM-DD，symbols 统一用标准代码。"
         )
         request_payload = {
-            "model": self._settings.llm_model_mentor
-            or self._settings.llm_model_summary
-            or self._settings.llm_model_strategy
-            or "gpt-5-mini",
+            "model": runtime["model"],
             "temperature": 0.1,
             "stream": True,
             "response_format": {"type": "json_object"},
@@ -3877,7 +4123,7 @@ class TradeUploadService:
                     "POST",
                     endpoint,
                     headers={
-                        "Authorization": f"Bearer {self._settings.llm_api_key}",
+                        "Authorization": f"Bearer {runtime['api_key']}",
                         "Content-Type": "application/json",
                     },
                     json=request_payload,
@@ -3891,6 +4137,8 @@ class TradeUploadService:
             return {
                 "global_entry_rule": str(parsed.get("global_entry_rule") or "").strip(),
                 "global_exit_rule": str(parsed.get("global_exit_rule") or "").strip(),
+                "llm_profile": runtime["profile_id"],
+                "llm_profile_label": runtime["label"],
                 "groups": [
                     {
                         "trade_date": str(item.get("trade_date") or "").strip(),
@@ -3973,12 +4221,14 @@ class TradeUploadService:
                 "enabled": False,
                 "used": False,
                 "mode_label": "规则解析",
+                "profile_label": "",
                 "warnings": [],
             }
         return {
             "enabled": True,
             "used": True,
             "mode_label": "AI 混合解析",
+            "profile_label": str(llm_parse.get("llm_profile_label") or ""),
             "group_count": len(llm_parse.get("groups", [])),
             "warnings": llm_parse.get("warnings", []),
         }
@@ -4117,19 +4367,18 @@ class FinancialAssistantService(MentorService):
             "answer_source": "fallback",
             "answer_mode_label": "平台研究模板",
         }
-        if self._llm_ready():
-            try:
-                response.update(
-                    self._answer_with_assistant_llm(
-                        workflow=workflow,
-                        request=request,
-                        fallback=response,
-                    )
-                )
+        try:
+            llm_payload = self._answer_with_assistant_llm(
+                workflow=workflow,
+                request=request,
+                fallback=response,
+            )
+            if llm_payload:
+                response.update(llm_payload)
                 response["answer_source"] = "llm"
                 response["answer_mode_label"] = "AI 研究编组"
-            except Exception:
-                pass
+        except Exception:
+            pass
         return response
 
     def _resolve_workflow(self, workflow_id: str) -> dict[str, Any]:
@@ -4224,10 +4473,15 @@ class FinancialAssistantService(MentorService):
         workflow: dict[str, Any],
         request: AssistantResearchRequest,
         fallback: dict[str, Any],
-    ) -> dict[str, Any]:
-        endpoint = self._settings.llm_base_url.rstrip("/")
-        if not endpoint.endswith("/chat/completions"):
-            endpoint = f"{endpoint}/chat/completions"
+    ) -> dict[str, Any] | None:
+        runtime = _resolve_llm_runtime(
+            self._settings,
+            request.llm_profile,
+            module="assistant",
+        )
+        if not runtime:
+            return None
+        endpoint = _llm_endpoint(runtime["base_url"])
 
         system_prompt = (
             "你是一名机构级金融研究助手，模拟宏观、基本面、技术、情绪、多头、空头、风控与组合经理的协作。"
@@ -4253,10 +4507,7 @@ class FinancialAssistantService(MentorService):
             },
         }
         request_payload = {
-            "model": self._settings.llm_model_mentor
-            or self._settings.llm_model_summary
-            or self._settings.llm_model_strategy
-            or "gpt-5-mini",
+            "model": runtime["model"],
             "temperature": 0.35,
             "stream": True,
             "response_format": {"type": "json_object"},
@@ -4273,7 +4524,7 @@ class FinancialAssistantService(MentorService):
                         "POST",
                         endpoint,
                         headers={
-                            "Authorization": f"Bearer {self._settings.llm_api_key}",
+                            "Authorization": f"Bearer {runtime['api_key']}",
                             "Content-Type": "application/json",
                         },
                         json=request_payload,
@@ -4296,6 +4547,8 @@ class FinancialAssistantService(MentorService):
             "deliverables": self._normalize_string_list(parsed.get("deliverables") or fallback["deliverables"]),
             "next_actions": self._normalize_string_list(parsed.get("next_actions") or fallback["next_actions"]),
             "related_modules": self._normalize_related_modules(parsed.get("related_modules") or fallback["related_modules"]),
+            "llm_profile": runtime["profile_id"],
+            "llm_profile_label": runtime["label"],
         }
 
     def _normalize_assistant_desks(self, value: Any) -> list[dict[str, str]]:
