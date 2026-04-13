@@ -1,0 +1,692 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI量化交易平台 - 交易复盘与优化输出原型</title>
+  <style>
+    :root {
+      --bg: #f6f2e8;
+      --paper: #fffdf8;
+      --ink: #1f2a37;
+      --muted: #5f6b7a;
+      --line: #d7d0c3;
+      --accent: #0f766e;
+      --accent-soft: #d7f3ee;
+      --warn: #a16207;
+      --warn-soft: #fef3c7;
+      --danger: #b91c1c;
+      --danger-soft: #fee2e2;
+      --good: #166534;
+      --good-soft: #dcfce7;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
+      background: linear-gradient(180deg, #efe7d7 0%, var(--bg) 240px);
+      color: var(--ink);
+    }
+
+    .shell {
+      max-width: 1280px;
+      margin: 0 auto;
+      padding: 28px;
+    }
+
+    .hero {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      padding: 28px;
+      box-shadow: 0 18px 40px rgba(31, 42, 55, 0.08);
+      margin-bottom: 20px;
+    }
+
+    h1, h2, h3 { margin: 0; }
+    .hero h1 { font-size: 28px; margin-bottom: 10px; }
+    .hero p { margin: 0; color: var(--muted); line-height: 1.65; }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 340px 1fr;
+      gap: 20px;
+      align-items: start;
+    }
+
+    .panel {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      padding: 22px;
+      box-shadow: 0 12px 28px rgba(31, 42, 55, 0.06);
+    }
+
+    .panel + .panel { margin-top: 18px; }
+    .panel h2 { font-size: 20px; margin-bottom: 16px; }
+    .panel h3 { font-size: 15px; margin-bottom: 10px; }
+
+    .chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 12px 0 0;
+    }
+
+    .chip {
+      padding: 8px 12px;
+      border-radius: 999px;
+      font-size: 13px;
+      background: #f3efe7;
+      border: 1px solid var(--line);
+      color: var(--muted);
+    }
+
+    .chip.active {
+      background: var(--accent-soft);
+      color: var(--accent);
+      border-color: #8bd3c7;
+      font-weight: 600;
+    }
+
+    .stack { display: grid; gap: 18px; }
+
+    .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 16px;
+    }
+
+    .metric {
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 16px;
+      background: #fcfaf5;
+    }
+
+    .metric .label {
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 8px;
+    }
+
+    .metric .value {
+      font-size: 24px;
+      font-weight: 700;
+    }
+
+    .conclusion {
+      border: 1px solid #c7e7e1;
+      background: linear-gradient(180deg, #f7fffd 0%, #eefaf7 100%);
+      border-radius: 18px;
+      padding: 18px;
+    }
+
+    .conclusion p {
+      margin: 8px 0 0;
+      color: var(--muted);
+      line-height: 1.7;
+    }
+
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .card {
+      border-radius: 18px;
+      padding: 18px;
+      border: 1px solid var(--line);
+      background: #fcfaf5;
+    }
+
+    .card.bad { background: var(--danger-soft); border-color: #fecaca; }
+    .card.good { background: var(--good-soft); border-color: #bbf7d0; }
+    .card.warn { background: var(--warn-soft); border-color: #fde68a; }
+
+    .card ul {
+      margin: 10px 0 0 18px;
+      padding: 0;
+      color: var(--muted);
+      line-height: 1.6;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 14px;
+    }
+
+    th, td {
+      padding: 12px 10px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      color: var(--muted);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .tabs {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 14px;
+    }
+
+    .tab {
+      padding: 10px 14px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: #f6f1e8;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .tab.active {
+      background: var(--ink);
+      border-color: var(--ink);
+      color: #fff;
+      font-weight: 600;
+    }
+
+    .compare-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .target-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+      margin-top: 16px;
+    }
+
+    .compare-card {
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 16px;
+      background: #fcfaf5;
+    }
+
+    .compare-card h3 {
+      margin-bottom: 8px;
+      font-size: 16px;
+    }
+
+    .compare-card p {
+      margin: 0 0 10px;
+      color: var(--muted);
+      line-height: 1.6;
+      font-size: 13px;
+    }
+
+    .list {
+      margin: 0;
+      padding-left: 18px;
+      color: var(--muted);
+      line-height: 1.6;
+      font-size: 13px;
+    }
+
+    .curve {
+      margin-top: 12px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background:
+        linear-gradient(180deg, rgba(15, 118, 110, 0.08) 0%, rgba(15, 118, 110, 0.02) 100%),
+        repeating-linear-gradient(0deg, transparent 0 43px, rgba(95, 107, 122, 0.08) 43px 44px),
+        repeating-linear-gradient(90deg, transparent 0 70px, rgba(95, 107, 122, 0.08) 70px 71px);
+      padding: 14px;
+    }
+
+    .curve svg {
+      width: 100%;
+      height: 130px;
+      display: block;
+    }
+
+    .curve-meta {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 8px;
+      flex-wrap: wrap;
+    }
+
+    .trade-log {
+      margin-top: 12px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      overflow: hidden;
+      background: #fffefb;
+    }
+
+    .trade-log table {
+      font-size: 12px;
+    }
+
+    .trade-scroll {
+      max-height: 220px;
+      overflow: auto;
+    }
+
+    .footer-note {
+      margin-top: 16px;
+      padding: 14px 16px;
+      border-radius: 16px;
+      background: #f4efe5;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.7;
+    }
+
+    @media (max-width: 1024px) {
+      .layout { grid-template-columns: 1fr; }
+      .summary-grid,
+      .cards,
+      .compare-grid,
+      .target-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <section class="hero">
+      <h1>交易复盘与优化输出原型</h1>
+      <p>这个原型专门用来帮你选“用户最终看到的结果应该长什么样”。我把你目前关心的几种展示方式都放在同一页：精简结论、亏损特征、优化目标分版本、旧新参数对比、指标条件替换、结构化规则草案。</p>
+    </section>
+
+    <div class="layout">
+      <aside>
+        <section class="panel">
+          <h2>当前复盘配置</h2>
+          <h3>模式</h3>
+          <div class="chips">
+            <span class="chip active">自动复盘</span>
+            <span class="chip">指定指标复盘</span>
+            <span class="chip">市场环境复盘</span>
+          </div>
+
+          <h3 style="margin-top:18px;">已纳入维度</h3>
+          <div class="chips">
+            <span class="chip active">量价</span>
+            <span class="chip active">均线</span>
+            <span class="chip active">ATR</span>
+            <span class="chip active">KDJ</span>
+            <span class="chip active">基本面</span>
+            <span class="chip active">市场环境</span>
+            <span class="chip active">分钟级</span>
+          </div>
+
+          <h3 style="margin-top:18px;">排序方式</h3>
+          <div class="chips">
+            <span class="chip">命中次数</span>
+            <span class="chip">亏损影响</span>
+            <span class="chip">胜率改善</span>
+            <span class="chip active">夏普改善</span>
+            <span class="chip">综合评分</span>
+          </div>
+
+          <div class="footer-note">
+            这里体现的是你刚才拍板的逻辑：用户可以自己选排序方式，默认主推荐目标是“夏普最大”。
+          </div>
+        </section>
+      </aside>
+
+      <main class="stack">
+        <section class="panel">
+          <h2>1. 精简结论</h2>
+          <div class="conclusion">
+            <strong>当前最主要问题：</strong>你的亏损交易高度集中在“弱趋势 + 放量冲高回落 + 入场过早”的场景。<br />
+            <strong>最优先优化方向：</strong>把开仓条件从“5日均线附近开仓”收紧为“10日均线之上 + 前 3 日成交量不过度放大 + K 值低位再确认”，当前样本下更有利于提升夏普和降低回撤。
+            <p>这一段是给不想先看表格的用户看的。先一句话告诉他：问题在哪，建议往哪改。</p>
+          </div>
+          <div class="summary-grid">
+            <div class="metric">
+              <div class="label">样本交易数</div>
+              <div class="value">86</div>
+            </div>
+            <div class="metric">
+              <div class="label">亏损特征命中率</div>
+              <div class="value">61%</div>
+            </div>
+            <div class="metric">
+              <div class="label">默认推荐目标</div>
+              <div class="value">夏普</div>
+            </div>
+            <div class="metric">
+              <div class="label">建议强度</div>
+              <div class="value">高</div>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2>2. 亏损 / 盈利特征</h2>
+          <div class="cards">
+            <div class="card bad">
+              <h3>亏损特征 Top 3</h3>
+              <ul>
+                <li>买入前三天中有 2 天成交量大于前一日 1.8 倍，且股价未站稳 10 日均线。</li>
+                <li>KDJ 金叉出现时 K 值已高于 68，追高概率明显上升。</li>
+                <li>震荡市中入场后持仓超过 6 个交易日，回撤显著扩大。</li>
+              </ul>
+            </div>
+            <div class="card good">
+              <h3>盈利特征 Top 3</h3>
+              <p style="margin: 8px 0 0; color: var(--muted); font-size: 13px;">默认排在亏损特征之后，先看最关键的前几条，更多结果可展开查看。</p>
+              <ul>
+                <li>入场时股价稳定站上 10 日均线，且量比维持在 1.1-1.6 区间。</li>
+                <li>趋势市中 K 值处于 10-25 区间时入场，后续收益质量更高。</li>
+                <li>基本面中 ROE 较高、行业强度较高的标的表现更稳定。</li>
+              </ul>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2>3. 优化目标分版本</h2>
+          <div class="tabs">
+            <span class="tab">胜率最大</span>
+            <span class="tab">回撤最低</span>
+            <span class="tab">收益最大</span>
+            <span class="tab active">夏普最大</span>
+          </div>
+          <div class="chips" style="margin-bottom: 14px;">
+            <span class="chip active">当前只看：夏普最大</span>
+            <span class="chip">叠加：胜率最大</span>
+            <span class="chip">叠加：回撤最低</span>
+            <span class="chip">叠加：收益最大</span>
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th>目标版本</th>
+                <th>核心调整</th>
+                <th>结果变化</th>
+                <th>适合谁</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>夏普最优版</td>
+                <td>5 日均线上交易 → 10 日均线上交易；KDJ 金叉 → K 值低于 20 再确认；放量阈值 2.0 → 1.5</td>
+                <td>收益略降，但回撤更稳，夏普显著提升</td>
+                <td>想做更稳健、回撤更可控的用户</td>
+              </tr>
+              <tr>
+                <td>胜率最优版</td>
+                <td>增加开仓过滤：震荡市减少开仓；持仓超过 4 日自动收紧</td>
+                <td>胜率提升，但信号数减少</td>
+                <td>更看重“出手就更稳”的用户</td>
+              </tr>
+              <tr>
+                <td>收益最优版</td>
+                <td>放宽趋势市开仓条件；保留更长持有期</td>
+                <td>收益上限更高，但波动更大</td>
+                <td>接受较大波动、追求更高收益的用户</td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="target-grid">
+            <div class="compare-card">
+              <h3>夏普最优版：收益曲线</h3>
+              <p>默认主推荐版本。默认只展示当前选中目标的曲线和成交记录，其他目标通过切换查看；需要时也可以勾选叠加多条曲线一起看。</p>
+              <div class="curve">
+                <svg viewBox="0 0 320 130" preserveAspectRatio="none" aria-label="夏普最优版收益曲线">
+                  <polyline fill="none" stroke="#0f766e" stroke-width="3" points="0,108 35,102 70,88 105,92 140,70 175,63 210,54 245,42 280,36 320,28" />
+                  <polyline fill="none" stroke="#a16207" stroke-width="2" stroke-dasharray="6 4" points="0,112 35,104 70,96 105,86 140,76 175,70 210,61 245,54 280,44 320,40" />
+                </svg>
+                <div class="curve-meta">
+                  <span>时间：2025-01 至 2025-12</span>
+                  <span>区间收益：+18.4%</span>
+                  <span>最大回撤：-6.1%</span>
+                </div>
+              </div>
+              <div class="trade-log">
+                <div class="trade-scroll">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>买入</th>
+                        <th>卖出</th>
+                        <th>代码</th>
+                        <th>买入价</th>
+                        <th>卖出价</th>
+                        <th>持仓时长</th>
+                        <th>盈亏比例</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        <td>2025-03-14 09:35</td>
+                        <td>2025-03-18 10:20</td>
+                        <td>600519.SH</td>
+                        <td>1688.20</td>
+                        <td>1769.23</td>
+                        <td>4天</td>
+                        <td>+4.8%</td>
+                      </tr>
+                      <tr>
+                        <td>2025-05-08 10:05</td>
+                        <td>2025-05-12 14:15</td>
+                        <td>002475.SZ</td>
+                        <td>12.42</td>
+                        <td>12.68</td>
+                        <td>4天</td>
+                        <td>+2.1%</td>
+                      </tr>
+                      <tr>
+                        <td>2025-06-06 09:41</td>
+                        <td>2025-06-10 11:05</td>
+                        <td>300308.SZ</td>
+                        <td>28.61</td>
+                        <td>29.67</td>
+                        <td>4天</td>
+                        <td>+3.7%</td>
+                      </tr>
+                      <tr>
+                        <td>2025-07-16 10:02</td>
+                        <td>2025-07-18 14:42</td>
+                        <td>600276.SH</td>
+                        <td>43.85</td>
+                        <td>43.32</td>
+                        <td>2天</td>
+                        <td>-1.2%</td>
+                      </tr>
+                      <tr>
+                        <td>2025-08-22 09:38</td>
+                        <td>2025-08-27 10:10</td>
+                        <td>000858.SZ</td>
+                        <td>136.20</td>
+                        <td>140.15</td>
+                        <td>5天</td>
+                        <td>+2.9%</td>
+                      </tr>
+                      <tr>
+                        <td>2025-09-09 09:47</td>
+                        <td>2025-09-12 13:31</td>
+                        <td>601899.SH</td>
+                        <td>24.11</td>
+                        <td>24.47</td>
+                        <td>3天</td>
+                        <td>+1.5%</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+            <div class="compare-card">
+              <h3>收益最优版：收益曲线与成交买卖记录</h3>
+              <p>这里保留另一种目标版本示意。真实产品里默认切换目标后再看，不强制四个版本同时展开；只有用户主动勾选时才叠加曲线一起比。</p>
+              <div class="curve">
+                <svg viewBox="0 0 320 130" preserveAspectRatio="none" aria-label="收益最优版收益曲线">
+                  <polyline fill="none" stroke="#a16207" stroke-width="3" points="0,112 35,97 70,84 105,90 140,64 175,78 210,50 245,45 280,24 320,16" />
+                </svg>
+                <div class="curve-meta">
+                  <span>时间：2025-01 至 2025-12</span>
+                  <span>区间收益：+26.9%</span>
+                  <span>最大回撤：-12.7%</span>
+                </div>
+              </div>
+              <div class="trade-log">
+                <div class="trade-scroll">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>买入</th>
+                        <th>卖出</th>
+                        <th>代码</th>
+                        <th>买入价</th>
+                        <th>卖出价</th>
+                        <th>持仓时长</th>
+                        <th>盈亏比例</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        <td>2025-02-21 09:32</td>
+                        <td>2025-02-27 13:40</td>
+                        <td>300750.SZ</td>
+                        <td>188.26</td>
+                        <td>203.89</td>
+                        <td>6天</td>
+                        <td>+8.3%</td>
+                      </tr>
+                      <tr>
+                        <td>2025-04-01 09:30</td>
+                        <td>2025-04-08 14:08</td>
+                        <td>002594.SZ</td>
+                        <td>212.18</td>
+                        <td>226.39</td>
+                        <td>7天</td>
+                        <td>+6.7%</td>
+                      </tr>
+                      <tr>
+                        <td>2025-06-19 10:18</td>
+                        <td>2025-06-27 13:56</td>
+                        <td>603259.SH</td>
+                        <td>83.40</td>
+                        <td>87.74</td>
+                        <td>8天</td>
+                        <td>+5.2%</td>
+                      </tr>
+                      <tr>
+                        <td>2025-08-04 09:46</td>
+                        <td>2025-08-11 10:15</td>
+                        <td>601318.SH</td>
+                        <td>52.66</td>
+                        <td>50.61</td>
+                        <td>7天</td>
+                        <td>-3.9%</td>
+                      </tr>
+                      <tr>
+                        <td>2025-10-13 10:06</td>
+                        <td>2025-10-20 11:22</td>
+                        <td>601127.SH</td>
+                        <td>74.22</td>
+                        <td>79.49</td>
+                        <td>7天</td>
+                        <td>+7.1%</td>
+                      </tr>
+                      <tr>
+                        <td>2025-11-06 09:51</td>
+                        <td>2025-11-12 14:03</td>
+                        <td>300124.SZ</td>
+                        <td>18.71</td>
+                        <td>18.19</td>
+                        <td>6天</td>
+                        <td>-2.8%</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="footer-note">
+            默认建议是：每个优化目标版本下面都要带收益曲线和成交买卖记录，方便用户把“参数优化结果”和“真实交易复盘”逐条对照确认，而不是只看一行口头总结。
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2>4. 旧新参数对比 + 指标条件替换</h2>
+          <div class="compare-grid">
+            <div class="compare-card">
+              <h3>旧参数 vs 新参数</h3>
+              <p>适合快速看“到底改了什么”。</p>
+              <ul class="list">
+                <li>均线：5 日 -> 10 日</li>
+                <li>KDJ K 阈值：不限 -> 低于 20</li>
+                <li>放量阈值：2.0 倍 -> 1.5 倍</li>
+                <li>最大持有：10 日 -> 6 日</li>
+              </ul>
+            </div>
+            <div class="compare-card">
+              <h3>指标条件替换</h3>
+              <p>适合看“旧规则应该换成什么”。</p>
+              <ul class="list">
+                <li>原条件：KDJ 金叉即买入</li>
+                <li>推荐替换：KDJ 金叉且 K 值低于 20 再买入</li>
+                <li>原条件：站上 5 日均线即可开仓</li>
+                <li>推荐替换：站上 10 日均线且量比不过热再开仓</li>
+              </ul>
+            </div>
+            <div class="compare-card">
+              <h3>为什么我建议两者都给</h3>
+              <p>这是我更推荐的方案：</p>
+              <ul class="list">
+                <li>“旧新参数对比”适合快速理解</li>
+                <li>“指标条件替换”适合真正改规则</li>
+                <li>“目标分版本”适合研究用户做选择</li>
+              </ul>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2>5. 可回写规则建议</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>形式</th>
+                <th>示例</th>
+                <th>适合谁</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>自然语言建议</td>
+                <td>尽量避免在震荡市中、放量过热且股价未站稳 10 日均线时开仓。</td>
+                <td>新手或不想直接看规则的人</td>
+              </tr>
+              <tr>
+                <td>结构化规则草案</td>
+                <td>入场条件新增：`price_above_ma_10 = true` 且 `volume_ratio &lt;= 1.5` 且 `kdj_k &lt; 20`</td>
+                <td>要带回策略工坊的人</td>
+              </tr>
+              <tr>
+                <td>参数改动列表</td>
+                <td>均线 5→10；K 阈值 无限制→20；最大持有 10→6</td>
+                <td>想快速做参数验证的人</td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+      </main>
+    </div>
+  </div>
+</body>
+</html>
