@@ -3109,6 +3109,7 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertEqual(1, summary["search_linked_summary"]["considered_count"])
         self.assertTrue(summary["search_linked_summary"]["focused_cases"])
         self.assertTrue(summary["search_linked_summary"]["focused_cases"][0]["candidate_options"])
+        self.assertIn("candidate_scan_coverage", summary["search_linked_summary"])
 
     def test_replay_counterfactual_template_summary_links_to_stability_axes(self) -> None:
         linked = _link_counterfactual_templates_to_stability(
@@ -3139,6 +3140,7 @@ class QuantPlatformApiTests(unittest.TestCase):
 
         self.assertEqual(2, len(linked[0]["linked_axes"]))
         self.assertTrue(all(axis["in_pair_heatmap"] for axis in linked[0]["linked_axes"]))
+        self.assertIn("当前模板主要影响", linked[0]["attribution_summary"])
 
     def test_replay_counterfactual_cases_include_extended_templates(self) -> None:
         class FakeMarketDataService:

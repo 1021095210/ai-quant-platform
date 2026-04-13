@@ -6810,9 +6810,30 @@ def _link_counterfactual_templates_to_stability(
             {
                 **item,
                 "linked_axes": matched_axes,
+                "attribution_summary": _summarize_replay_template_attribution(
+                    focus=focus,
+                    matched_axes=matched_axes,
+                ),
             }
         )
     return enriched
+
+
+def _summarize_replay_template_attribution(
+    *,
+    focus: dict[str, Any],
+    matched_axes: list[dict[str, Any]],
+) -> str:
+    if not focus:
+        return "当前模板主要体现为路径级调整，还没有明确的参数归因。"
+    if matched_axes:
+        labels = "、".join(str(item.get("label") or "") for item in matched_axes[:3] if item.get("label"))
+        if labels:
+            return f"当前模板主要影响 {labels} 这类敏感参数。"
+    focus_keys = [str(key) for key in focus.keys()]
+    if focus_keys:
+        return f"当前模板主要影响 {'、'.join(focus_keys[:3])}。"
+    return "当前模板暂未形成清晰的参数归因。"
 
 
 def _build_single_trade_counterfactuals(
@@ -7193,12 +7214,18 @@ def _build_replay_search_linked_counterfactual_summary(
     cases.sort(key=lambda row: float(row.get("pnl_delta") or 0.0), reverse=True)
     if not cases:
         return {}
+    total_option_count = sum(len(case.get("candidate_options") or []) for case in cases)
     return {
         "summary": "已对全样本亏损单补充对照前几组参数候选，帮助确认哪些单笔还能继续优化。",
         "considered_count": len(losing_records),
         "improved_count": improved_count,
         "skipped_count": skipped_count,
         "worsened_count": worsened_count,
+        "candidate_scan_coverage": {
+            "candidate_count_per_trade_avg": round(total_option_count / len(cases), 2) if cases else 0.0,
+            "focused_candidate_count": len(focused_candidates),
+            "covered_trade_count": len(cases),
+        },
         "cases": cases,
         "focused_cases": cases[:5],
     }

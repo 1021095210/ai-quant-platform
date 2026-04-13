@@ -640,6 +640,10 @@ function renderReplayObjectiveCounterfactual(summary) {
                 对照 ${searchLinked.considered_count ?? 0} 笔 · 改善 ${searchLinked.improved_count ?? 0} 笔 ·
                 过滤 ${searchLinked.skipped_count ?? 0} 笔 · 变差 ${searchLinked.worsened_count ?? 0} 笔
               </div>
+              <div class="muted-note">
+                平均每笔扫描候选 ${searchLinked.candidate_scan_coverage?.candidate_count_per_trade_avg ?? 0} 个 ·
+                当前纳入候选池 ${searchLinked.candidate_scan_coverage?.focused_candidate_count ?? 0} 个版本
+              </div>
               <div class="list" style="margin-top:10px;">
                 ${searchLinkedCases
                   .map(
@@ -1041,6 +1045,7 @@ function renderReplayCounterfactualCases(items, templateSummary) {
                   <div class="muted-note">样本 ${item.sample_count} · 改善 ${item.improved_count} · 过滤 ${item.skipped_count} · 变差 ${item.worsened_count}</div>
                   <div class="muted-note">被推荐为优先路径 ${item.best_choice_count} 次 · 平均盈亏变化 ${formatSignedValue(item.avg_pnl_improvement)}</div>
                   <div class="muted-note">关联参数：${renderReplayPatchFocus(item.focus || {})}</div>
+                  <div class="muted-note">${item.attribution_summary || ""}</div>
                   ${
                     (item.linked_axes || []).length
                       ? `<div class="muted-note">关联热力图轴：${item.linked_axes
