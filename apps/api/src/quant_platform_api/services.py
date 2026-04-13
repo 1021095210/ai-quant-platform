@@ -1087,6 +1087,7 @@ def _build_strategy_understanding(
     questions_for_user: list[dict[str, Any]],
     unsupported_items: list[dict[str, Any]],
     capability_summary: dict[str, Any],
+    ai_interpretation: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     entry_conditions = [
         {
@@ -1130,7 +1131,9 @@ def _build_strategy_understanding(
         execution_assumptions.append("混合周期或非日线条件当前会先沉淀为语义层，真实回测仍按日线兼容层理解。")
     if request.market_scope != "cn_equity":
         execution_assumptions.append("当前市场只支持策略语义与规则研究，不支持真实回测执行。")
+    ai_summary = (ai_interpretation or {}).get("summary") or ""
     return {
+        "parse_mode": (ai_interpretation or {}).get("mode", "rules_only"),
         "market_scope_label": market_scope_label,
         "market": request.market,
         "asset_type": request.asset_type,
@@ -1153,6 +1156,9 @@ def _build_strategy_understanding(
         "questions_for_user": questions_for_user,
         "unsupported_items": unsupported_items,
         "capability_summary": capability_summary,
+        "ai_summary": ai_summary,
+        "ai_unresolved_items": (ai_interpretation or {}).get("unresolved_items", []),
+        "ai_risky_items": (ai_interpretation or {}).get("risky_items", []),
     }
 
 
@@ -1164,6 +1170,7 @@ def _build_strategy_structured_spec(
     capability_summary: dict[str, Any],
     questions_for_user: list[dict[str, Any]],
     unsupported_items: list[dict[str, Any]],
+    ai_interpretation: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
         "market_scope_label": market_scope_label,
@@ -1191,6 +1198,12 @@ def _build_strategy_structured_spec(
         ),
         "open_questions": [item["title"] for item in questions_for_user],
         "unsupported_items": [item["title"] for item in unsupported_items],
+        "ai_candidate_summary": (ai_interpretation or {}).get("summary", ""),
+        "ai_unresolved_items": [
+            item.get("title", "")
+            for item in (ai_interpretation or {}).get("unresolved_items", [])
+            if item.get("title")
+        ],
     }
 
 
@@ -1294,8 +1307,9 @@ def _build_strategy_generation_pipeline(
     generation_decision: dict[str, Any],
     structured_spec: dict[str, Any],
     hard_validation: dict[str, Any],
+    ai_interpretation: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    return [
+    items = [
         {
             "id": "natural_language",
             "title": "自然语言策略想法",
@@ -1303,6 +1317,21 @@ def _build_strategy_generation_pipeline(
             "summary": "用户原始输入，作为策略理解起点。",
             "detail": request.prompt.strip(),
         },
+    ]
+    if ai_interpretation:
+        items.append(
+            {
+                "id": "ai_understanding",
+                "title": "AI 候选理解",
+                "status": "pass"
+                if not ai_interpretation.get("unresolved_items")
+                else "warn",
+                "summary": "AI 只负责补强策略语义理解，不能直接决定平台真值层或绕过硬校验。",
+                "detail": ai_interpretation.get("summary")
+                or "当前没有 AI 候选理解摘要。",
+            }
+        )
+    items.extend([
         {
             "id": "structured_spec",
             "title": "结构化策略规格",
@@ -1347,7 +1376,46 @@ def _build_strategy_generation_pipeline(
             if generation_decision.get("allow_python_generation")
             else "当前仅保留候选理解结果，不能直接输出可靠可执行的 Python 策略。",
         },
-    ]
+    ])
+    return items
+
+
+def _merge_strategy_questions(
+    existing_questions: list[dict[str, Any]],
+    ai_interpretation: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    if not ai_interpretation:
+        return existing_questions
+    merged = list(existing_questions)
+    seen_ids = {item["id"] for item in merged}
+    seen_titles = {item["title"] for item in merged}
+    for index, item in enumerate(ai_interpretation.get("unresolved_items", []), start=1):
+        title = str(item.get("title") or "").strip()
+        detail = str(item.get("detail") or "").strip()
+        if not title or title in seen_titles:
+            continue
+        question_id = str(item.get("id") or f"ai_clarify_{index}").strip() or f"ai_clarify_{index}"
+        while question_id in seen_ids:
+            question_id = f"{question_id}_next"
+        merged.append(
+            {
+                "id": question_id,
+                "title": title,
+                "detail": detail or "当前这部分语义仍需你进一步确认。",
+                "suggested_choices": [
+                    str(choice).strip()
+                    for choice in item.get("suggested_choices", [])
+                    if str(choice).strip()
+                ],
+                "depends_on": None,
+                "depends_on_title": None,
+                "round_type": "ai_followup",
+                "source": "llm",
+            }
+        )
+        seen_ids.add(question_id)
+        seen_titles.add(title)
+    return merged
 
 
 def _build_strategy_field_mapping(
@@ -1548,10 +1616,12 @@ class StrategyService:
         repository: StrategyRepository,
         indicator_repository: CustomIndicatorRepository | None = None,
         glossary_repository: GlossaryTermRepository | None = None,
+        settings: Settings | None = None,
     ) -> None:
         self._repository = repository
         self._indicator_repository = indicator_repository
         self._glossary_repository = glossary_repository
+        self._settings = settings or Settings()
 
     def create_project(
         self,
@@ -1642,10 +1712,18 @@ class StrategyService:
             for item in glossary_terms
             if item.term.lower() in normalized or item.term in prompt
         ]
+        ai_interpretation = self._parse_strategy_with_llm(
+            request=request,
+            clarification_answers=clarification_answers,
+        )
         questions_for_user = _extract_strategy_questions(
             prompt,
             normalized,
             clarification_answers,
+        )
+        questions_for_user = _merge_strategy_questions(
+            questions_for_user,
+            ai_interpretation,
         )
         clarification_round = _build_strategy_clarification_round(
             clarification_answers=clarification_answers,
@@ -1774,6 +1852,7 @@ class StrategyService:
             questions_for_user=questions_for_user,
             unsupported_items=unsupported_items,
             capability_summary=capability_summary,
+            ai_interpretation=ai_interpretation,
         )
         generation_decision = _build_strategy_generation_decision(
             capability_summary=capability_summary,
@@ -1787,6 +1866,7 @@ class StrategyService:
             capability_summary=capability_summary,
             questions_for_user=questions_for_user,
             unsupported_items=unsupported_items,
+            ai_interpretation=ai_interpretation,
         )
         hard_validation = _build_strategy_hard_validation(
             capability_summary=capability_summary,
@@ -1800,6 +1880,7 @@ class StrategyService:
             generation_decision=generation_decision,
             structured_spec=structured_spec,
             hard_validation=hard_validation,
+            ai_interpretation=ai_interpretation,
         )
         strategy_python = (
             _render_strategy_python(
@@ -1837,6 +1918,8 @@ class StrategyService:
             summary_parts.append("已应用你补充的条件说明，并据此重新理解策略。")
             if questions_for_user:
                 summary_parts.append("当前补充后仍有下一轮待确认项，建议继续澄清后再保存为正式版本。")
+        if ai_interpretation:
+            summary_parts.append("当前已启用 AI 候选理解补强，但最终真值层仍以平台结构化规格和硬校验为准。")
         if matched_custom_indicators:
             summary_parts.append(
                 "已调用自定义指标库中的："
@@ -1868,6 +1951,7 @@ class StrategyService:
             "clarification_round": clarification_round,
             "unsupported_items": unsupported_items,
             "generation_decision": generation_decision,
+            "ai_interpretation": ai_interpretation,
             "human_summary": " ".join(summary_parts),
             "ambiguities": ambiguities,
             "matched_custom_indicators": [
@@ -1887,6 +1971,161 @@ class StrategyService:
                 for item in matched_terms
             ],
         }
+
+    def _llm_ready(self) -> bool:
+        return bool(
+            self._settings.llm_base_url.strip()
+            and self._settings.llm_api_key.strip()
+        )
+
+    def _parse_strategy_with_llm(
+        self,
+        *,
+        request: StrategyGenerateRequest,
+        clarification_answers: dict[str, str],
+    ) -> dict[str, Any] | None:
+        if not self._llm_ready():
+            return None
+        endpoint = self._settings.llm_base_url.rstrip("/")
+        if not endpoint.endswith("/chat/completions"):
+            endpoint = f"{endpoint}/chat/completions"
+        system_prompt = (
+            "你是量化策略语义解析助手。你的职责是把中文自然语言策略理解成候选 JSON，"
+            "用于后续平台结构化约束和人工确认。不要直接输出 Python 代码，不要编造平台未明确给出的规则。"
+            "无法确认就留空或列为 unresolved_items。"
+            "输出必须是 JSON 对象，字段固定为：summary、data_dependencies、entry_intent、exit_intent、risk_controls、position_intent、execution_assumptions、unresolved_items、risky_items。"
+            "其中 unresolved_items 是数组，每项字段固定为：title、detail、suggested_choices。"
+            "其中 risky_items 是数组字符串，用于提醒可能存在的语义风险，但不能替代平台硬校验。"
+        )
+        request_payload = {
+            "model": self._settings.llm_model_strategy
+            or self._settings.llm_model_mentor
+            or self._settings.llm_model_summary
+            or "gpt-5-mini",
+            "temperature": 0.1,
+            "stream": True,
+            "response_format": {"type": "json_object"},
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {
+                    "role": "user",
+                    "content": json.dumps(
+                        {
+                            "prompt": request.prompt,
+                            "market_scope": request.market_scope,
+                            "market": request.market,
+                            "timeframe": request.timeframe,
+                            "timeframes": request.timeframes,
+                            "asset_type": request.asset_type,
+                            "clarification_answers": clarification_answers,
+                        },
+                        ensure_ascii=False,
+                    ),
+                },
+            ],
+        }
+        try:
+            with httpx.Client(timeout=45) as client:
+                with client.stream(
+                    "POST",
+                    endpoint,
+                    headers={
+                        "Authorization": f"Bearer {self._settings.llm_api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json=request_payload,
+                ) as response:
+                    response.raise_for_status()
+                    content = self._extract_stream_content(response)
+            parsed = self._extract_json_object(content)
+        except Exception:
+            return None
+        return {
+            "mode": "llm_assisted",
+            "summary": str(parsed.get("summary") or "").strip(),
+            "data_dependencies": [
+                str(item).strip()
+                for item in parsed.get("data_dependencies", [])
+                if str(item).strip()
+            ],
+            "entry_intent": [
+                str(item).strip()
+                for item in parsed.get("entry_intent", [])
+                if str(item).strip()
+            ],
+            "exit_intent": [
+                str(item).strip()
+                for item in parsed.get("exit_intent", [])
+                if str(item).strip()
+            ],
+            "risk_controls": [
+                str(item).strip()
+                for item in parsed.get("risk_controls", [])
+                if str(item).strip()
+            ],
+            "position_intent": str(parsed.get("position_intent") or "").strip(),
+            "execution_assumptions": [
+                str(item).strip()
+                for item in parsed.get("execution_assumptions", [])
+                if str(item).strip()
+            ],
+            "unresolved_items": [
+                {
+                    "title": str(item.get("title") or "").strip(),
+                    "detail": str(item.get("detail") or "").strip(),
+                    "suggested_choices": [
+                        str(choice).strip()
+                        for choice in item.get("suggested_choices", [])
+                        if str(choice).strip()
+                    ],
+                }
+                for item in parsed.get("unresolved_items", [])
+                if isinstance(item, dict) and str(item.get("title") or "").strip()
+            ],
+            "risky_items": [
+                str(item).strip()
+                for item in parsed.get("risky_items", [])
+                if str(item).strip()
+            ],
+        }
+
+    def _extract_stream_content(self, response: httpx.Response) -> str:
+        content_parts: list[str] = []
+        for raw_line in response.iter_lines():
+            line = raw_line.strip()
+            if not line or not line.startswith("data:"):
+                continue
+            payload = line[5:].strip()
+            if payload == "[DONE]":
+                break
+            try:
+                chunk = json.loads(payload)
+            except json.JSONDecodeError:
+                continue
+            for choice in chunk.get("choices", []):
+                delta = choice.get("delta", {})
+                if delta.get("content"):
+                    content_parts.append(delta["content"])
+        return "".join(content_parts).strip()
+
+    def _extract_json_object(self, content: str) -> dict[str, Any]:
+        content = content.strip()
+        if not content:
+            return {}
+        try:
+            parsed = json.loads(content)
+            return parsed if isinstance(parsed, dict) else {}
+        except json.JSONDecodeError:
+            pass
+        start = content.find("{")
+        end = content.rfind("}")
+        if start == -1 or end == -1 or end <= start:
+            return {}
+        try:
+            parsed = json.loads(content[start : end + 1])
+            return parsed if isinstance(parsed, dict) else {}
+        except json.JSONDecodeError:
+            return {}
 
 
 class AuthService:
