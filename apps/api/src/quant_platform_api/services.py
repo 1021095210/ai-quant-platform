@@ -340,6 +340,19 @@ TIMEFRAME_ORDER: dict[str, int] = {
     key: index for index, key in enumerate(TIMEFRAME_LABELS.keys(), start=1)
 }
 
+STRATEGY_CLARIFICATION_TITLES: dict[str, str] = {
+    "volume_threshold": "量能阈值",
+    "volume_threshold_followup": "量能阈值补充",
+    "chase_guard": "追高限制",
+    "chase_guard_followup": "追高限制补充",
+    "confirmation_rule": "确认规则",
+    "confirmation_ma_period": "确认均线周期",
+    "market_regime": "市场环境条件",
+    "market_regime_metric": "市场环境判定标准",
+    "position_rule": "试仓/仓位规则",
+    "pyramiding_rule": "加仓触发规则",
+}
+
 TIMEFRAME_ALIASES: dict[str, str] = {
     "1m": "1m",
     "1min": "1m",
@@ -671,18 +684,29 @@ def _extract_strategy_questions(
     questions: list[dict[str, Any]] = []
     clarification_answers = clarification_answers or {}
 
-    def add(question_id: str, title: str, detail: str, suggested_choices: list[str]) -> None:
+    def add(
+        question_id: str,
+        title: str,
+        detail: str,
+        suggested_choices: list[str],
+        *,
+        depends_on: str | None = None,
+    ) -> None:
         answer = (clarification_answers.get(question_id) or "").strip()
         if answer:
             return
         if any(item["id"] == question_id for item in questions):
             return
+        round_type = "followup" if depends_on else "initial"
         questions.append(
             {
                 "id": question_id,
                 "title": title,
                 "detail": detail,
                 "suggested_choices": suggested_choices,
+                "depends_on": depends_on,
+                "depends_on_title": STRATEGY_CLARIFICATION_TITLES.get(depends_on or "", depends_on),
+                "round_type": round_type,
             }
         )
 
@@ -732,6 +756,7 @@ def _extract_strategy_questions(
             "量能规则仍需明确数值或比较口径",
             "当前已经补了量能说明，但还缺少可执行的数值阈值。建议直接给出量比、均量倍数或成交额门槛。",
             ["量比 >= 1.2", "成交量 >= 10日均量的 1.5 倍", "成交额 >= 20日均值"],
+            depends_on="volume_threshold",
         )
 
     chase_answer = (clarification_answers.get("chase_guard") or "").strip()
@@ -741,6 +766,7 @@ def _extract_strategy_questions(
             "追高限制仍需明确边界",
             "当前已经补了追高说明，但还缺少可执行阈值。建议直接给出涨幅上限、距离前高比例或分钟窗口边界。",
             ["前 15 分钟涨幅 <= 1%", "距离前高 >= 1% 才允许追入", "开盘涨幅 <= 2%"],
+            depends_on="chase_guard",
         )
 
     confirmation_answer = (clarification_answers.get("confirmation_rule") or "").strip()
@@ -757,6 +783,7 @@ def _extract_strategy_questions(
             "确认规则里的均线周期仍需补充",
             "你已经说明要做均线确认，但还没有说明具体均线周期。建议补充 5 日、10 日、20 日或分钟均线周期。",
             ["15 分钟收盘站上 5 均线", "15 分钟收盘站上 10 均线", "日线站上 20 日均线"],
+            depends_on="confirmation_rule",
         )
 
     market_regime_answer = (clarification_answers.get("market_regime") or "").strip()
@@ -770,6 +797,7 @@ def _extract_strategy_questions(
             "市场环境条件还缺少判定标准",
             "你已经说明需要环境过滤，但还没有给出平台可执行的判定标准。建议补充指数均线、行业排名、波动率或资金强度条件。",
             ["指数站上 20 日均线", "行业强度排名前 30%", "波动率低于过去 20 日 70% 分位"],
+            depends_on="market_regime",
         )
 
     position_answer = (clarification_answers.get("position_rule") or "").strip()
@@ -782,6 +810,7 @@ def _extract_strategy_questions(
             "加仓规则仍需补触发条件",
             "当前已识别到分批建仓或加仓，但还没有看到何时加仓。建议补充突破、回踩、盈利扩张或风险收敛条件。",
             ["首次 20%，突破前高后再加 20%", "首次 30%，回踩均线确认后再加仓", "首次 20%，浮盈 2% 后再加仓"],
+            depends_on="position_rule",
         )
     return questions
 
@@ -911,26 +940,24 @@ def _build_strategy_clarification_round(
     clarification_answers: dict[str, str],
     questions_for_user: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    title_map = {
-        "volume_threshold": "量能阈值",
-        "volume_threshold_followup": "量能阈值补充",
-        "chase_guard": "追高限制",
-        "chase_guard_followup": "追高限制补充",
-        "confirmation_rule": "确认规则",
-        "confirmation_ma_period": "确认均线周期",
-        "market_regime": "市场环境条件",
-        "market_regime_metric": "市场环境判定标准",
-        "position_rule": "试仓/仓位规则",
-        "pyramiding_rule": "加仓触发规则",
-    }
     answered_items = [
         {
             "id": key,
-            "title": title_map.get(key, key),
+            "title": STRATEGY_CLARIFICATION_TITLES.get(key, key),
             "answer": value,
         }
         for key, value in clarification_answers.items()
         if isinstance(value, str) and value.strip()
+    ]
+    pending_topics = [
+        {
+            "id": item["id"],
+            "title": item["title"],
+            "depends_on": item.get("depends_on"),
+            "depends_on_title": item.get("depends_on_title"),
+            "round_type": item.get("round_type", "initial"),
+        }
+        for item in questions_for_user
     ]
     pending_count = len(questions_for_user)
     answered_count = len(answered_items)
@@ -950,6 +977,13 @@ def _build_strategy_clarification_round(
         status = "followup_pending"
         stage_label = "继续澄清"
         guidance = "系统已吸收你上一轮补充结果，但仍有下一轮待确认项。继续补充后再生成正式版本。"
+    next_focus = pending_topics[0]["title"] if pending_topics else None
+    if answered_items:
+        memory_summary = "；".join(
+            f"{item['title']}={item['answer']}" for item in answered_items[:4]
+        )
+    else:
+        memory_summary = "当前还没有已确认的补充项。"
     return {
         "status": status,
         "stage_label": stage_label,
@@ -957,6 +991,9 @@ def _build_strategy_clarification_round(
         "answered_count": answered_count,
         "pending_count": pending_count,
         "answered_items": answered_items,
+        "pending_topics": pending_topics,
+        "memory_summary": memory_summary,
+        "next_focus": next_focus,
     }
 
 
@@ -981,45 +1018,58 @@ def _extract_strategy_unsupported_items(prompt: str, normalized: str) -> list[di
             "当前不支持盘口 / 逐笔 / L2 数据驱动策略",
             "策略里出现了盘口、逐笔成交或委托队列语义。平台当前没有把这类数据接入策略工坊真值层，不能生成可靠可执行版本。",
         )
-    if ("当日最低价" in prompt or "今日最低价" in prompt or "盘中最低价" in prompt) and ("买入" in prompt or "开仓" in prompt):
-        add(
+    future_rules = [
+        (
             "future_reference_low",
-            "当前表达存在未来函数风险",
+            ("当日最低价", "今日最低价", "盘中最低价"),
+            ("买入", "开仓"),
             "用“当日最低价/盘中最低价”作为当日买入触发条件，容易在入场时引用尚未发生的未来信息。需要改写成当下可观察条件。",
-        )
-    if ("当日最高价" in prompt or "今日最高价" in prompt or "盘中最高价" in prompt) and ("买入" in prompt or "开仓" in prompt):
-        add(
+        ),
+        (
             "future_reference_high_entry",
-            "当前表达存在未来函数风险",
+            ("当日最高价", "今日最高价", "盘中最高价"),
+            ("买入", "开仓"),
             "用“当日最高价/盘中最高价”辅助当日买入，会在入场决策时引用尚未发生的未来信息。需要改写成当下可观察条件。",
-        )
-    if ("当日最高价" in prompt or "今日最高价" in prompt or "盘中最高价" in prompt) and ("卖出" in prompt or "止盈" in prompt):
-        add(
+        ),
+        (
             "future_reference_high",
-            "当前表达存在未来函数风险",
+            ("当日最高价", "今日最高价", "盘中最高价"),
+            ("卖出", "止盈"),
             "用“当日最高价/盘中最高价”作为离场条件，容易在决策时引用未来信息。需要改写成当下可观察条件。",
-        )
-    if ("当日收盘价" in prompt or "今日收盘价" in prompt) and (
-        "买入" in prompt or "开仓" in prompt or "卖出" in prompt or "止盈" in prompt or "止损" in prompt
-    ):
-        add(
+        ),
+        (
             "future_reference_close",
-            "当前表达存在未来函数风险",
+            ("当日收盘价", "今日收盘价"),
+            ("买入", "开仓", "卖出", "止盈", "止损"),
             "直接使用“当日收盘价/今日收盘价”作为当日盘中决策依据，容易在尚未收盘时引用未来信息。需要改写成收盘后执行或次日执行条件。",
-        )
+        ),
+        (
+            "future_reference_pct_change",
+            ("当日涨幅", "今日涨幅", "最终涨幅"),
+            ("买入", "开仓", "卖出", "止盈", "止损"),
+            "直接使用“当日涨幅/今日涨幅/最终涨幅”作为当日盘中决策依据，会把尚未收盘的最终结果当成已知信息。需要改写成当前涨幅或上一周期涨幅。",
+        ),
+        (
+            "future_reference_amplitude",
+            ("当日振幅", "今日振幅", "最终振幅"),
+            ("买入", "开仓", "卖出", "止盈", "止损"),
+            "直接使用“当日振幅/今日振幅/最终振幅”作为当日盘中决策依据，会把尚未完成的全天波动范围当成已知信息。需要改写成当前窗口振幅或上一周期振幅。",
+        ),
+        (
+            "future_reference_volume",
+            ("当日成交量", "今日成交量", "全天成交量", "最终成交量"),
+            ("买入", "开仓", "卖出", "止盈", "止损", "确认"),
+            "直接使用“当日成交量/全天成交量/最终成交量”作为盘中条件，会把尚未完成的全天成交结果当成已知信息。需要改写成当前量比、当前分钟成交量或上一周期量能。",
+        ),
+    ]
+    for item_id, metric_markers, action_markers, detail in future_rules:
+        if any(marker in prompt for marker in metric_markers) and any(marker in prompt for marker in action_markers):
+            add(item_id, "当前表达存在未来函数风险", detail)
     if ("收盘前" in prompt or "尾盘前" in prompt) and ("确认" in prompt or "判断" in prompt) and ("收盘价" in prompt):
         add(
             "future_close_confirmation",
             "当前表达存在未来函数风险",
             "在“收盘前”使用“收盘价确认”会把尚未形成的最终收盘价当成当下可见信息，需要改写成收盘后确认或使用当前价格条件。",
-        )
-    if ("当日涨幅" in prompt or "今日涨幅" in prompt or "最终涨幅" in prompt) and (
-        "买入" in prompt or "开仓" in prompt or "卖出" in prompt
-    ):
-        add(
-            "future_reference_pct_change",
-            "当前表达存在未来函数风险",
-            "直接使用“当日涨幅/今日涨幅/最终涨幅”作为当日盘中决策依据，会把尚未收盘的最终结果当成已知信息。需要改写成当前涨幅或上一周期涨幅。",
         )
     return items
 
@@ -1135,6 +1185,10 @@ def _build_strategy_structured_spec(
             f"回测兼容层：{_timeframe_label(strategy_dsl.get('backtest_timeframe', strategy_dsl['timeframe']))}",
         ],
         "clarifications": strategy_dsl.get("clarifications", {}),
+        "clarification_memory": "；".join(
+            f"{STRATEGY_CLARIFICATION_TITLES.get(key, key)}={value}"
+            for key, value in strategy_dsl.get("clarifications", {}).items()
+        ),
         "open_questions": [item["title"] for item in questions_for_user],
         "unsupported_items": [item["title"] for item in unsupported_items],
     }
@@ -1265,6 +1319,17 @@ def _build_strategy_generation_pipeline(
                 f"{item['title']}：{'通过' if item['status'] == 'pass' else '需确认' if item['status'] == 'warn' else '拒绝'}"
                 for item in hard_validation["checks"]
             ),
+        },
+        {
+            "id": "clarification_context",
+            "title": "澄清上下文记忆",
+            "status": "pass" if strategy_dsl.get("clarifications") else "warn",
+            "summary": "已回答的补充项会继续进入后续轮次，而不是每轮都从头询问。",
+            "detail": "；".join(
+                f"{STRATEGY_CLARIFICATION_TITLES.get(key, key)}={value}"
+                for key, value in strategy_dsl.get("clarifications", {}).items()
+            )
+            or "当前还没有已确认的补充项。",
         },
         {
             "id": "dsl",
