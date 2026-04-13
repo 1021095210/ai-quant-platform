@@ -41,6 +41,7 @@ try:
         _build_replay_fundamental_features,
         _build_replay_minute_context_features,
         _build_replay_objective_counterfactual_summary,
+        _link_counterfactual_templates_to_stability,
         _build_replay_trade_set_changes,
         _replay_trade_passes_filters,
         _rerun_replay_records_on_market_data,
@@ -64,6 +65,7 @@ except ModuleNotFoundError:  # pragma: no cover - handled by skip
     _build_replay_minute_context_features = None
     _build_replay_fundamental_features = None
     _build_replay_objective_counterfactual_summary = None
+    _link_counterfactual_templates_to_stability = None
     _build_replay_trade_set_changes = None
     _replay_trade_passes_filters = None
     _rerun_replay_records_on_market_data = None
@@ -3106,6 +3108,37 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertTrue(summary["search_linked_summary"])
         self.assertEqual(1, summary["search_linked_summary"]["considered_count"])
         self.assertTrue(summary["search_linked_summary"]["focused_cases"])
+        self.assertTrue(summary["search_linked_summary"]["focused_cases"][0]["candidate_options"])
+
+    def test_replay_counterfactual_template_summary_links_to_stability_axes(self) -> None:
+        linked = _link_counterfactual_templates_to_stability(
+            [
+                {
+                    "key": "skip_trade_filter",
+                    "title": "不开仓过滤",
+                    "focus": {"max_prior_return_pct": 2.5, "min_roe": 10},
+                    "sample_count": 2,
+                    "improved_count": 1,
+                    "skipped_count": 1,
+                    "worsened_count": 0,
+                    "best_choice_count": 1,
+                    "avg_pnl_improvement": 1.5,
+                }
+            ],
+            {
+                "sensitivity_axes": [
+                    {"label": "max_prior_return_pct", "best_value": 2.0},
+                    {"label": "min_roe", "best_value": 10},
+                    {"label": "stop_loss_pct", "best_value": -0.02},
+                ],
+                "heatmap_pairs": [
+                    {"x_label": "max_prior_return_pct", "y_label": "min_roe"},
+                ],
+            },
+        )
+
+        self.assertEqual(2, len(linked[0]["linked_axes"]))
+        self.assertTrue(all(axis["in_pair_heatmap"] for axis in linked[0]["linked_axes"]))
 
     def test_replay_counterfactual_cases_include_extended_templates(self) -> None:
         class FakeMarketDataService:

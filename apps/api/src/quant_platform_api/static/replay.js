@@ -650,6 +650,29 @@ function renderReplayObjectiveCounterfactual(summary) {
                         <div class="muted-note">${item.summary || "暂无说明"}</div>
                         <div class="muted-note">原始盈亏 ${item.original_pnl} · 候选结果 ${item.counterfactual_pnl} · 变化 ${formatSignedValue(item.pnl_delta)}</div>
                         <div class="muted-note">关键参数：${renderReplayPatchFocus(item.focus || {})}</div>
+                        ${
+                          (item.candidate_options || []).length
+                            ? `
+                              <details style="margin-top:8px;">
+                                <summary>查看这笔交易的候选版本对比</summary>
+                                <div class="list" style="margin-top:10px;">
+                                  ${item.candidate_options
+                                    .map(
+                                      (option) => `
+                                        <div class="list-item compact-item">
+                                          <strong>${option.candidate_label}</strong>
+                                          <div class="muted-note">评分 ${option.candidate_score ?? "-"} · 结果 ${option.result_type === "skipped" ? "不成交 / 被过滤" : "真实重放"}</div>
+                                          <div class="muted-note">候选结果 ${option.counterfactual_pnl} · 变化 ${formatSignedValue(option.pnl_delta)}</div>
+                                          <div class="muted-note">关键参数：${renderReplayPatchFocus(option.focus || {})}</div>
+                                        </div>
+                                      `,
+                                    )
+                                    .join("")}
+                                </div>
+                              </details>
+                            `
+                            : ""
+                        }
                       </div>
                     `,
                   )
@@ -1018,6 +1041,13 @@ function renderReplayCounterfactualCases(items, templateSummary) {
                   <div class="muted-note">样本 ${item.sample_count} · 改善 ${item.improved_count} · 过滤 ${item.skipped_count} · 变差 ${item.worsened_count}</div>
                   <div class="muted-note">被推荐为优先路径 ${item.best_choice_count} 次 · 平均盈亏变化 ${formatSignedValue(item.avg_pnl_improvement)}</div>
                   <div class="muted-note">关联参数：${renderReplayPatchFocus(item.focus || {})}</div>
+                  ${
+                    (item.linked_axes || []).length
+                      ? `<div class="muted-note">关联热力图轴：${item.linked_axes
+                          .map((axis) => `${axis.label}（最优值 ${axis.best_value}${axis.in_pair_heatmap ? "，已进入二维热力图" : ""}）`)
+                          .join("；")}</div>`
+                      : ""
+                  }
                 </div>
               `,
             )

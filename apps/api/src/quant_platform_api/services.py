@@ -5459,6 +5459,11 @@ def build_replay_result(
         counterfactual_template_summary = _build_replay_counterfactual_template_summary(
             counterfactual_cases
         )
+        default_version = next((item for item in objective_versions if item.get("is_default")), objective_versions[0] if objective_versions else None)
+        counterfactual_template_summary = _link_counterfactual_templates_to_stability(
+            counterfactual_template_summary,
+            (default_version or {}).get("search_summary", {}).get("parameter_stability") or {},
+        )
         concise_summary = _build_replay_concise_summary(
             total_count=total_count,
             win_rate=win_rate,
@@ -6776,6 +6781,40 @@ def _build_replay_counterfactual_template_summary(
     return items[:6]
 
 
+def _link_counterfactual_templates_to_stability(
+    items: list[dict[str, Any]],
+    parameter_stability: dict[str, Any],
+) -> list[dict[str, Any]]:
+    sensitivity_axes = parameter_stability.get("sensitivity_axes") or []
+    heatmap_pairs = parameter_stability.get("heatmap_pairs") or []
+    pair_axis_set = {
+        str(pair.get("x_label") or "")
+        for pair in heatmap_pairs
+    } | {
+        str(pair.get("y_label") or "")
+        for pair in heatmap_pairs
+    }
+    enriched: list[dict[str, Any]] = []
+    for item in items:
+        focus = item.get("focus") or {}
+        matched_axes = [
+            {
+                "label": axis.get("label"),
+                "best_value": axis.get("best_value"),
+                "in_pair_heatmap": str(axis.get("label") or "") in pair_axis_set,
+            }
+            for axis in sensitivity_axes
+            if str(axis.get("label") or "") in focus
+        ]
+        enriched.append(
+            {
+                **item,
+                "linked_axes": matched_axes,
+            }
+        )
+    return enriched
+
+
 def _build_single_trade_counterfactuals(
     *,
     item: TradeRecordItem,
@@ -7088,6 +7127,7 @@ def _build_replay_search_linked_counterfactual_summary(
     worsened_count = 0
     for item in losing_records:
         best_case: dict[str, Any] | None = None
+        options: list[dict[str, Any]] = []
         for candidate in focused_candidates:
             rerun_trade = _rerun_single_replay_trade(
                 item=item,
@@ -7125,10 +7165,22 @@ def _build_replay_search_linked_counterfactual_summary(
                     "pnl_delta": pnl_delta,
                     "summary": f"该候选版本会把结果从 {float(item.pnl):.2f} 变为 {new_pnl:.2f}。",
                 }
+            options.append(
+                {
+                    "candidate_label": result["candidate_label"],
+                    "candidate_score": result["candidate_score"],
+                    "focus": result["focus"],
+                    "result_type": result["result_type"],
+                    "counterfactual_pnl": result["counterfactual_pnl"],
+                    "pnl_delta": result["pnl_delta"],
+                }
+            )
             if best_case is None or float(result["pnl_delta"]) > float(best_case["pnl_delta"]):
                 best_case = result
         if best_case is None:
             continue
+        options.sort(key=lambda row: float(row.get("pnl_delta") or 0.0), reverse=True)
+        best_case["candidate_options"] = options
         if best_case["result_type"] == "skipped":
             skipped_count += 1
             if float(best_case["pnl_delta"]) > 0:
