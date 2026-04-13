@@ -1034,6 +1034,15 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertTrue(any(item["id"] == "market_regime_metric" for item in payload["questions_for_user"]))
         self.assertTrue(any(item["id"] == "pyramiding_rule" for item in payload["questions_for_user"]))
         self.assertTrue(payload["clarification_round"]["answered_items"])
+        self.assertTrue(payload["clarification_round"]["pending_topics"])
+        self.assertTrue(payload["clarification_round"]["memory_summary"])
+        self.assertEqual("量能规则仍需明确数值或比较口径", payload["clarification_round"]["next_focus"])
+        self.assertTrue(
+            any(
+                item["id"] == "volume_threshold_followup" and item["depends_on"] == "volume_threshold"
+                for item in payload["questions_for_user"]
+            )
+        )
 
     def test_generate_strategy_returns_structured_spec_and_hard_validation_checks(self) -> None:
         client = self._build_client()
@@ -1083,6 +1092,49 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertTrue(any(item["id"] == "future_reference_close" for item in payload["unsupported_items"]))
         self.assertTrue(any(item["id"] == "future_function_risk" for item in payload["hard_validation"]["checks"]))
 
+    def test_generate_strategy_flags_intraday_volume_and_amplitude_future_risk(self) -> None:
+        client = self._build_client()
+
+        response = client.post(
+            "/api/v1/strategies/generate",
+            json={
+                "prompt": "当日成交量超过过去 5 日均量且今日振幅大于 8% 时买入",
+                "market": "600519.SH",
+                "timeframe": "1d",
+                "asset_type": "stock",
+                "preferences": {"side": "long"},
+            },
+        )
+
+        self.assertEqual(200, response.status_code)
+        payload = response.json()["data"]
+        self.assertTrue(any(item["id"] == "future_reference_volume" for item in payload["unsupported_items"]))
+        self.assertTrue(any(item["id"] == "future_reference_amplitude" for item in payload["unsupported_items"]))
+        self.assertEqual("fail", next(item["status"] for item in payload["hard_validation"]["checks"] if item["id"] == "future_function_risk"))
+
+    def test_generate_strategy_structured_spec_contains_clarification_memory(self) -> None:
+        client = self._build_client()
+
+        response = client.post(
+            "/api/v1/strategies/generate",
+            json={
+                "prompt": "放量后不追高，确认后再买，大盘不差的时候试仓",
+                "market": "600519.SH",
+                "timeframe": "1d",
+                "asset_type": "stock",
+                "preferences": {"side": "long"},
+                "clarification_answers": {
+                    "volume_threshold": "量比 >= 1.3",
+                    "market_regime": "指数站上 20 日均线时开仓",
+                },
+            },
+        )
+
+        self.assertEqual(200, response.status_code)
+        payload = response.json()["data"]
+        self.assertIn("量能阈值=量比 >= 1.3", payload["structured_spec"]["clarification_memory"])
+        self.assertTrue(any(item["id"] == "clarification_context" for item in payload["generation_pipeline"]))
+
     def test_strategy_page_shows_field_mapping_snippet_labels(self) -> None:
         client = self._build_client()
         self._login(client)
@@ -1092,6 +1144,7 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertEqual(200, response.status_code)
         self.assertIn("字段级对照解释", response.text)
         self.assertIn("等待澄清进度", response.text)
+        self.assertIn("模糊条件、平台不支持项和未来函数风险都会先在这里拦住", response.text)
 
     def test_generate_strategy_teaching_mode_adds_comments_and_understands_terms(self) -> None:
         client = self._build_client()

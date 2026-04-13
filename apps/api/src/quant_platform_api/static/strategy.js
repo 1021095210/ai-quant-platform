@@ -191,6 +191,11 @@ function renderQuestions(items) {
       (item) => `
         <div class="list-item">
           <strong>${item.title}</strong>
+          ${
+            item.round_type === "followup"
+              ? `<div class="pill-row" style="margin: 8px 0"><span class="pill">继续追问</span><span class="pill">基于：${item.depends_on_title || item.depends_on || "上一轮补充"}</span></div>`
+              : ""
+          }
           <div class="muted-note">${item.detail}</div>
           <label class="field" style="margin-top: 10px">
             <span>补充说明</span>
@@ -241,20 +246,39 @@ function renderClarificationRound(summary) {
     <div class="pill-row" style="margin-top: 10px">
       <span class="pill">已确认 ${summary.answered_count || 0} 项</span>
       <span class="pill">待补充 ${summary.pending_count || 0} 项</span>
+      ${summary.next_focus ? `<span class="pill">当前重点：${summary.next_focus}</span>` : ""}
     </div>
+    <div class="muted-note" style="margin-top: 10px">上下文记忆：${summary.memory_summary || "当前还没有已确认的补充项。"}</div>
   `;
   const answered = summary.answered_items || [];
-  nodes.clarificationAnswered.innerHTML = answered.length
-    ? answered
-        .map(
-          (item) => `
+  const pending = summary.pending_topics || [];
+  nodes.clarificationAnswered.innerHTML = answered.length || pending.length
+    ? [
+        ...(answered.length
+          ? answered.map(
+              (item) => `
             <div class="list-item">
               <strong>${item.title}</strong>
               <div class="muted-note">${item.answer}</div>
             </div>
           `,
-        )
-        .join("")
+            )
+          : []),
+        ...(pending.length
+          ? pending.map(
+              (item) => `
+            <div class="list-item">
+              <strong>${item.title}</strong>
+              <div class="muted-note">${
+                item.round_type === "followup"
+                  ? `继续追问，基于：${item.depends_on_title || item.depends_on || "上一轮补充"}`
+                  : "第一轮待确认项"
+              }</div>
+            </div>
+          `,
+            )
+          : []),
+      ].join("")
     : "当前还没有已确认的补充项。";
 }
 
@@ -301,6 +325,7 @@ function renderStructuredSpecView(spec) {
         .join("；") || "无",
     ],
     ["执行假设", (spec.execution_assumptions || []).join("；") || "无"],
+    ["澄清上下文记忆", spec.clarification_memory || "当前无已确认补充项"],
     [
       "待补充项",
       (spec.open_questions || []).join("；") || "当前无待补充项",
