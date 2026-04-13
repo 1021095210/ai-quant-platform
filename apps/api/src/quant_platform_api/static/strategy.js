@@ -328,6 +328,12 @@ function renderStructuredSpecView(spec) {
   const aiFieldTargets = (spec.ai_field_targets || [])
     .map((item) => `${item.label}：${item.reason}`)
     .join("；");
+  const aiValueTargets = (spec.ai_value_targets || [])
+    .map(
+      (item) =>
+        `${item.label}：${(item.suggested_values || []).join(" / ")}${item.reason ? `（${item.reason}）` : ""}`,
+    )
+    .join("；");
   const sections = [
     ["市场", `${spec.market_scope_label} / ${spec.market}`],
     ["资产类型", spec.asset_type],
@@ -358,6 +364,7 @@ function renderStructuredSpecView(spec) {
     ["AI 仓位意图", aiHints.position_intent || "当前无"],
     ["AI 执行假设", (aiHints.execution_assumptions || []).join("；") || "当前无"],
     ["AI 建议优先核对字段", aiFieldTargets || "当前无"],
+    ["AI 建议优先确认值域", aiValueTargets || "当前无"],
     ["AI 待确认项", (spec.ai_unresolved_items || []).join("；") || "无"],
     [
       "待补充项",
