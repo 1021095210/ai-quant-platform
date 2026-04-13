@@ -280,11 +280,13 @@ async function parseManualText() {
 function renderManualParseSummary(result) {
   const groups = result.group_summaries || [];
   const aiReview = result.ai_review || {};
+  const truthSummary = result.input_truth_summary || {};
   const warningLines = (aiReview.warnings || []).map((item) => `- ${item}`);
   if (!groups.length) {
     nodes.manualParseSummary.textContent = [
       result.summary || "长文字智能识别完成，已加入手动记录。",
       aiReview.mode_label ? `解析方式：${aiReview.mode_label}` : "",
+      truthSummary.record_count ? `输入真值摘要：共 ${truthSummary.record_count} 笔，需人工确认 ${truthSummary.needs_confirmation_count || 0} 笔` : "",
       ...warningLines,
     ]
       .filter(Boolean)
@@ -295,6 +297,7 @@ function renderManualParseSummary(result) {
     result.summary || "长文字智能识别完成。",
     aiReview.mode_label ? `解析方式：${aiReview.mode_label}` : "",
     `共识别 ${result.group_count || groups.length} 个日期块，加入 ${result.record_count || 0} 笔记录。`,
+    truthSummary.record_count ? `输入真值摘要：共 ${truthSummary.record_count} 笔，需人工确认 ${truthSummary.needs_confirmation_count || 0} 笔。` : "",
     "",
     ...groups.map(
       (group, index) =>
@@ -423,6 +426,7 @@ async function runReplay() {
 
 function renderReplayOverview(overview) {
   const scope = overview.analysis_scope || {};
+  const truth = overview.input_truth_summary || {};
   const items = [
     ["样本交易数", overview.trade_count],
     ["胜率", overview.win_rate_pct != null ? `${overview.win_rate_pct}%` : "-"],
@@ -435,6 +439,10 @@ function renderReplayOverview(overview) {
     ["分钟级观察窗口", scope.minute_window_minutes ? `前 ${scope.minute_window_minutes} 分钟` : "-"],
     ["分钟级特征状态", replayAnalysisStatusLabel(scope.minute_feature_status)],
     ["基本面复盘状态", replayAnalysisStatusLabel(scope.fundamental_status)],
+    ["待人工确认记录", truth.needs_confirmation_count != null ? `${truth.needs_confirmation_count} 笔` : "-"],
+    ["输入来源分布", renderReplayTruthMap(truth.source_breakdown || {})],
+    ["字段补全分布", renderReplayTruthMap(truth.derived_field_counts || {})],
+    ["冲突标记", renderReplayTruthMap(truth.conflict_flag_counts || {})],
   ];
   nodes.overview.innerHTML = items
     .map(
@@ -446,6 +454,14 @@ function renderReplayOverview(overview) {
       `,
     )
     .join("");
+}
+
+function renderReplayTruthMap(data) {
+  const entries = Object.entries(data || {});
+  if (!entries.length) {
+    return "暂无";
+  }
+  return entries.map(([key, value]) => `${key}（${value}）`).join(" / ");
 }
 
 function replayAnalysisStatusLabel(value) {
@@ -718,6 +734,20 @@ function renderReplayObjectiveCounterfactual(summary) {
                                 <strong>${item.parameter}</strong>
                                 <div class="muted-note">命中 ${item.hit_count} 笔 · 改善 ${item.improved_count} 笔 · 过滤 ${item.skipped_count} 笔 · 变差 ${item.worsened_count} 笔</div>
                                 <div class="muted-note">平均盈亏变化 ${formatSignedValue(item.avg_pnl_delta)} · 常见取值 ${((item.top_values || []).map((value) => `${value.value}（${value.count}次）`).join("；")) || "暂无"}</div>
+                                ${
+                                  (item.dominant_regimes || []).length
+                                    ? `<div class="muted-note">主要生效环境：${item.dominant_regimes
+                                        .map((regime) => `${regime.regime}（${regime.count}）`)
+                                        .join("；")}</div>`
+                                    : ""
+                                }
+                                ${
+                                  (item.winning_candidates || []).length
+                                    ? `<div class="muted-note">常见胜出候选：${item.winning_candidates
+                                        .map((candidate) => `${candidate.candidate_label}（${candidate.count}）`)
+                                        .join("；")}</div>`
+                                    : ""
+                                }
                               </div>
                             `,
                           )
@@ -1043,6 +1073,8 @@ function renderReplayTradeSetChanges(changes) {
           <strong>风格暴露变化</strong>
           <div class="muted-note" style="margin-top:6px;">平均持仓：${style.baseline_avg_holding_minutes ?? 0} 分钟 → ${style.current_avg_holding_minutes ?? 0} 分钟</div>
           <div class="muted-note">做多占比：${style.baseline_long_share_pct ?? 0}% → ${style.current_long_share_pct ?? 0}%</div>
+          <div class="muted-note">标的暴露：原样本 ${renderReplayExposureList(style.baseline_top_symbols || [], "share_pct")} · 当前版本 ${renderReplayExposureList(style.current_top_symbols || [], "share_pct")}</div>
+          <div class="muted-note">盈亏暴露：原样本 ${renderReplayExposureList(style.baseline_top_pnl_symbols || [], "total_pnl")} · 当前版本 ${renderReplayExposureList(style.current_top_pnl_symbols || [], "total_pnl")}</div>
         </div>
       </div>
       <div class="grid-2" style="margin-top:12px;">
@@ -1062,6 +1094,19 @@ function renderReplayTradeSetChanges(changes) {
       </div>
     </div>
   `;
+}
+
+function renderReplayExposureList(items, field) {
+  if (!items.length) {
+    return "暂无";
+  }
+  return items
+    .map((item) =>
+      field === "share_pct"
+        ? `${item.symbol}（${item.share_pct}%）`
+        : `${item.symbol}（${formatSignedValue(item.total_pnl)}）`,
+    )
+    .join("、");
 }
 
 function renderReplayTradeSetChangeList(items, emptyText) {
@@ -1142,6 +1187,13 @@ function renderReplayCounterfactualCases(items, templateSummary) {
                   <div class="muted-note">被推荐为优先路径 ${item.best_choice_count} 次 · 平均盈亏变化 ${formatSignedValue(item.avg_pnl_improvement)}</div>
                   <div class="muted-note">关联参数：${renderReplayPatchFocus(item.focus || {})}</div>
                   <div class="muted-note">${item.attribution_summary || ""}</div>
+                  ${
+                    (item.dominant_regimes || []).length
+                      ? `<div class="muted-note">主要生效环境：${item.dominant_regimes
+                          .map((regime) => `${regime.regime}（${regime.count}）`)
+                          .join("；")}</div>`
+                      : ""
+                  }
                   ${
                     (item.linked_axes || []).length
                       ? `<div class="muted-note">关联热力图轴：${item.linked_axes

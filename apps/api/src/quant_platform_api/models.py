@@ -247,6 +247,12 @@ class TradeRecordItem(BaseModel):
     entry_price: float | None = None
     exit_price: float | None = None
     notes: str | None = None
+    source_kind: str | None = None
+    input_confidence: str | None = None
+    provenance_tags: list[str] = Field(default_factory=list)
+    derived_fields: list[str] = Field(default_factory=list)
+    needs_confirmation: bool = False
+    conflict_flags: list[str] = Field(default_factory=list)
 
 
 class ManualTradeRecordInput(BaseModel):

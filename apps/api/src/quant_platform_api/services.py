@@ -2829,6 +2829,12 @@ class TradeUploadService:
                 entry_price=_safe_number(item.get("entry_price")),
                 exit_price=_safe_number(item.get("exit_price")),
                 notes=(str(item.get("notes", "")).strip() or None),
+                source_kind="screenshot_form" if upload_kind == "screenshot" else "manual_entry",
+                input_confidence="needs_review" if upload_kind == "screenshot" else "user_provided",
+                provenance_tags=[upload_kind],
+                derived_fields=[],
+                needs_confirmation=upload_kind == "screenshot",
+                conflict_flags=[],
             )
             for index, item in enumerate(records)
         ]
@@ -2908,6 +2914,12 @@ class TradeUploadService:
                         row.get(column_mapping.get("exit_price", ""), "")
                     ),
                     notes=(row.get(column_mapping.get("notes", ""), "") or None),
+                    source_kind="csv_import",
+                    input_confidence="user_provided",
+                    provenance_tags=["csv_import"],
+                    derived_fields=[],
+                    needs_confirmation=False,
+                    conflict_flags=[],
                 )
             )
 
@@ -3005,6 +3017,10 @@ class TradeUploadService:
             "record_count": len(records),
             "parse_mode": "hybrid_llm" if llm_parse else "deterministic",
             "ai_review": self._build_ai_review_summary(llm_parse),
+            "input_truth_summary": _build_trade_input_truth_summary(
+                records,
+                source_context="text_parse",
+            ),
             "records": [item.model_dump(mode="json") for item in records],
             "summary": (
                 f"已识别 {len(records)} 笔交易，日期为 {trade_date.isoformat()}，"
@@ -3090,6 +3106,10 @@ class TradeUploadService:
             "parse_mode": "hybrid_llm" if llm_parse else "deterministic",
             "ai_review": self._build_ai_review_summary(llm_parse),
             "group_summaries": group_summaries,
+            "input_truth_summary": _build_trade_input_truth_summary(
+                records,
+                source_context="text_parse",
+            ),
             "records": [item.model_dump(mode="json") for item in records],
             "summary": (
                 f"已识别 {len(grouped_candidates)} 个交易日期、{len(records)} 笔交易，"
@@ -3167,6 +3187,17 @@ class TradeUploadService:
         pnl = 0.0
         source_label = data_source.get("provider") or "未知数据源"
         notes = f"来源：长文字智能识别；补价来源：{source_label}；买入规则：{entry_rule['label']}"
+        derived_fields = ["entry_price"]
+        llm_enabled = bool(
+            self._settings.llm_base_url.strip()
+            and self._settings.llm_api_key.strip()
+        )
+        provenance_tags = [
+            "text_parse",
+            "daily_bar_fill",
+            "llm_hybrid" if llm_enabled else "rule_parser",
+        ]
+        conflict_flags: list[str] = []
 
         if exit_rule is not None:
             exit_match = self._resolve_exit_from_rule(
@@ -3179,13 +3210,17 @@ class TradeUploadService:
             exit_price = exit_match.get("exit_price")
             exit_time = exit_match.get("exit_time")
             pnl = exit_match.get("pnl", 0.0)
+            derived_fields.extend(["exit_price", "pnl"])
             notes = f"{notes}；卖出规则：{exit_rule['label']}；{exit_match['note']}"
         elif explicit_exit_date is not None:
             target_bar = self._find_first_bar_on_or_after(bars, explicit_exit_date) or entry_bar
             exit_price = float(target_bar.close)
             exit_time = datetime.fromisoformat(f"{target_bar.trade_date}T15:00:00+00:00")
             pnl = exit_price - entry_price
+            derived_fields.extend(["exit_price", "pnl"])
             notes = f"{notes}；按卖出日期 {explicit_exit_date.isoformat()} 的收盘价补全"
+        else:
+            conflict_flags.append("missing_exit_rule")
 
         return TradeRecordItem(
             trade_id=f"text_trade_{index:03d}",
@@ -3197,6 +3232,12 @@ class TradeUploadService:
             entry_price=round(entry_price, 4),
             exit_price=round(exit_price, 4) if exit_price is not None else None,
             notes=notes,
+            source_kind="text_parse_hybrid" if llm_enabled else "text_parse_rule",
+            input_confidence="needs_review",
+            provenance_tags=provenance_tags,
+            derived_fields=derived_fields,
+            needs_confirmation=True,
+            conflict_flags=conflict_flags,
         )
 
     def _load_trade_bars(
@@ -5493,6 +5534,7 @@ def build_replay_result(
                 "market": replay_market,
                 "supports_short": replay_supports_short,
                 "analysis_scope": analysis_scope,
+                "input_truth_summary": _build_trade_input_truth_summary(records),
             },
             "winning_patterns": [
                 {
@@ -5579,6 +5621,12 @@ def _build_replay_trade_records(records: list[TradeRecordItem]) -> list[dict[str
                 "holding_label": _format_holding_label(holding_minutes),
                 "pnl": round(item.pnl, 2),
                 "pnl_pct": _infer_trade_pnl_pct(item),
+                "source_kind": item.source_kind,
+                "input_confidence": item.input_confidence,
+                "provenance_tags": list(item.provenance_tags or []),
+                "derived_fields": list(item.derived_fields or []),
+                "needs_confirmation": bool(item.needs_confirmation),
+                "conflict_flags": list(item.conflict_flags or []),
             }
         )
     return trade_rows
@@ -5623,6 +5671,46 @@ def _build_replay_sample_metrics(records: list[TradeRecordItem]) -> dict[str, An
         "loss_count": len(losses),
         "max_drawdown_pct": round(max_drawdown_pct, 2),
         "sharpe_like": round(sharpe_like, 2),
+    }
+
+
+def _build_trade_input_truth_summary(
+    records: list[TradeRecordItem],
+    *,
+    source_context: str | None = None,
+) -> dict[str, Any]:
+    source_breakdown: dict[str, int] = {}
+    confidence_breakdown: dict[str, int] = {}
+    derived_field_counts: dict[str, int] = {}
+    provenance_tag_counts: dict[str, int] = {}
+    conflict_flag_counts: dict[str, int] = {}
+    needs_confirmation_count = 0
+    for item in records:
+        source_kind = item.source_kind or "unknown"
+        source_breakdown[source_kind] = source_breakdown.get(source_kind, 0) + 1
+        confidence = item.input_confidence or "unknown"
+        confidence_breakdown[confidence] = confidence_breakdown.get(confidence, 0) + 1
+        if item.needs_confirmation:
+            needs_confirmation_count += 1
+        for field in item.derived_fields or []:
+            derived_field_counts[field] = derived_field_counts.get(field, 0) + 1
+        for tag in item.provenance_tags or []:
+            provenance_tag_counts[tag] = provenance_tag_counts.get(tag, 0) + 1
+        for flag in item.conflict_flags or []:
+            conflict_flag_counts[flag] = conflict_flag_counts.get(flag, 0) + 1
+    return {
+        "record_count": len(records),
+        "source_context": source_context or "trade_records",
+        "source_breakdown": source_breakdown,
+        "confidence_breakdown": confidence_breakdown,
+        "needs_confirmation_count": needs_confirmation_count,
+        "derived_field_counts": derived_field_counts,
+        "provenance_tag_counts": provenance_tag_counts,
+        "conflict_flag_counts": conflict_flag_counts,
+        "summary": (
+            f"共 {len(records)} 笔记录，其中需要人工确认 {needs_confirmation_count} 笔。"
+            "平台会区分用户提供字段、系统补价字段和待确认冲突项。"
+        ),
     }
 
 
@@ -5671,6 +5759,10 @@ def _build_replay_trade_set_changes(
             "current_avg_holding_minutes": _average_replay_trade_row_holding_minutes(selected_trade_rows),
             "baseline_long_share_pct": _replay_trade_row_side_share_pct(baseline_rows, side="long"),
             "current_long_share_pct": _replay_trade_row_side_share_pct(selected_trade_rows, side="long"),
+            "baseline_top_symbols": _build_replay_symbol_exposure(baseline_rows),
+            "current_top_symbols": _build_replay_symbol_exposure(selected_trade_rows),
+            "baseline_top_pnl_symbols": _build_replay_symbol_pnl_exposure(baseline_rows),
+            "current_top_pnl_symbols": _build_replay_symbol_pnl_exposure(selected_trade_rows),
         },
         "summary": (
             f"本版本当前保留 {len(selected_trade_rows)} 笔交易，较原样本变化 "
@@ -5696,6 +5788,41 @@ def _replay_trade_row_side_share_pct(trade_rows: list[dict[str, Any]], *, side: 
         return 0.0
     side_count = sum(1 for item in trade_rows if item.get("side") == side)
     return round((side_count / len(trade_rows)) * 100.0, 2)
+
+
+def _build_replay_symbol_exposure(trade_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    counts: dict[str, int] = {}
+    for item in trade_rows:
+        symbol = str(item.get("symbol") or "")
+        if not symbol:
+            continue
+        counts[symbol] = counts.get(symbol, 0) + 1
+    total = len(trade_rows)
+    items = [
+        {
+            "symbol": symbol,
+            "count": count,
+            "share_pct": round((count / total) * 100.0, 2) if total else 0.0,
+        }
+        for symbol, count in counts.items()
+    ]
+    items.sort(key=lambda item: (int(item["count"]), float(item["share_pct"])), reverse=True)
+    return items[:5]
+
+
+def _build_replay_symbol_pnl_exposure(trade_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    totals: dict[str, float] = {}
+    for item in trade_rows:
+        symbol = str(item.get("symbol") or "")
+        if not symbol:
+            continue
+        totals[symbol] = totals.get(symbol, 0.0) + float(item.get("pnl") or 0.0)
+    items = [
+        {"symbol": symbol, "total_pnl": round(total_pnl, 2)}
+        for symbol, total_pnl in totals.items()
+    ]
+    items.sort(key=lambda item: abs(float(item["total_pnl"])), reverse=True)
+    return items[:5]
 
 
 def _build_replay_sharpe_like(pnl_values: list[float]) -> float:
@@ -6715,6 +6842,7 @@ def _build_replay_counterfactual_template_summary(
     grouped: dict[str, dict[str, Any]] = {}
     for case in cases:
         recommended_key = case.get("recommended_alternative_key")
+        regime_key = str(case.get("trend_regime") or "unknown")
         for alternative in case.get("alternatives") or []:
             key = str(alternative.get("key") or "unknown")
             title = str(alternative.get("title") or key)
@@ -6729,11 +6857,13 @@ def _build_replay_counterfactual_template_summary(
                     "best_choice_count": 0,
                     "total_pnl_improvement": 0.0,
                     "sample_count": 0,
+                    "regimes": {},
                 },
             )
             improvement = float(alternative.get("pnl_improvement") or 0.0)
             bucket["sample_count"] += 1
             bucket["total_pnl_improvement"] += improvement
+            bucket["regimes"][regime_key] = bucket["regimes"].get(regime_key, 0) + 1
             if alternative.get("result_type") == "skipped":
                 bucket["skipped_count"] += 1
             elif improvement > 0:
@@ -6771,6 +6901,14 @@ def _build_replay_counterfactual_template_summary(
                 if sample_count
                 else 0.0,
                 "sample_count": sample_count,
+                "dominant_regimes": sorted(
+                    (
+                        {"regime": key, "count": count}
+                        for key, count in (bucket.get("regimes") or {}).items()
+                    ),
+                    key=lambda item: int(item["count"]),
+                    reverse=True,
+                )[:2],
             }
         )
     items.sort(
@@ -6898,6 +7036,7 @@ def _build_single_trade_counterfactuals(
         "rank": rank,
         "symbol": item.symbol,
         "side": item.side,
+        "trend_regime": str((daily_context or {}).get("trend_regime") or "unknown"),
         "summary": (
             f"这笔亏损交易优先对照不开仓过滤、延迟入场、收紧止损和止盈优化。"
             f" 当前最值得优先验证的是“{recommended['title']}”。"
@@ -7272,11 +7411,18 @@ def _build_replay_search_linked_counterfactual_summary(
                     "skipped_count": 0,
                     "worsened_count": 0,
                     "total_pnl_delta": 0.0,
+                    "regimes": {},
+                    "winning_candidates": {},
                 },
             )
             bucket["hit_count"] += 1
             bucket["total_pnl_delta"] += float(best_case.get("pnl_delta") or 0.0)
             bucket["values"][str(value)] = bucket["values"].get(str(value), 0) + 1
+            bucket["regimes"][regime_key] = bucket["regimes"].get(regime_key, 0) + 1
+            candidate_label = str(best_case.get("candidate_label") or "候选版本")
+            bucket["winning_candidates"][candidate_label] = (
+                bucket["winning_candidates"].get(candidate_label, 0) + 1
+            )
             winning_bucket["parameters"][label] = winning_bucket["parameters"].get(label, 0) + 1
             if best_case["result_type"] == "skipped":
                 bucket["skipped_count"] += 1
@@ -7352,6 +7498,22 @@ def _build_replay_parameter_attribution_summary(
                 "worsened_count": int(bucket["worsened_count"]),
                 "avg_pnl_delta": round(float(bucket["total_pnl_delta"]) / hit_count, 2),
                 "top_values": top_values,
+                "dominant_regimes": sorted(
+                    (
+                        {"regime": key, "count": count}
+                        for key, count in (bucket.get("regimes") or {}).items()
+                    ),
+                    key=lambda item: int(item["count"]),
+                    reverse=True,
+                )[:2],
+                "winning_candidates": sorted(
+                    (
+                        {"candidate_label": key, "count": count}
+                        for key, count in (bucket.get("winning_candidates") or {}).items()
+                    ),
+                    key=lambda item: int(item["count"]),
+                    reverse=True,
+                )[:3],
             }
         )
     items.sort(
