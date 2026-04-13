@@ -975,6 +975,15 @@ cp .env.example .env
 - `LLM_VOLCENGINE_API_KEY` 或 `ARK_API_KEY`
 - `LLM_VOLCENGINE_MODEL` 或 `ARK_MODEL`
 
+当前火山方舟默认候选模型已约定为：
+
+- `deepseek-v3-2-251201`
+
+说明：
+
+- 当前平台代码会把它当作火山 profile 的默认模型名
+- 真正切换到火山运行时仍建议提供明确的 `endpoint_id / model`，避免账号侧模型别名与实际接入点不一致
+
 ### 4. 先跑测试
 
 推荐优先使用：
