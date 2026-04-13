@@ -2520,6 +2520,8 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertIn("这批交易共 3 笔", data["concise_summary"])
         self.assertEqual("sharpe_max", data["overview"]["default_objective"])
         self.assertEqual("夏普最大", data["overview"]["default_objective_label"])
+        self.assertIn("input_truth_summary", data["overview"])
+        self.assertIn("source_breakdown", data["overview"]["input_truth_summary"])
         self.assertEqual("做多交易的累计盈亏和整体表现当前更优", data["winning_patterns"][0]["pattern"])
         self.assertTrue(data["loss_features"])
         self.assertTrue(data["profit_features"])
@@ -2545,6 +2547,8 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertIn("summary", data["objective_versions"][0]["trade_set_changes"])
         self.assertIn("removed_losses", data["objective_versions"][0]["trade_set_changes"])
         self.assertIn("removed_profits", data["objective_versions"][0]["trade_set_changes"])
+        self.assertIn("baseline_top_symbols", data["objective_versions"][0]["trade_set_changes"]["style_exposure"])
+        self.assertIn("current_top_pnl_symbols", data["objective_versions"][0]["trade_set_changes"]["style_exposure"])
         self.assertFalse(data["objective_versions"][0]["trade_set_changes"]["added_trades_supported"])
         self.assertIn("parameter_stability", data["objective_versions"][0]["search_summary"])
         self.assertIn("neighbor_bands", data["objective_versions"][0]["search_summary"]["parameter_stability"])
@@ -2554,8 +2558,35 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertIn("样本筛选回放", data["objective_versions"][0]["comparison_note"])
         self.assertIn("上下文评分", data["objective_versions"][0]["comparison_note"])
         self.assertIn("entry_price", data["trade_records"][0])
+        self.assertIn("source_kind", data["trade_records"][0])
+        self.assertIn("derived_fields", data["trade_records"][0])
         self.assertIn("把该方向仓位降到优势方向的一半", data["suggestion_rules"][0]["description"])
         self.assertTrue(data["suggestion_rules"])
+
+    def test_manual_text_parse_returns_input_truth_summary(self) -> None:
+        client = self._build_client()
+        self._login(client)
+
+        response = client.post(
+            "/api/v1/trades/uploads/manual/parse-text",
+            json={
+                "text": (
+                    "2025-07-25 买入：603590.SH, 002225.SZ\n"
+                    "买入方式：当日开盘价买入\n"
+                    "卖出方式：上涨 3% 止盈卖出"
+                ),
+                "market": "cn_equity",
+                "adjustment_mode": "qfq",
+            },
+        )
+
+        self.assertEqual(200, response.status_code)
+        data = response.json()["data"]
+        self.assertIn("input_truth_summary", data)
+        self.assertEqual("text_parse", data["input_truth_summary"]["source_context"])
+        self.assertEqual(2, data["input_truth_summary"]["record_count"])
+        self.assertIn("entry_price", data["input_truth_summary"]["derived_field_counts"])
+        self.assertGreaterEqual(data["input_truth_summary"]["needs_confirmation_count"], 1)
 
     def test_replay_trade_set_changes_separates_removed_losses_and_profits(self) -> None:
         baseline_records = [
@@ -2998,6 +3029,7 @@ class QuantPlatformApiTests(unittest.TestCase):
             [
                 {
                     "recommended_alternative_key": "skip_trade_filter",
+                    "trend_regime": "trend",
                     "alternatives": [
                         {
                             "key": "skip_trade_filter",
@@ -3015,6 +3047,7 @@ class QuantPlatformApiTests(unittest.TestCase):
                 },
                 {
                     "recommended_alternative_key": "tighter_stop_loss",
+                    "trend_regime": "range",
                     "alternatives": [
                         {
                             "key": "skip_trade_filter",
@@ -3038,6 +3071,8 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertEqual(2, summary[0]["sample_count"])
         self.assertEqual(2, summary[0]["skipped_count"])
         self.assertIn("focus", summary[0])
+        self.assertIn("dominant_regimes", summary[0])
+        self.assertTrue(summary[0]["dominant_regimes"])
 
     def test_replay_objective_counterfactual_summary_links_candidate_leaderboard(self) -> None:
         class FakeMarketDataService:
@@ -3236,6 +3271,8 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertIn("regime", summary["regime_attribution"][0])
         self.assertIn("candidate_decisiveness", summary)
         self.assertIn("avg_gap", summary["candidate_decisiveness"])
+        self.assertIn("dominant_regimes", summary["parameter_attribution"][0])
+        self.assertIn("winning_candidates", summary["parameter_attribution"][0])
 
     def test_replay_counterfactual_cases_include_extended_templates(self) -> None:
         class FakeMarketDataService:
