@@ -6530,6 +6530,7 @@ def _build_replay_objective_versions(
             market_data_service=market_data_service,
             selected_patch=selected_patch,
             candidate_leaderboard=search_summary.get("candidate_leaderboard") or [],
+            daily_context_by_trade_id=daily_context_by_trade_id,
             minute_context_by_trade_id=minute_context_by_trade_id,
             fundamental_context_by_trade_id=fundamental_context_by_trade_id,
         )
@@ -6589,6 +6590,7 @@ def _build_replay_objective_counterfactual_summary(
     market_data_service: MarketDataService | None,
     selected_patch: dict[str, Any],
     candidate_leaderboard: list[dict[str, Any]] | None,
+    daily_context_by_trade_id: dict[str, dict[str, Any]],
     minute_context_by_trade_id: dict[str, dict[str, Any]],
     fundamental_context_by_trade_id: dict[str, dict[str, Any]],
 ) -> dict[str, Any]:
@@ -6699,6 +6701,7 @@ def _build_replay_objective_counterfactual_summary(
             losing_records=losing_records,
             market_data_service=market_data_service,
             candidate_leaderboard=candidate_leaderboard or [],
+            daily_context_by_trade_id=daily_context_by_trade_id,
             minute_context_by_trade_id=minute_context_by_trade_id,
             fundamental_context_by_trade_id=fundamental_context_by_trade_id,
         ),
@@ -7134,6 +7137,7 @@ def _build_replay_search_linked_counterfactual_summary(
     losing_records: list[TradeRecordItem],
     market_data_service: MarketDataService | None,
     candidate_leaderboard: list[dict[str, Any]],
+    daily_context_by_trade_id: dict[str, dict[str, Any]],
     minute_context_by_trade_id: dict[str, dict[str, Any]],
     fundamental_context_by_trade_id: dict[str, dict[str, Any]],
 ) -> dict[str, Any]:
@@ -7148,16 +7152,20 @@ def _build_replay_search_linked_counterfactual_summary(
     worsened_count = 0
     parameter_attribution_buckets: dict[str, dict[str, Any]] = {}
     winning_candidate_buckets: dict[str, dict[str, Any]] = {}
+    regime_attribution_buckets: dict[str, dict[str, Any]] = {}
     decisiveness_gaps: list[float] = []
     for item in losing_records:
         best_case: dict[str, Any] | None = None
         options: list[dict[str, Any]] = []
+        daily_context = minute_context = None
+        daily_context = daily_context_by_trade_id.get(item.trade_id)
+        minute_context = minute_context_by_trade_id.get(item.trade_id)
         for candidate in focused_candidates:
             rerun_trade = _rerun_single_replay_trade(
                 item=item,
                 market_data_service=market_data_service,
                 rule_patch=candidate["patch"],
-                minute_context=minute_context_by_trade_id.get(item.trade_id),
+                minute_context=minute_context,
                 fundamental_context=fundamental_context_by_trade_id.get(item.trade_id),
             )
             if rerun_trade is None:
@@ -7205,6 +7213,7 @@ def _build_replay_search_linked_counterfactual_summary(
             continue
         options.sort(key=lambda row: float(row.get("pnl_delta") or 0.0), reverse=True)
         best_case["candidate_options"] = options
+        regime_key = str((daily_context or {}).get("trend_regime") or "unknown")
         winning_bucket = winning_candidate_buckets.setdefault(
             str(best_case.get("candidate_label") or "候选版本"),
             {
@@ -7215,16 +7224,34 @@ def _build_replay_search_linked_counterfactual_summary(
                 "worsened_count": 0,
                 "total_pnl_delta": 0.0,
                 "parameters": {},
+                "regimes": {},
             },
         )
         winning_bucket["hit_count"] += 1
         winning_bucket["total_pnl_delta"] += float(best_case.get("pnl_delta") or 0.0)
+        winning_bucket["regimes"][regime_key] = winning_bucket["regimes"].get(regime_key, 0) + 1
+        regime_bucket = regime_attribution_buckets.setdefault(
+            regime_key,
+            {
+                "regime": regime_key,
+                "hit_count": 0,
+                "improved_count": 0,
+                "skipped_count": 0,
+                "worsened_count": 0,
+                "total_pnl_delta": 0.0,
+            },
+        )
+        regime_bucket["hit_count"] += 1
+        regime_bucket["total_pnl_delta"] += float(best_case.get("pnl_delta") or 0.0)
         if best_case["result_type"] == "skipped":
             winning_bucket["skipped_count"] += 1
+            regime_bucket["skipped_count"] += 1
         elif float(best_case.get("pnl_delta") or 0.0) > 0:
             winning_bucket["improved_count"] += 1
+            regime_bucket["improved_count"] += 1
         else:
             winning_bucket["worsened_count"] += 1
+            regime_bucket["worsened_count"] += 1
         if len(options) > 1:
             decisiveness_gaps.append(
                 round(
@@ -7287,6 +7314,10 @@ def _build_replay_search_linked_counterfactual_summary(
         },
         "winning_candidate_summary": _build_replay_winning_candidate_summary(
             winning_candidate_buckets,
+            considered_count=len(cases),
+        ),
+        "regime_attribution": _build_replay_regime_attribution_summary(
+            regime_attribution_buckets,
             considered_count=len(cases),
         ),
         "candidate_decisiveness": _build_replay_candidate_decisiveness_summary(decisiveness_gaps),
@@ -7362,6 +7393,14 @@ def _build_replay_winning_candidate_summary(
                 "worsened_count": int(bucket["worsened_count"]),
                 "avg_pnl_delta": round(float(bucket["total_pnl_delta"]) / hit_count, 2),
                 "parameter_focus": parameter_focus,
+                "dominant_regimes": sorted(
+                    (
+                        {"regime": key, "count": count}
+                        for key, count in (bucket.get("regimes") or {}).items()
+                    ),
+                    key=lambda item: int(item["count"]),
+                    reverse=True,
+                )[:2],
             }
         )
     items.sort(
@@ -7373,6 +7412,38 @@ def _build_replay_winning_candidate_summary(
         reverse=True,
     )
     return items[:5]
+
+
+def _build_replay_regime_attribution_summary(
+    buckets: dict[str, dict[str, Any]],
+    *,
+    considered_count: int,
+) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for bucket in buckets.values():
+        hit_count = int(bucket["hit_count"] or 0)
+        if not hit_count:
+            continue
+        items.append(
+            {
+                "regime": bucket["regime"],
+                "hit_count": hit_count,
+                "coverage_ratio": round(hit_count / max(considered_count, 1), 2),
+                "improved_count": int(bucket["improved_count"]),
+                "skipped_count": int(bucket["skipped_count"]),
+                "worsened_count": int(bucket["worsened_count"]),
+                "avg_pnl_delta": round(float(bucket["total_pnl_delta"]) / hit_count, 2),
+            }
+        )
+    items.sort(
+        key=lambda item: (
+            int(item["hit_count"]),
+            float(item["avg_pnl_delta"]),
+            int(item["improved_count"]) + int(item["skipped_count"]),
+        ),
+        reverse=True,
+    )
+    return items
 
 
 def _build_replay_candidate_decisiveness_summary(gaps: list[float]) -> dict[str, Any]:
