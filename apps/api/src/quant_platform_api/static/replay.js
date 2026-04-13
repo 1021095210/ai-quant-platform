@@ -535,6 +535,7 @@ function renderReplayObjectiveDetail() {
       <div class="muted-note" style="margin-top:8px;">核心调整：${(current.key_adjustments || []).join("；") || "暂无"}</div>
       ${renderReplayObjectiveMetrics(current.metrics || {}, current.baseline_metrics || {})}
       ${renderReplayParameterStability(current.search_summary?.parameter_stability || {})}
+      ${renderReplayObjectiveCounterfactual(current.objective_counterfactual || {})}
       ${renderReplayTradeSetChanges(current.trade_set_changes || {})}
       <div class="result-box light" style="margin-top:12px;">
         <strong>收益曲线</strong>
@@ -560,6 +561,44 @@ function renderReplayObjectiveDetail() {
           </tbody>
         </table>
       </div>
+    </div>
+  `;
+}
+
+function renderReplayObjectiveCounterfactual(summary) {
+  if (!summary || Object.keys(summary).length === 0) {
+    return "";
+  }
+  const cases = summary.cases || [];
+  return `
+    <div class="result-box light" style="margin-top:12px;">
+      <strong>这套版本对 Top 亏损单的影响</strong>
+      <div class="muted-note" style="margin-top:6px;">${summary.summary || "暂无说明"}</div>
+      <div class="muted-note">
+        对照 ${summary.considered_count ?? 0} 笔 · 改善 ${summary.improved_count ?? 0} 笔 ·
+        过滤 ${summary.skipped_count ?? 0} 笔 · 变差 ${summary.worsened_count ?? 0} 笔
+      </div>
+      ${
+        cases.length
+          ? `
+            <div class="list" style="margin-top:12px;">
+              ${cases
+                .map(
+                  (item) => `
+                    <div class="list-item compact-item">
+                      <strong>${item.symbol}</strong>
+                      <div class="muted-note">${item.summary || "暂无说明"}</div>
+                      <div class="muted-note">
+                        原始盈亏 ${item.original_pnl} · 反事实盈亏 ${item.counterfactual_pnl} · 变化 ${formatSignedValue(item.pnl_delta)}
+                      </div>
+                    </div>
+                  `,
+                )
+                .join("")}
+            </div>
+          `
+          : ""
+      }
     </div>
   `;
 }
