@@ -39,6 +39,7 @@ try:
         _build_replay_context_suggestions,
         _build_replay_fundamental_features,
         _build_replay_minute_context_features,
+        _build_replay_trade_set_changes,
         _replay_trade_passes_filters,
         _rerun_replay_records_on_market_data,
     )
@@ -59,6 +60,7 @@ except ModuleNotFoundError:  # pragma: no cover - handled by skip
     _build_replay_context_suggestions = None
     _build_replay_minute_context_features = None
     _build_replay_fundamental_features = None
+    _build_replay_trade_set_changes = None
     _replay_trade_passes_filters = None
     _rerun_replay_records_on_market_data = None
 
@@ -2523,17 +2525,88 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertTrue(data["objective_versions"][0]["trade_records"])
         self.assertIn("metrics", data["objective_versions"][0])
         self.assertIn("baseline_metrics", data["objective_versions"][0])
+        self.assertIn("trade_set_changes", data["objective_versions"][0])
         self.assertIn("trade_count", data["objective_versions"][0]["metrics"])
         self.assertIn("sharpe_like", data["objective_versions"][0]["metrics"])
         self.assertLessEqual(
             data["objective_versions"][0]["metrics"]["trade_count"],
             data["objective_versions"][0]["baseline_metrics"]["trade_count"],
         )
+        self.assertIn("summary", data["objective_versions"][0]["trade_set_changes"])
+        self.assertIn("removed_losses", data["objective_versions"][0]["trade_set_changes"])
+        self.assertIn("removed_profits", data["objective_versions"][0]["trade_set_changes"])
+        self.assertFalse(data["objective_versions"][0]["trade_set_changes"]["added_trades_supported"])
         self.assertIn("样本筛选回放", data["objective_versions"][0]["comparison_note"])
         self.assertIn("上下文评分", data["objective_versions"][0]["comparison_note"])
         self.assertIn("entry_price", data["trade_records"][0])
         self.assertIn("把该方向仓位降到优势方向的一半", data["suggestion_rules"][0]["description"])
         self.assertTrue(data["suggestion_rules"])
+
+    def test_replay_trade_set_changes_separates_removed_losses_and_profits(self) -> None:
+        baseline_records = [
+            TradeRecordItem(
+                trade_id="trade_a",
+                symbol="600519.SH",
+                side="long",
+                entry_time=datetime.fromisoformat("2024-05-01T09:30:00+00:00"),
+                exit_time=datetime.fromisoformat("2024-05-02T15:00:00+00:00"),
+                pnl=-500.0,
+                entry_price=10.0,
+                exit_price=9.5,
+            ),
+            TradeRecordItem(
+                trade_id="trade_b",
+                symbol="000001.SZ",
+                side="long",
+                entry_time=datetime.fromisoformat("2024-05-03T09:30:00+00:00"),
+                exit_time=datetime.fromisoformat("2024-05-06T15:00:00+00:00"),
+                pnl=800.0,
+                entry_price=8.0,
+                exit_price=8.8,
+            ),
+            TradeRecordItem(
+                trade_id="trade_c",
+                symbol="510300.SH",
+                side="long",
+                entry_time=datetime.fromisoformat("2024-05-07T09:30:00+00:00"),
+                exit_time=datetime.fromisoformat("2024-05-08T15:00:00+00:00"),
+                pnl=200.0,
+                entry_price=4.0,
+                exit_price=4.08,
+            ),
+        ]
+        selected_records = [baseline_records[2]]
+        selected_trade_rows = [
+            {
+                "trade_id": "trade_c",
+                "symbol": "510300.SH",
+                "side": "long",
+                "entry_time": "2024-05-07T09:30:00+00:00",
+                "exit_time": "2024-05-08T15:00:00+00:00",
+                "entry_price": 4.0,
+                "exit_price": 4.08,
+                "holding_minutes": 1770.0,
+                "holding_label": "1天 5小时 30分钟",
+                "pnl": 200.0,
+                "pnl_pct": 2.0,
+            }
+        ]
+
+        changes = _build_replay_trade_set_changes(
+            baseline_records=baseline_records,
+            selected_records=selected_records,
+            selected_trade_rows=selected_trade_rows,
+            simulation_mode="sample_scored_replay",
+        )
+
+        self.assertEqual(3, changes["baseline_trade_count"])
+        self.assertEqual(1, changes["current_trade_count"])
+        self.assertEqual(-2, changes["trade_frequency_delta"])
+        self.assertEqual(1, changes["removed_loss_count"])
+        self.assertEqual(1, changes["removed_profit_count"])
+        self.assertEqual("600519.SH", changes["removed_losses"][0]["symbol"])
+        self.assertEqual("000001.SZ", changes["removed_profits"][0]["symbol"])
+        self.assertFalse(changes["added_trades_supported"])
 
     def test_replay_analysis_returns_analysis_scope_and_daily_context_features(self) -> None:
         client = self._build_client()

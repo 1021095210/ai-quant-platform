@@ -5617,6 +5617,78 @@ def _build_replay_sample_metrics(records: list[TradeRecordItem]) -> dict[str, An
     }
 
 
+def _build_replay_trade_set_changes(
+    *,
+    baseline_records: list[TradeRecordItem],
+    selected_records: list[TradeRecordItem],
+    selected_trade_rows: list[dict[str, Any]],
+    simulation_mode: str,
+) -> dict[str, Any]:
+    baseline_rows = _build_replay_trade_records(baseline_records)
+    baseline_by_trade_id = {item["trade_id"]: item for item in baseline_rows}
+    selected_trade_ids = {
+        item.trade_id for item in selected_records if getattr(item, "trade_id", None)
+    } or {item.get("trade_id") for item in selected_trade_rows if item.get("trade_id")}
+
+    removed_rows = [
+        row for trade_id, row in baseline_by_trade_id.items() if trade_id not in selected_trade_ids
+    ]
+    removed_losses = sorted(
+        [row for row in removed_rows if float(row.get("pnl") or 0) <= 0],
+        key=lambda row: float(row.get("pnl") or 0),
+    )
+    removed_profits = sorted(
+        [row for row in removed_rows if float(row.get("pnl") or 0) > 0],
+        key=lambda row: float(row.get("pnl") or 0),
+        reverse=True,
+    )
+    limitations = [
+        "当前版本基于已发生成交样本的筛选与真实重放，只能识别被过滤掉的交易。",
+        "当前链路还不能可靠推导“新规则本来会新增哪些未发生交易”。",
+    ]
+    return {
+        "baseline_trade_count": len(baseline_rows),
+        "current_trade_count": len(selected_trade_rows),
+        "unchanged_trade_count": len(selected_trade_ids),
+        "trade_frequency_delta": len(selected_trade_rows) - len(baseline_rows),
+        "removed_loss_count": len(removed_losses),
+        "removed_profit_count": len(removed_profits),
+        "removed_losses": removed_losses[:5],
+        "removed_profits": removed_profits[:5],
+        "added_trades_supported": False,
+        "added_trades": [],
+        "style_exposure": {
+            "baseline_avg_holding_minutes": _average_replay_trade_row_holding_minutes(baseline_rows),
+            "current_avg_holding_minutes": _average_replay_trade_row_holding_minutes(selected_trade_rows),
+            "baseline_long_share_pct": _replay_trade_row_side_share_pct(baseline_rows, side="long"),
+            "current_long_share_pct": _replay_trade_row_side_share_pct(selected_trade_rows, side="long"),
+        },
+        "summary": (
+            f"本版本当前保留 {len(selected_trade_rows)} 笔交易，较原样本变化 "
+            f"{len(selected_trade_rows) - len(baseline_rows):+d} 笔。"
+            f"被过滤掉的交易里，亏损单 {len(removed_losses)} 笔，盈利单 {len(removed_profits)} 笔。"
+        ),
+        "simulation_mode": simulation_mode,
+        "limitations": limitations,
+    }
+
+
+def _average_replay_trade_row_holding_minutes(trade_rows: list[dict[str, Any]]) -> float:
+    if not trade_rows:
+        return 0.0
+    return round(
+        sum(float(item.get("holding_minutes") or 0.0) for item in trade_rows) / len(trade_rows),
+        2,
+    )
+
+
+def _replay_trade_row_side_share_pct(trade_rows: list[dict[str, Any]], *, side: str) -> float:
+    if not trade_rows:
+        return 0.0
+    side_count = sum(1 for item in trade_rows if item.get("side") == side)
+    return round((side_count / len(trade_rows)) * 100.0, 2)
+
+
 def _build_replay_sharpe_like(pnl_values: list[float]) -> float:
     if len(pnl_values) < 2:
         return 0.0
@@ -6435,6 +6507,12 @@ def _build_replay_objective_versions(
                 "selected_reason": "当前无真实行情重放，保留样本筛选回放结果。",
             }
             simulation_mode = "sample_scored_replay"
+        trade_set_changes = _build_replay_trade_set_changes(
+            baseline_records=records,
+            selected_records=selected_records,
+            selected_trade_rows=selected_trade_rows,
+            simulation_mode=simulation_mode,
+        )
         items.append(
             {
                 **spec,
@@ -6446,6 +6524,7 @@ def _build_replay_objective_versions(
                 "simulation_mode": simulation_mode,
                 "selected_patch": selected_patch,
                 "search_summary": search_summary,
+                "trade_set_changes": trade_set_changes,
             }
         )
     return items
