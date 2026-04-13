@@ -1265,6 +1265,18 @@ def _extract_strategy_unsupported_items(prompt: str, normalized: str) -> list[di
             "当前不支持盘口 / 逐笔 / L2 数据驱动策略",
             "策略里出现了盘口、逐笔成交或委托队列语义。平台当前没有把这类数据接入策略工坊真值层，不能生成可靠可执行版本。",
         )
+    if any(marker in prompt or marker in normalized for marker in ["公告", "新闻", "研报", "舆情", "微博", "社交媒体", "消息面", "财报发布"]):
+        add(
+            "external_event_dependency",
+            "当前不支持实时公告 / 新闻 / 舆情驱动的真值策略条件",
+            "策略里出现了公告、新闻、研报或舆情这类外部事件依赖。平台当前还没有把这些事件源接入策略工坊真值层，不能直接生成可靠可执行版本。",
+        )
+    if any(marker in prompt or marker in normalized for marker in ["集合竞价", "竞价", "盘前", "盘后", "夜盘", "尾盘竞价"]):
+        add(
+            "session_execution_dependency",
+            "当前不支持集合竞价 / 盘前盘后 / 夜盘执行语义",
+            "策略里出现了集合竞价、盘前盘后或夜盘执行语义。平台当前真实执行链路还没有对这类会话阶段建模，不能直接生成可靠可执行版本。",
+        )
     future_rules = [
         (
             "future_reference_low",
@@ -1425,6 +1437,12 @@ def _build_strategy_structured_spec(
         market_scope_label=market_scope_label,
         selected_timeframes=strategy_dsl.get("timeframes", []),
     )
+    ai_unresolved_items = [
+        item.get("title", "")
+        for item in (ai_interpretation or {}).get("unresolved_items", [])
+        if item.get("title")
+    ]
+    ai_field_targets = _build_strategy_ai_field_targets(ai_hints, ai_unresolved_items)
     return {
         "market_scope_label": market_scope_label,
         "market": request.market,
@@ -1453,12 +1471,9 @@ def _build_strategy_structured_spec(
         "unsupported_items": [item["title"] for item in unsupported_items],
         "ai_candidate_summary": (ai_interpretation or {}).get("summary", ""),
         "ai_profile_label": (ai_interpretation or {}).get("llm_profile_label", ""),
-        "ai_unresolved_items": [
-            item.get("title", "")
-            for item in (ai_interpretation or {}).get("unresolved_items", [])
-            if item.get("title")
-        ],
+        "ai_unresolved_items": ai_unresolved_items,
         "ai_structured_hints": ai_hints,
+        "ai_field_targets": ai_field_targets,
     }
 
 
@@ -1525,13 +1540,19 @@ def _build_strategy_hard_validation(
     microstructure_items = [
         item for item in unsupported_items if item.get("id") == "market_microstructure"
     ]
+    external_event_items = [
+        item for item in unsupported_items if item.get("id") == "external_event_dependency"
+    ]
+    session_execution_items = [
+        item for item in unsupported_items if item.get("id") == "session_execution_dependency"
+    ]
     add(
         "unsupported_data_dependency",
         "平台不支持的数据依赖",
-        "pass" if not microstructure_items else "fail",
-        "当前表达没有依赖平台未接入的盘口 / 逐笔 / L2 数据。"
-        if not microstructure_items
-        else "当前策略依赖盘口 / 逐笔 / L2 数据，平台真值层尚未支持。",
+        "pass" if not (microstructure_items or external_event_items or session_execution_items) else "fail",
+        "当前表达没有依赖平台未接入的数据源或执行会话。"
+        if not (microstructure_items or external_event_items or session_execution_items)
+        else "当前策略依赖了平台真值层尚未支持的数据源或执行会话，例如盘口/L2、实时公告新闻、集合竞价或盘前盘后执行。",
     )
 
     add(
@@ -1746,6 +1767,43 @@ def _build_strategy_ai_structured_hints(
             if str(item).strip()
         ],
     }
+
+
+def _build_strategy_ai_field_targets(ai_hints: dict[str, Any], unresolved_items: list[str]) -> list[dict[str, str]]:
+    targets: list[dict[str, str]] = []
+    seen: set[str] = set()
+
+    def add(field: str, label: str, reason: str) -> None:
+        if field in seen:
+            return
+        seen.add(field)
+        targets.append({"field": field, "label": label, "reason": reason})
+
+    if ai_hints.get("market_scope_hint"):
+        add("market_scope", "市场范围", "AI 已识别出市场范围候选，需要与你选择的市场范围核对。")
+    if ai_hints.get("timeframe_hints"):
+        add("timeframes", "周期设置", "AI 已识别出主周期或观察周期候选，需要与真实执行周期对齐。")
+    if ai_hints.get("data_dependencies"):
+        add("data_dependencies", "数据依赖", "AI 已识别出依赖的数据源或指标，需要确认平台是否支持。")
+    if ai_hints.get("entry_intent"):
+        add("entry_rules", "入场规则", "AI 已提炼出入场意图，建议与你的正式入场规则逐项核对。")
+    if ai_hints.get("filter_intent"):
+        add("filters", "过滤条件", "AI 已提炼出过滤意图，建议确认是否应写入过滤条件而不是主入场信号。")
+    if ai_hints.get("exit_intent"):
+        add("exit_rules", "离场规则", "AI 已提炼出离场意图，建议核对止盈、止损和退出条件。")
+    if ai_hints.get("risk_controls"):
+        add("risk_controls", "风控规则", "AI 已提炼出风控意图，建议确认是否需要固化为止损或仓位约束。")
+    if ai_hints.get("position_intent"):
+        add("position", "仓位规则", "AI 已提炼出仓位或加仓意图，建议确认仓位字段。")
+
+    unresolved_text = " ".join(unresolved_items)
+    if any(marker in unresolved_text for marker in ["量能", "量比", "成交量", "成交额"]):
+        add("entry_rules", "入场规则", "当前量能条件仍未完全量化，入场规则可能还需要补阈值。")
+    if any(marker in unresolved_text for marker in ["环境", "趋势市", "指数", "行业"]):
+        add("filters", "过滤条件", "当前市场环境条件仍不完整，过滤条件需要继续确认。")
+    if any(marker in unresolved_text for marker in ["仓位", "试仓", "加仓", "分批"]):
+        add("position", "仓位规则", "当前仓位与加仓条件仍需补充。")
+    return targets
 
 
 def _build_strategy_field_mapping(
