@@ -2701,6 +2701,7 @@ class QuantPlatformApiTests(unittest.TestCase):
                     },
                 }
             ],
+            daily_context_by_trade_id={"trade_1": {"trend_regime": "trend"}},
             minute_context_by_trade_id={},
             fundamental_context_by_trade_id={},
         )
@@ -2713,6 +2714,8 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertIn("top_candidates", stability)
         self.assertTrue(stability["top_candidates"])
         self.assertIn("focus", stability["top_candidates"][0])
+        self.assertIn("rolling_windows", stability)
+        self.assertIn("market_regime_windows", stability)
 
     def test_replay_objective_counterfactual_summary_links_selected_patch(self) -> None:
         class FakeMarketDataService:
@@ -2789,6 +2792,84 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertEqual(1, summary["skipped_count"])
         self.assertTrue(summary["cases"])
         self.assertEqual("skipped", summary["cases"][0]["result_type"])
+
+    def test_replay_objective_counterfactual_summary_counts_full_loss_sample(self) -> None:
+        class FakeMarketDataService:
+            def load_daily_bars(self, *, ts_code, start_date, end_date, adjustment_mode):
+                return (
+                    [
+                        MarketBar(
+                            ts_code=ts_code,
+                            asset_type="stock",
+                            adjustment_mode="qfq",
+                            trade_date="2024-05-01",
+                            open=10.0,
+                            high=10.2,
+                            low=9.8,
+                            close=9.9,
+                            volume=1000,
+                            amount=10000,
+                            pct_chg=0.0,
+                            turnover=1.0,
+                            data_source="internal_clickhouse_dwd",
+                            fetched_at="2026-04-09T00:00:00",
+                        ),
+                        MarketBar(
+                            ts_code=ts_code,
+                            asset_type="stock",
+                            adjustment_mode="qfq",
+                            trade_date="2024-05-02",
+                            open=9.9,
+                            high=10.0,
+                            low=9.5,
+                            close=9.6,
+                            volume=1200,
+                            amount=11000,
+                            pct_chg=0.0,
+                            turnover=1.2,
+                            data_source="internal_clickhouse_dwd",
+                            fetched_at="2026-04-09T00:00:00",
+                        ),
+                    ],
+                    {"provider": "internal_clickhouse_dwd", "status": "ready"},
+                )
+
+            def load_minute_window(self, *, ts_code, start_time, end_time, adjustment_mode):
+                return [], {"provider": "internal_clickhouse_dwd", "status": "unavailable"}
+
+        records = [
+            TradeRecordItem(
+                trade_id="loss_1",
+                symbol="600519.SH",
+                side="long",
+                entry_time=datetime.fromisoformat("2024-05-01T09:35:00+08:00"),
+                exit_time=datetime.fromisoformat("2024-05-02T15:00:00+08:00"),
+                pnl=-320.0,
+                entry_price=10.4,
+                exit_price=9.82,
+            ),
+            TradeRecordItem(
+                trade_id="loss_2",
+                symbol="000001.SZ",
+                side="long",
+                entry_time=datetime.fromisoformat("2024-05-01T09:35:00+08:00"),
+                exit_time=datetime.fromisoformat("2024-05-02T15:00:00+08:00"),
+                pnl=-180.0,
+                entry_price=8.4,
+                exit_price=8.1,
+            ),
+        ]
+        summary = _build_replay_objective_counterfactual_summary(
+            records=records,
+            replay_market="cn_a_share",
+            market_data_service=FakeMarketDataService(),
+            selected_patch={"filters": {}, "risk": {"max_holding_bars": 2, "stop_loss_pct": -0.02}},
+            minute_context_by_trade_id={},
+            fundamental_context_by_trade_id={},
+        )
+
+        self.assertEqual(2, summary["considered_count"])
+        self.assertLessEqual(len(summary["cases"]), 5)
 
     def test_replay_analysis_returns_analysis_scope_and_daily_context_features(self) -> None:
         client = self._build_client()
@@ -3116,6 +3197,7 @@ class QuantPlatformApiTests(unittest.TestCase):
                     },
                 }
             ],
+            daily_context_by_trade_id={"trade_1": {"trend_regime": "trend"}},
             minute_context_by_trade_id={"trade_1": {"first_15m_return_pct": 0.2, "close_position_pct": 72.0, "up_bar_ratio": 0.65}},
             fundamental_context_by_trade_id={"trade_1": {"pe_ttm": 18.0, "pb": 2.1, "roe": 15.0, "grossprofit_margin": 35.0, "op_yoy": 12.0, "debt_to_assets": 32.0}},
         )
@@ -3225,6 +3307,7 @@ class QuantPlatformApiTests(unittest.TestCase):
                     "dsl_patch": {"risk": {"max_holding_bars": 2, "stop_loss_pct": -0.02}},
                 }
             ],
+            daily_context_by_trade_id={"trade_1": {"trend_regime": "range"}},
             minute_context_by_trade_id={},
             fundamental_context_by_trade_id={},
         )
@@ -3350,6 +3433,7 @@ class QuantPlatformApiTests(unittest.TestCase):
                     "dsl_patch": {"risk": {"max_holding_bars": 2, "take_profit_pct": 0.06, "stop_loss_pct": -0.02}},
                 }
             ],
+            daily_context_by_trade_id={"trade_2": {"trend_regime": "trend"}},
             minute_context_by_trade_id={},
             fundamental_context_by_trade_id={},
         )

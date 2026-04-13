@@ -6480,6 +6480,7 @@ def _build_replay_objective_versions(
             objective=spec["objective"],
             market_data_service=market_data_service,
             suggestion_rules=suggestion_rules,
+            daily_context_by_trade_id=daily_context_by_trade_id,
             minute_context_by_trade_id=minute_context_by_trade_id,
             fundamental_context_by_trade_id=fundamental_context_by_trade_id,
         )
@@ -6594,7 +6595,7 @@ def _build_replay_objective_counterfactual_summary(
     losing_records = sorted(
         [item for item in records if item.pnl < 0],
         key=lambda item: item.pnl,
-    )[:3]
+    )
     if not losing_records:
         return {
             "summary": "当前样本没有亏损单，暂不需要单笔反事实联动。",
@@ -6670,7 +6671,7 @@ def _build_replay_objective_counterfactual_summary(
         "improved_count": improved_count,
         "skipped_count": skipped_count,
         "worsened_count": worsened_count,
-        "cases": cases,
+        "cases": cases[:5],
         "available": True,
     }
 
@@ -6947,6 +6948,7 @@ def _rerun_replay_records_on_market_data(
     objective: str,
     market_data_service: MarketDataService | None,
     suggestion_rules: list[dict[str, Any]],
+    daily_context_by_trade_id: dict[str, dict[str, Any]],
     minute_context_by_trade_id: dict[str, dict[str, Any]],
     fundamental_context_by_trade_id: dict[str, dict[str, Any]],
 ) -> dict[str, Any] | None:
@@ -6963,6 +6965,7 @@ def _rerun_replay_records_on_market_data(
         objective=objective,
         market_data_service=market_data_service,
         base_patch=combined_patch,
+        daily_context_by_trade_id=daily_context_by_trade_id,
         minute_context_by_trade_id=minute_context_by_trade_id,
         fundamental_context_by_trade_id=fundamental_context_by_trade_id,
     )
@@ -7047,6 +7050,7 @@ def _optimize_replay_rule_patch(
     objective: str,
     market_data_service: MarketDataService,
     base_patch: dict[str, Any],
+    daily_context_by_trade_id: dict[str, dict[str, Any]],
     minute_context_by_trade_id: dict[str, dict[str, Any]],
     fundamental_context_by_trade_id: dict[str, dict[str, Any]],
 ) -> tuple[dict[str, Any], int, dict[str, Any]]:
@@ -7148,17 +7152,36 @@ def _optimize_replay_rule_patch(
         return base_patch, len(variants), _build_replay_parameter_stability([])
     ranked_candidates = sorted(scored_candidates, key=lambda item: float(item["score"]), reverse=True)
     best_patch = ranked_candidates[0]["patch"]
-    parameter_stability = _build_replay_parameter_stability(ranked_candidates)
+    parameter_stability = _build_replay_parameter_stability(
+        ranked_candidates,
+        records=records,
+        selected_patch=best_patch,
+        market_data_service=market_data_service,
+        daily_context_by_trade_id=daily_context_by_trade_id,
+        minute_context_by_trade_id=minute_context_by_trade_id,
+        fundamental_context_by_trade_id=fundamental_context_by_trade_id,
+    )
     return best_patch, len(variants), parameter_stability
 
 
-def _build_replay_parameter_stability(scored_candidates: list[dict[str, Any]]) -> dict[str, Any]:
+def _build_replay_parameter_stability(
+    scored_candidates: list[dict[str, Any]],
+    *,
+    records: list[TradeRecordItem] | None = None,
+    selected_patch: dict[str, Any] | None = None,
+    market_data_service: MarketDataService | None = None,
+    daily_context_by_trade_id: dict[str, dict[str, Any]] | None = None,
+    minute_context_by_trade_id: dict[str, dict[str, Any]] | None = None,
+    fundamental_context_by_trade_id: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     if not scored_candidates:
         return {
             "label": "暂无稳定性结论",
             "summary": "当前没有足够的候选版本可用于稳定性判断。",
             "near_best_count": 0,
             "top_candidates": [],
+            "rolling_windows": [],
+            "market_regime_windows": [],
         }
     best_score = float(scored_candidates[0]["score"])
     threshold = max(abs(best_score) * 0.05, 0.05)
@@ -7196,7 +7219,129 @@ def _build_replay_parameter_stability(scored_candidates: list[dict[str, Any]]) -
         "summary": summary,
         "near_best_count": near_best_count,
         "top_candidates": top_candidates,
+        "rolling_windows": _build_replay_rolling_window_stability(
+            records=records or [],
+            selected_patch=selected_patch or {},
+            market_data_service=market_data_service,
+            minute_context_by_trade_id=minute_context_by_trade_id or {},
+            fundamental_context_by_trade_id=fundamental_context_by_trade_id or {},
+        ),
+        "market_regime_windows": _build_replay_market_regime_stability(
+            records=records or [],
+            selected_patch=selected_patch or {},
+            market_data_service=market_data_service,
+            daily_context_by_trade_id=daily_context_by_trade_id or {},
+            minute_context_by_trade_id=minute_context_by_trade_id or {},
+            fundamental_context_by_trade_id=fundamental_context_by_trade_id or {},
+        ),
     }
+
+
+def _build_replay_rolling_window_stability(
+    *,
+    records: list[TradeRecordItem],
+    selected_patch: dict[str, Any],
+    market_data_service: MarketDataService | None,
+    minute_context_by_trade_id: dict[str, dict[str, Any]],
+    fundamental_context_by_trade_id: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if market_data_service is None or len(records) < 2:
+        return []
+    ordered = sorted(records, key=lambda item: item.exit_time or item.entry_time)
+    chunk_size = max(1, math.ceil(len(ordered) / 3))
+    windows: list[dict[str, Any]] = []
+    for index in range(0, len(ordered), chunk_size):
+        chunk = ordered[index:index + chunk_size]
+        if not chunk:
+            continue
+        rows = _rerun_replay_records_with_patch(
+            records=chunk,
+            selected_patch=selected_patch,
+            market_data_service=market_data_service,
+            minute_context_by_trade_id=minute_context_by_trade_id,
+            fundamental_context_by_trade_id=fundamental_context_by_trade_id,
+        )
+        if not rows:
+            continue
+        metrics = _build_replay_trade_rows_metrics(rows)
+        windows.append(
+            {
+                "label": f"窗口 {len(windows) + 1}",
+                "trade_count": metrics["trade_count"],
+                "win_rate_pct": metrics["win_rate_pct"],
+                "max_drawdown_pct": metrics["max_drawdown_pct"],
+                "sharpe_like": metrics["sharpe_like"],
+                "date_range": (
+                    f"{(chunk[0].entry_time).date().isoformat()} ~ "
+                    f"{((chunk[-1].exit_time or chunk[-1].entry_time).date().isoformat())}"
+                ),
+            }
+        )
+    return windows
+
+
+def _build_replay_market_regime_stability(
+    *,
+    records: list[TradeRecordItem],
+    selected_patch: dict[str, Any],
+    market_data_service: MarketDataService | None,
+    daily_context_by_trade_id: dict[str, dict[str, Any]],
+    minute_context_by_trade_id: dict[str, dict[str, Any]],
+    fundamental_context_by_trade_id: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if market_data_service is None or not records:
+        return []
+    buckets: dict[str, list[TradeRecordItem]] = {"trend": [], "range": [], "unknown": []}
+    for item in records:
+        regime = (daily_context_by_trade_id.get(item.trade_id) or {}).get("trend_regime") or "unknown"
+        buckets.setdefault(regime, []).append(item)
+    results: list[dict[str, Any]] = []
+    for regime, bucket in buckets.items():
+        if not bucket:
+            continue
+        rows = _rerun_replay_records_with_patch(
+            records=bucket,
+            selected_patch=selected_patch,
+            market_data_service=market_data_service,
+            minute_context_by_trade_id=minute_context_by_trade_id,
+            fundamental_context_by_trade_id=fundamental_context_by_trade_id,
+        )
+        if not rows:
+            continue
+        metrics = _build_replay_trade_rows_metrics(rows)
+        label = {"trend": "趋势环境", "range": "震荡环境", "unknown": "未识别环境"}.get(regime, regime)
+        results.append(
+            {
+                "label": label,
+                "trade_count": metrics["trade_count"],
+                "win_rate_pct": metrics["win_rate_pct"],
+                "max_drawdown_pct": metrics["max_drawdown_pct"],
+                "sharpe_like": metrics["sharpe_like"],
+            }
+        )
+    return results
+
+
+def _rerun_replay_records_with_patch(
+    *,
+    records: list[TradeRecordItem],
+    selected_patch: dict[str, Any],
+    market_data_service: MarketDataService,
+    minute_context_by_trade_id: dict[str, dict[str, Any]],
+    fundamental_context_by_trade_id: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for item in sorted(records, key=lambda row: row.exit_time or row.entry_time):
+        rerun_trade = _rerun_single_replay_trade(
+            item=item,
+            market_data_service=market_data_service,
+            rule_patch=selected_patch,
+            minute_context=minute_context_by_trade_id.get(item.trade_id),
+            fundamental_context=fundamental_context_by_trade_id.get(item.trade_id),
+        )
+        if rerun_trade is not None:
+            rows.append(rerun_trade)
+    return rows
 
 
 def _summarize_replay_patch_focus(patch: dict[str, Any]) -> dict[str, Any]:

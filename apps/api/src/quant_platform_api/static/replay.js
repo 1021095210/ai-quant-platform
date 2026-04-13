@@ -633,6 +633,8 @@ function renderReplayParameterStability(stability) {
           `
           : ""
       }
+      ${renderReplayRollingWindows(stability.rolling_windows || [], "滚动窗口稳定性")}
+      ${renderReplayRollingWindows(stability.market_regime_windows || [], "市场状态稳定性")}
     </div>
   `;
 }
@@ -643,6 +645,30 @@ function renderReplayPatchFocus(focus) {
     return "暂无关键参数摘要";
   }
   return entries.map(([key, value]) => `${key}=${value}`).join("；");
+}
+
+function renderReplayRollingWindows(items, title) {
+  if (!items.length) {
+    return "";
+  }
+  return `
+    <div class="result-box light" style="margin-top:12px;">
+      <strong>${title}</strong>
+      <div class="list" style="margin-top:10px;">
+        ${items
+          .map(
+            (item) => `
+              <div class="list-item compact-item">
+                <strong>${item.label}</strong>
+                <div class="muted-note">${item.date_range ? `${item.date_range} · ` : ""}交易数 ${item.trade_count}</div>
+                <div class="muted-note">胜率 ${item.win_rate_pct}% · 回撤 ${item.max_drawdown_pct}% · 夏普近似 ${item.sharpe_like}</div>
+              </div>
+            `,
+          )
+          .join("")}
+      </div>
+    </div>
+  `;
 }
 
 function renderReplayTradeSetChanges(changes) {
