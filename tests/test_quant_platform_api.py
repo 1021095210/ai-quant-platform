@@ -35,6 +35,7 @@ try:
     from quant_platform_api.services import (
         FinancialAssistantService,
         MentorService,
+        TradeUploadService,
         _build_replay_counterfactual_cases,
         _build_replay_counterfactual_template_summary,
         _build_replay_context_suggestions,
@@ -60,6 +61,7 @@ except ModuleNotFoundError:  # pragma: no cover - handled by skip
     TradeRecordItem = None
     FinancialAssistantService = None
     MentorService = None
+    TradeUploadService = None
     _build_replay_counterfactual_cases = None
     _build_replay_counterfactual_template_summary = None
     _build_replay_context_suggestions = None
@@ -226,6 +228,19 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertIn("Secure", set_cookie)
         self.assertIn("Domain=quant.example.com", set_cookie)
         self.assertIn("SameSite=strict", set_cookie)
+
+    def test_login_validation_error_returns_400_for_form_payload(self) -> None:
+        client = self._build_client()
+
+        response = client.post(
+            "/api/v1/auth/login",
+            data={"username": "1111", "password": "618618"},
+        )
+
+        self.assertEqual(400, response.status_code)
+        payload = response.json()
+        self.assertEqual("INVALID_ARGUMENT", payload["error"]["code"])
+        self.assertIn("errors", payload["error"]["details"])
 
     def test_initial_admin_seed_skips_duplicate_contact(self) -> None:
         client = self._build_client(
@@ -4466,6 +4481,88 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertTrue(all("长文字智能识别" in item["notes"] for item in data["records"]))
         self.assertEqual(2, data["group_count"])
         self.assertEqual("当日开盘价买入", data["group_summaries"][0]["entry_rule"])
+
+    def test_manual_text_parse_reuses_daily_bar_cache_for_repeated_symbols(self) -> None:
+        class StubMarketDataService:
+            def __init__(self) -> None:
+                self.calls: list[tuple[str, str, str]] = []
+
+            def load_daily_bars(self, *, ts_code, start_date, end_date, adjustment_mode):
+                self.calls.append((ts_code, start_date.isoformat(), end_date.isoformat()))
+                bars = [
+                    MarketBar(
+                        ts_code=ts_code,
+                        asset_type="stock",
+                        adjustment_mode=adjustment_mode,
+                        trade_date="2025-07-25",
+                        open=10.0,
+                        high=10.8,
+                        low=9.8,
+                        close=10.5,
+                        volume=1000,
+                        amount=10000,
+                        pct_chg=0.0,
+                        turnover=1.0,
+                        data_source="stub",
+                        fetched_at="2026-04-13T00:00:00+00:00",
+                    ),
+                    MarketBar(
+                        ts_code=ts_code,
+                        asset_type="stock",
+                        adjustment_mode=adjustment_mode,
+                        trade_date="2025-08-01",
+                        open=10.2,
+                        high=10.9,
+                        low=10.1,
+                        close=10.7,
+                        volume=1200,
+                        amount=12000,
+                        pct_chg=0.0,
+                        turnover=1.0,
+                        data_source="stub",
+                        fetched_at="2026-04-13T00:00:00+00:00",
+                    ),
+                    MarketBar(
+                        ts_code=ts_code,
+                        asset_type="stock",
+                        adjustment_mode=adjustment_mode,
+                        trade_date="2025-08-04",
+                        open=10.4,
+                        high=11.0,
+                        low=10.0,
+                        close=10.6,
+                        volume=1500,
+                        amount=15000,
+                        pct_chg=0.0,
+                        turnover=1.0,
+                        data_source="stub",
+                        fetched_at="2026-04-13T00:00:00+00:00",
+                    ),
+                ]
+                return bars, {"provider": "stub"}
+
+        service = TradeUploadService(
+            Mock(),
+            market_data_service=StubMarketDataService(),
+            settings=Settings(),
+        )
+
+        result = service.parse_manual_trade_text(
+            text=(
+                "2025-07-25\n"
+                "标的：603590.SH\n\n"
+                "2025-08-01\n"
+                "标的：603590.SH\n\n"
+                "以上日期买入，买入方式：当日开盘价买入，卖出方式：次日收盘价卖出"
+            ),
+            market="cn_equity",
+            adjustment_mode="qfq",
+            user_id="user_test",
+            workspace_id="ws_test",
+        )
+
+        self.assertEqual(2, result["record_count"])
+        self.assertEqual(1, len(service._market_data_service.calls))
 
     def test_manual_text_parse_endpoint_supports_per_group_rules(self) -> None:
         client = self._build_client()

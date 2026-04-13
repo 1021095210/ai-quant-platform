@@ -2128,6 +2128,20 @@ class TaskExecutionError(RuntimeError):
         self.message = message
 
 
+def make_json_safe(value: Any) -> Any:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {str(key): make_json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [make_json_safe(item) for item in value]
+    return str(value)
+
+
 class StrategyService:
     def __init__(
         self,
@@ -2874,7 +2888,7 @@ class AppLogService:
                 user_id=user.user_id if user else None,
                 username=user.username if user else None,
                 workspace_id=user.workspace_id if user else None,
-                details=details or {},
+                details=make_json_safe(details or {}),
             )
         )
 
@@ -3725,12 +3739,17 @@ class TradeUploadService:
             market=market,
         )
         if len(grouped_candidates) > 1:
+            cache_start_date = min(item["trade_date"] for item in grouped_candidates) - timedelta(days=40)
+            cache_end_date = max(item["trade_date"] for item in grouped_candidates) + timedelta(days=30)
             return self._build_grouped_text_trade_records(
                 grouped_candidates=grouped_candidates,
                 text=normalized_text,
                 market=market,
                 adjustment_mode=adjustment_mode,
                 llm_parse=llm_parse,
+                bar_cache={},
+                cache_start_date=cache_start_date,
+                cache_end_date=cache_end_date,
             )
 
         trade_date = self._extract_labeled_trade_date(normalized_text, "买入日期") or self._extract_trade_date(normalized_text)
@@ -3761,6 +3780,9 @@ class TradeUploadService:
             or self._extract_iso_date(ai_single.get("explicit_exit_date") if ai_single else None)
         )
 
+        cache_start_date = trade_date - timedelta(days=40)
+        cache_end_date = trade_date + timedelta(days=30)
+        bar_cache: dict[tuple[str, str, date, date], tuple[list[Any], dict[str, Any]]] = {}
         records = [
             self._build_text_trade_record(
                 trade_date=trade_date,
@@ -3772,6 +3794,9 @@ class TradeUploadService:
                 explicit_exit_date=explicit_exit_date,
                 index=index,
                 llm_used=bool(llm_parse),
+                bar_cache=bar_cache,
+                cache_start_date=cache_start_date,
+                cache_end_date=cache_end_date,
             )
             for index, symbol in enumerate(symbols, start=1)
         ]
@@ -3803,6 +3828,9 @@ class TradeUploadService:
         market: str,
         adjustment_mode: str,
         llm_parse: dict[str, Any] | None = None,
+        bar_cache: dict[tuple[str, str, date, date], tuple[list[Any], dict[str, Any]]] | None = None,
+        cache_start_date: date | None = None,
+        cache_end_date: date | None = None,
     ) -> dict[str, Any]:
         global_entry_rule = (
             self._extract_entry_rule_or_none(text)
@@ -3846,6 +3874,9 @@ class TradeUploadService:
                     explicit_exit_date=explicit_exit_date,
                     index=len(records) + 1,
                     llm_used=bool(llm_parse),
+                    bar_cache=bar_cache,
+                    cache_start_date=cache_start_date,
+                    cache_end_date=cache_end_date,
                 )
                 records.append(record)
                 group_records.append(record)
@@ -3935,11 +3966,17 @@ class TradeUploadService:
         explicit_exit_date: date | None,
         index: int,
         llm_used: bool = False,
+        bar_cache: dict[tuple[str, str, date, date], tuple[list[Any], dict[str, Any]]] | None = None,
+        cache_start_date: date | None = None,
+        cache_end_date: date | None = None,
     ) -> TradeRecordItem:
         bars, data_source = self._load_trade_bars(
             symbol=symbol,
             trade_date=trade_date,
             adjustment_mode=adjustment_mode,
+            bar_cache=bar_cache,
+            cache_start_date=cache_start_date,
+            cache_end_date=cache_end_date,
         )
         entry_bar = self._find_bar_by_offset(
             bars,
@@ -4011,17 +4048,26 @@ class TradeUploadService:
         symbol: str,
         trade_date: date,
         adjustment_mode: str,
+        bar_cache: dict[tuple[str, str, date, date], tuple[list[Any], dict[str, Any]]] | None = None,
+        cache_start_date: date | None = None,
+        cache_end_date: date | None = None,
     ) -> tuple[list[Any], dict[str, Any]]:
         if self._market_data_service is None:
             raise TaskExecutionError("INTERNAL_ERROR", "market data service unavailable")
-        start_date = trade_date - timedelta(days=40)
-        end_date = trade_date + timedelta(days=30)
-        return self._market_data_service.load_daily_bars(
+        start_date = cache_start_date or trade_date - timedelta(days=40)
+        end_date = cache_end_date or trade_date + timedelta(days=30)
+        cache_key = (symbol, adjustment_mode, start_date, end_date)
+        if bar_cache is not None and cache_key in bar_cache:
+            return bar_cache[cache_key]
+        loaded = self._market_data_service.load_daily_bars(
             ts_code=symbol,
             start_date=start_date,
             end_date=end_date,
             adjustment_mode=adjustment_mode,
         )
+        if bar_cache is not None:
+            bar_cache[cache_key] = loaded
+        return loaded
 
     def _find_first_bar_on_or_after(self, bars: list[Any], trade_date: date) -> Any | None:
         for bar in bars:

@@ -298,7 +298,14 @@ async function runBacktest() {
         },
       },
       data_snapshot: {
-        dataset_snapshot_ref: `${nodes.market.value}_${nodes.projectSelect.selectedOptions[0]?.dataset.backtestTimeframe || "1d"}_${nodes.from.value}_${nodes.to.value}`,
+        dataset_snapshot_ref: [
+          nodes.market.value,
+          nodes.assetType.value,
+          nodes.projectSelect.selectedOptions[0]?.dataset.backtestTimeframe || "1d",
+          nodes.adjustmentMode.value,
+          nodes.from.value,
+          nodes.to.value,
+        ].join("_"),
       },
     }),
   });
