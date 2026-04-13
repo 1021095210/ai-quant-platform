@@ -2716,6 +2716,7 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertIn("focus", stability["top_candidates"][0])
         self.assertIn("neighbor_candidates", stability)
         self.assertIn("heatmap_axes", stability)
+        self.assertIn("heatmap_pairs", stability)
         self.assertIn("sensitivity_axes", stability)
         self.assertIn("rolling_windows", stability)
         self.assertIn("market_regime_windows", stability)
@@ -2975,6 +2976,7 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertTrue(axes)
         self.assertTrue(rerun["search_summary"]["parameter_stability"]["neighbor_candidates"])
         self.assertTrue(rerun["search_summary"]["parameter_stability"]["heatmap_axes"])
+        self.assertTrue(rerun["search_summary"]["parameter_stability"]["heatmap_pairs"])
 
     def test_replay_counterfactual_cases_include_extended_templates(self) -> None:
         class FakeMarketDataService:
