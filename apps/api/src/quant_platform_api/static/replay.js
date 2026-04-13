@@ -534,6 +534,7 @@ function renderReplayObjectiveDetail() {
       <div class="muted-note">${current.comparison_note || ""}</div>
       <div class="muted-note" style="margin-top:8px;">核心调整：${(current.key_adjustments || []).join("；") || "暂无"}</div>
       ${renderReplayObjectiveMetrics(current.metrics || {}, current.baseline_metrics || {})}
+      ${renderReplayParameterStability(current.search_summary?.parameter_stability || {})}
       ${renderReplayTradeSetChanges(current.trade_set_changes || {})}
       <div class="result-box light" style="margin-top:12px;">
         <strong>收益曲线</strong>
@@ -561,6 +562,48 @@ function renderReplayObjectiveDetail() {
       </div>
     </div>
   `;
+}
+
+function renderReplayParameterStability(stability) {
+  if (!stability || Object.keys(stability).length === 0) {
+    return "";
+  }
+  const topCandidates = stability.top_candidates || [];
+  return `
+    <div class="result-box light" style="margin-top:12px;">
+      <strong>参数稳定性</strong>
+      <div class="muted-note" style="margin-top:6px;">${stability.label || "暂无稳定性结论"}</div>
+      <div class="muted-note">${stability.summary || ""}</div>
+      <div class="muted-note">接近当前最优的候选版本：${stability.near_best_count ?? 0} 组</div>
+      ${
+        topCandidates.length
+          ? `
+            <div class="list" style="margin-top:12px;">
+              ${topCandidates
+                .map(
+                  (item, index) => `
+                    <div class="list-item compact-item">
+                      <strong>候选 ${index + 1}</strong>
+                      <div class="muted-note">评分 ${item.score} · 交易数 ${item.trade_count} · 胜率 ${item.win_rate_pct}% · 回撤 ${item.max_drawdown_pct}% · 夏普近似 ${item.sharpe_like}</div>
+                      <div class="muted-note">关键参数：${renderReplayPatchFocus(item.focus || {})}</div>
+                    </div>
+                  `,
+                )
+                .join("")}
+            </div>
+          `
+          : ""
+      }
+    </div>
+  `;
+}
+
+function renderReplayPatchFocus(focus) {
+  const entries = Object.entries(focus || {});
+  if (!entries.length) {
+    return "暂无关键参数摘要";
+  }
+  return entries.map(([key, value]) => `${key}=${value}`).join("；");
 }
 
 function renderReplayTradeSetChanges(changes) {

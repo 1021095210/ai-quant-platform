@@ -6505,6 +6505,7 @@ def _build_replay_objective_versions(
                 "mode": "fallback",
                 "evaluated_variants": 0,
                 "selected_reason": "当前无真实行情重放，保留样本筛选回放结果。",
+                "parameter_stability": _build_replay_parameter_stability([]),
             }
             simulation_mode = "sample_scored_replay"
         trade_set_changes = _build_replay_trade_set_changes(
@@ -6843,7 +6844,7 @@ def _rerun_replay_records_on_market_data(
         suggestion_rules=suggestion_rules,
         objective=objective,
     )
-    optimized_patch, evaluated_variants = _optimize_replay_rule_patch(
+    optimized_patch, evaluated_variants, parameter_stability = _optimize_replay_rule_patch(
         records=records,
         replay_market=replay_market,
         objective=objective,
@@ -6893,6 +6894,7 @@ def _rerun_replay_records_on_market_data(
                 f"已按 {objective} 目标从 {evaluated_variants} 个候选参数版本中选出当前最优版本。"
             ),
             "objective_score": round(_score_replay_objective_metrics(metrics, objective=objective), 4),
+            "parameter_stability": parameter_stability,
         },
     }
 
@@ -6934,9 +6936,9 @@ def _optimize_replay_rule_patch(
     base_patch: dict[str, Any],
     minute_context_by_trade_id: dict[str, dict[str, Any]],
     fundamental_context_by_trade_id: dict[str, dict[str, Any]],
-) -> tuple[dict[str, Any], int]:
+) -> tuple[dict[str, Any], int, dict[str, Any]]:
     if replay_market != "cn_a_share":
-        return base_patch, 0
+        return base_patch, 0, _build_replay_parameter_stability([])
 
     risk = base_patch.get("risk") or {}
     filters = base_patch.get("filters") or {}
@@ -7004,7 +7006,7 @@ def _optimize_replay_rule_patch(
             [-5, 0, 5],
         )
 
-    scored_candidates: list[tuple[float, dict[str, Any]]] = []
+    scored_candidates: list[dict[str, Any]] = []
     variants = _limited_replay_patch_variants(base_patch=base_patch, candidates=candidates, limit=24)
     for patch in variants:
         rerun_rows: list[dict[str, Any]] = []
@@ -7022,11 +7024,102 @@ def _optimize_replay_rule_patch(
             continue
         metrics = _build_replay_trade_rows_metrics(rerun_rows)
         score = _score_replay_objective_metrics(metrics, objective=objective)
-        scored_candidates.append((score, patch))
+        scored_candidates.append(
+            {
+                "score": score,
+                "patch": patch,
+                "metrics": metrics,
+            }
+        )
     if not scored_candidates:
-        return base_patch, len(variants)
-    _, best_patch = max(scored_candidates, key=lambda item: item[0])
-    return best_patch, len(variants)
+        return base_patch, len(variants), _build_replay_parameter_stability([])
+    ranked_candidates = sorted(scored_candidates, key=lambda item: float(item["score"]), reverse=True)
+    best_patch = ranked_candidates[0]["patch"]
+    parameter_stability = _build_replay_parameter_stability(ranked_candidates)
+    return best_patch, len(variants), parameter_stability
+
+
+def _build_replay_parameter_stability(scored_candidates: list[dict[str, Any]]) -> dict[str, Any]:
+    if not scored_candidates:
+        return {
+            "label": "暂无稳定性结论",
+            "summary": "当前没有足够的候选版本可用于稳定性判断。",
+            "near_best_count": 0,
+            "top_candidates": [],
+        }
+    best_score = float(scored_candidates[0]["score"])
+    threshold = max(abs(best_score) * 0.05, 0.05)
+    near_best = [
+        item for item in scored_candidates if (best_score - float(item["score"])) <= threshold
+    ]
+    near_best_count = len(near_best)
+    if len(scored_candidates) < 3:
+        label = "候选版本偏少"
+        summary = "当前可比较的候选版本较少，稳定性判断可信度有限。"
+    elif near_best_count >= 3:
+        label = "参数稳定区较宽"
+        summary = "最优版本附近还有多组接近结果，当前参数不属于特别尖锐的单点。"
+    elif near_best_count == 2:
+        label = "存在相邻可用参数"
+        summary = "当前最优值附近还有相邻候选可用，但稳定区仍偏窄。"
+    else:
+        label = "最优点偏尖锐"
+        summary = "当前最优结果与邻近候选差距较大，需要警惕过拟合。"
+    top_candidates = []
+    for item in scored_candidates[:3]:
+        top_candidates.append(
+            {
+                "score": round(float(item["score"]), 4),
+                "focus": _summarize_replay_patch_focus(item["patch"]),
+                "trade_count": int(item["metrics"].get("trade_count") or 0),
+                "win_rate_pct": round(float(item["metrics"].get("win_rate_pct") or 0.0), 2),
+                "max_drawdown_pct": round(float(item["metrics"].get("max_drawdown_pct") or 0.0), 2),
+                "sharpe_like": round(float(item["metrics"].get("sharpe_like") or 0.0), 2),
+                "total_pnl": round(float(item["metrics"].get("total_pnl") or 0.0), 2),
+            }
+        )
+    return {
+        "label": label,
+        "summary": summary,
+        "near_best_count": near_best_count,
+        "top_candidates": top_candidates,
+    }
+
+
+def _summarize_replay_patch_focus(patch: dict[str, Any]) -> dict[str, Any]:
+    risk = patch.get("risk") or {}
+    filters = patch.get("filters") or {}
+    summary: dict[str, Any] = {}
+    if "stop_loss_pct" in risk:
+        summary["stop_loss_pct"] = risk.get("stop_loss_pct")
+    if "take_profit_pct" in risk:
+        summary["take_profit_pct"] = risk.get("take_profit_pct")
+    if "max_holding_bars" in risk:
+        summary["max_holding_bars"] = risk.get("max_holding_bars")
+    intraday_entry_timing = filters.get("intraday_entry_timing") or {}
+    intraday_structure = filters.get("intraday_structure") or {}
+    quality_filter = filters.get("quality_filter") or {}
+    extension_guard = filters.get("extension_guard") or {}
+    volume_heat_guard = filters.get("volume_heat_guard") or {}
+    if "max_first_15m_return_pct" in intraday_entry_timing:
+        summary["max_first_15m_return_pct"] = intraday_entry_timing.get("max_first_15m_return_pct")
+    if "min_first_15m_return_pct" in intraday_entry_timing:
+        summary["min_first_15m_return_pct"] = intraday_entry_timing.get("min_first_15m_return_pct")
+    if "min_last_15m_return_pct" in intraday_entry_timing:
+        summary["min_last_15m_return_pct"] = intraday_entry_timing.get("min_last_15m_return_pct")
+    if "max_peak_to_close_drawdown_pct" in intraday_structure:
+        summary["max_peak_to_close_drawdown_pct"] = intraday_structure.get("max_peak_to_close_drawdown_pct")
+    if "max_prior_return_pct" in extension_guard:
+        summary["max_prior_return_pct"] = extension_guard.get("max_prior_return_pct")
+    if "max_value" in volume_heat_guard:
+        summary["max_volume_ratio"] = volume_heat_guard.get("max_value")
+    if "min_roe" in quality_filter:
+        summary["min_roe"] = quality_filter.get("min_roe")
+    if "min_grossprofit_margin" in quality_filter:
+        summary["min_grossprofit_margin"] = quality_filter.get("min_grossprofit_margin")
+    if "min_op_yoy" in quality_filter:
+        summary["min_op_yoy"] = quality_filter.get("min_op_yoy")
+    return summary
 
 
 def _candidate_numeric_values(current: Any, defaults: list[Any]) -> list[Any]:
