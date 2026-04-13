@@ -7139,13 +7139,16 @@ def _build_replay_search_linked_counterfactual_summary(
 ) -> dict[str, Any]:
     if market_data_service is None or not candidate_leaderboard:
         return {}
-    focused_candidates = [item for item in candidate_leaderboard[:3] if item.get("patch")]
+    focused_candidates = [item for item in candidate_leaderboard if item.get("patch")]
     if not focused_candidates:
         return {}
     cases: list[dict[str, Any]] = []
     improved_count = 0
     skipped_count = 0
     worsened_count = 0
+    parameter_attribution_buckets: dict[str, dict[str, Any]] = {}
+    winning_candidate_buckets: dict[str, dict[str, Any]] = {}
+    decisiveness_gaps: list[float] = []
     for item in losing_records:
         best_case: dict[str, Any] | None = None
         options: list[dict[str, Any]] = []
@@ -7202,6 +7205,58 @@ def _build_replay_search_linked_counterfactual_summary(
             continue
         options.sort(key=lambda row: float(row.get("pnl_delta") or 0.0), reverse=True)
         best_case["candidate_options"] = options
+        winning_bucket = winning_candidate_buckets.setdefault(
+            str(best_case.get("candidate_label") or "候选版本"),
+            {
+                "candidate_label": str(best_case.get("candidate_label") or "候选版本"),
+                "hit_count": 0,
+                "improved_count": 0,
+                "skipped_count": 0,
+                "worsened_count": 0,
+                "total_pnl_delta": 0.0,
+                "parameters": {},
+            },
+        )
+        winning_bucket["hit_count"] += 1
+        winning_bucket["total_pnl_delta"] += float(best_case.get("pnl_delta") or 0.0)
+        if best_case["result_type"] == "skipped":
+            winning_bucket["skipped_count"] += 1
+        elif float(best_case.get("pnl_delta") or 0.0) > 0:
+            winning_bucket["improved_count"] += 1
+        else:
+            winning_bucket["worsened_count"] += 1
+        if len(options) > 1:
+            decisiveness_gaps.append(
+                round(
+                    float(options[0].get("pnl_delta") or 0.0)
+                    - float(options[1].get("pnl_delta") or 0.0),
+                    2,
+                )
+            )
+        for key, value in (best_case.get("focus") or {}).items():
+            label = str(key)
+            bucket = parameter_attribution_buckets.setdefault(
+                label,
+                {
+                    "parameter": label,
+                    "values": {},
+                    "hit_count": 0,
+                    "improved_count": 0,
+                    "skipped_count": 0,
+                    "worsened_count": 0,
+                    "total_pnl_delta": 0.0,
+                },
+            )
+            bucket["hit_count"] += 1
+            bucket["total_pnl_delta"] += float(best_case.get("pnl_delta") or 0.0)
+            bucket["values"][str(value)] = bucket["values"].get(str(value), 0) + 1
+            winning_bucket["parameters"][label] = winning_bucket["parameters"].get(label, 0) + 1
+            if best_case["result_type"] == "skipped":
+                bucket["skipped_count"] += 1
+            elif float(best_case.get("pnl_delta") or 0.0) > 0:
+                bucket["improved_count"] += 1
+            else:
+                bucket["worsened_count"] += 1
         if best_case["result_type"] == "skipped":
             skipped_count += 1
             if float(best_case["pnl_delta"]) > 0:
@@ -7215,6 +7270,9 @@ def _build_replay_search_linked_counterfactual_summary(
     if not cases:
         return {}
     total_option_count = sum(len(case.get("candidate_options") or []) for case in cases)
+    parameter_attribution = _build_replay_parameter_attribution_summary(
+        parameter_attribution_buckets
+    )
     return {
         "summary": "已对全样本亏损单补充对照前几组参数候选，帮助确认哪些单笔还能继续优化。",
         "considered_count": len(losing_records),
@@ -7224,10 +7282,114 @@ def _build_replay_search_linked_counterfactual_summary(
         "candidate_scan_coverage": {
             "candidate_count_per_trade_avg": round(total_option_count / len(cases), 2) if cases else 0.0,
             "focused_candidate_count": len(focused_candidates),
+            "total_candidate_pool_count": len(candidate_leaderboard),
             "covered_trade_count": len(cases),
         },
+        "winning_candidate_summary": _build_replay_winning_candidate_summary(
+            winning_candidate_buckets,
+            considered_count=len(cases),
+        ),
+        "candidate_decisiveness": _build_replay_candidate_decisiveness_summary(decisiveness_gaps),
+        "parameter_attribution": parameter_attribution,
         "cases": cases,
         "focused_cases": cases[:5],
+    }
+
+
+def _build_replay_parameter_attribution_summary(
+    buckets: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for bucket in buckets.values():
+        hit_count = int(bucket["hit_count"] or 0)
+        if not hit_count:
+            continue
+        top_values = sorted(
+            (
+                {"value": key, "count": count}
+                for key, count in (bucket.get("values") or {}).items()
+            ),
+            key=lambda item: int(item["count"]),
+            reverse=True,
+        )[:3]
+        items.append(
+            {
+                "parameter": bucket["parameter"],
+                "hit_count": hit_count,
+                "improved_count": int(bucket["improved_count"]),
+                "skipped_count": int(bucket["skipped_count"]),
+                "worsened_count": int(bucket["worsened_count"]),
+                "avg_pnl_delta": round(float(bucket["total_pnl_delta"]) / hit_count, 2),
+                "top_values": top_values,
+            }
+        )
+    items.sort(
+        key=lambda item: (
+            int(item["hit_count"]),
+            int(item["improved_count"]) + int(item["skipped_count"]),
+            float(item["avg_pnl_delta"]),
+        ),
+        reverse=True,
+    )
+    return items[:6]
+
+
+def _build_replay_winning_candidate_summary(
+    buckets: dict[str, dict[str, Any]],
+    *,
+    considered_count: int,
+) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for bucket in buckets.values():
+        hit_count = int(bucket["hit_count"] or 0)
+        if not hit_count:
+            continue
+        parameter_focus = sorted(
+            (
+                {"parameter": key, "count": count}
+                for key, count in (bucket.get("parameters") or {}).items()
+            ),
+            key=lambda item: int(item["count"]),
+            reverse=True,
+        )[:3]
+        items.append(
+            {
+                "candidate_label": bucket["candidate_label"],
+                "hit_count": hit_count,
+                "coverage_ratio": round(hit_count / max(considered_count, 1), 2),
+                "improved_count": int(bucket["improved_count"]),
+                "skipped_count": int(bucket["skipped_count"]),
+                "worsened_count": int(bucket["worsened_count"]),
+                "avg_pnl_delta": round(float(bucket["total_pnl_delta"]) / hit_count, 2),
+                "parameter_focus": parameter_focus,
+            }
+        )
+    items.sort(
+        key=lambda item: (
+            int(item["hit_count"]),
+            float(item["avg_pnl_delta"]),
+            int(item["improved_count"]) + int(item["skipped_count"]),
+        ),
+        reverse=True,
+    )
+    return items[:5]
+
+
+def _build_replay_candidate_decisiveness_summary(gaps: list[float]) -> dict[str, Any]:
+    if not gaps:
+        return {}
+    narrow_count = sum(1 for gap in gaps if gap <= 50)
+    clear_count = sum(1 for gap in gaps if gap >= 150)
+    return {
+        "avg_gap": round(sum(gaps) / len(gaps), 2),
+        "narrow_win_count": narrow_count,
+        "clear_win_count": clear_count,
+        "narrow_win_ratio": round(narrow_count / len(gaps), 2),
+        "clear_win_ratio": round(clear_count / len(gaps), 2),
+        "summary": (
+            "如果最优候选与次优候选差距很小，说明当前最优点可能只是险胜；"
+            "如果差距较大，说明当前候选更像稳定胜出。"
+        ),
     }
 
 
