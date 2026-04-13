@@ -534,6 +534,7 @@ function renderReplayObjectiveDetail() {
       <div class="muted-note">${current.comparison_note || ""}</div>
       <div class="muted-note" style="margin-top:8px;">核心调整：${(current.key_adjustments || []).join("；") || "暂无"}</div>
       ${renderReplayObjectiveMetrics(current.metrics || {}, current.baseline_metrics || {})}
+      ${renderReplayTradeSetChanges(current.trade_set_changes || {})}
       <div class="result-box light" style="margin-top:12px;">
         <strong>收益曲线</strong>
         <svg viewBox="0 0 100 100" preserveAspectRatio="none" style="width:100%;height:140px;display:block;margin-top:10px;">
@@ -560,6 +561,71 @@ function renderReplayObjectiveDetail() {
       </div>
     </div>
   `;
+}
+
+function renderReplayTradeSetChanges(changes) {
+  if (!changes || Object.keys(changes).length === 0) {
+    return "";
+  }
+  const style = changes.style_exposure || {};
+  const removedLosses = changes.removed_losses || [];
+  const removedProfits = changes.removed_profits || [];
+  return `
+    <div class="result-box light" style="margin-top:12px;">
+      <strong>交易集合变化分析</strong>
+      <div class="muted-note" style="margin-top:6px;">${changes.summary || "暂无变化说明"}</div>
+      <div class="grid-2" style="margin-top:12px;">
+        <div class="result-box light">
+          <strong>交易频率变化</strong>
+          <div class="muted-note" style="margin-top:6px;">原样本：${changes.baseline_trade_count ?? 0} 笔</div>
+          <div class="muted-note">当前版本：${changes.current_trade_count ?? 0} 笔</div>
+          <div class="muted-note">变化：${formatSignedInteger(changes.trade_frequency_delta)}</div>
+        </div>
+        <div class="result-box light">
+          <strong>风格暴露变化</strong>
+          <div class="muted-note" style="margin-top:6px;">平均持仓：${style.baseline_avg_holding_minutes ?? 0} 分钟 → ${style.current_avg_holding_minutes ?? 0} 分钟</div>
+          <div class="muted-note">做多占比：${style.baseline_long_share_pct ?? 0}% → ${style.current_long_share_pct ?? 0}%</div>
+        </div>
+      </div>
+      <div class="grid-2" style="margin-top:12px;">
+        <div class="result-box light">
+          <strong>被过滤掉的亏损单</strong>
+          <div class="muted-note" style="margin-top:6px;">共 ${changes.removed_loss_count ?? 0} 笔，默认展示前 5 笔</div>
+          ${renderReplayTradeSetChangeList(removedLosses, "当前没有被过滤掉的亏损单。")}
+        </div>
+        <div class="result-box light">
+          <strong>被错杀的盈利单</strong>
+          <div class="muted-note" style="margin-top:6px;">共 ${changes.removed_profit_count ?? 0} 笔，默认展示前 5 笔</div>
+          ${renderReplayTradeSetChangeList(removedProfits, "当前没有被错杀的盈利单。")}
+        </div>
+      </div>
+      <div class="muted-note" style="margin-top:12px;">
+        ${(changes.limitations || []).join(" ")}
+      </div>
+    </div>
+  `;
+}
+
+function renderReplayTradeSetChangeList(items, emptyText) {
+  return items.length
+    ? `
+      <div class="list" style="margin-top:10px;">
+        ${items
+          .map(
+            (item) => `
+              <div class="list-item compact-item">
+                <strong>${item.symbol}</strong>
+                <div class="muted-note">${formatTime(item.entry_time)} → ${formatTime(item.exit_time)}</div>
+                <div class="muted-note">
+                  持仓 ${item.holding_label || "-"} · 盈亏 ${item.pnl_pct != null ? `${item.pnl_pct}%` : "-"}
+                </div>
+              </div>
+            `,
+          )
+          .join("")}
+      </div>
+    `
+    : `<div class="muted-note" style="margin-top:10px;">${emptyText}</div>`;
 }
 
 function renderReplayObjectiveMetrics(metrics, baselineMetrics) {
@@ -756,6 +822,13 @@ function formatSignedValue(value) {
   }
   const normalized = Math.round(value * 100) / 100;
   return normalized > 0 ? `+${normalized}` : `${normalized}`;
+}
+
+function formatSignedInteger(value) {
+  if (typeof value !== "number" || Number.isNaN(value)) {
+    return "-";
+  }
+  return value > 0 ? `+${value}` : `${value}`;
 }
 
 function applySourceMode(mode) {
