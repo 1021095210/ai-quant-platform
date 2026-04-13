@@ -6589,6 +6589,9 @@ def _build_replay_objective_counterfactual_summary(
             "skipped_count": 0,
             "worsened_count": 0,
             "cases": [],
+            "focused_cases": [],
+            "total_case_count": 0,
+            "display_case_count": 0,
             "available": False,
         }
 
@@ -6604,6 +6607,9 @@ def _build_replay_objective_counterfactual_summary(
             "skipped_count": 0,
             "worsened_count": 0,
             "cases": [],
+            "focused_cases": [],
+            "total_case_count": 0,
+            "display_case_count": 0,
             "available": True,
         }
 
@@ -6665,13 +6671,17 @@ def _build_replay_objective_counterfactual_summary(
         headline = "当前版本对 Top 亏损单的改善有限，部分结果甚至变差。"
     else:
         headline = "当前版本对 Top 亏损单的结果影响较有限。"
+    focused_cases = cases[:5]
     return {
         "summary": headline,
         "considered_count": len(losing_records),
         "improved_count": improved_count,
         "skipped_count": skipped_count,
         "worsened_count": worsened_count,
-        "cases": cases[:5],
+        "cases": cases,
+        "focused_cases": focused_cases,
+        "total_case_count": len(cases),
+        "display_case_count": len(focused_cases),
         "available": True,
     }
 
@@ -7180,6 +7190,7 @@ def _build_replay_parameter_stability(
             "summary": "当前没有足够的候选版本可用于稳定性判断。",
             "near_best_count": 0,
             "top_candidates": [],
+            "sensitivity_axes": [],
             "rolling_windows": [],
             "market_regime_windows": [],
         }
@@ -7219,6 +7230,7 @@ def _build_replay_parameter_stability(
         "summary": summary,
         "near_best_count": near_best_count,
         "top_candidates": top_candidates,
+        "sensitivity_axes": _build_replay_parameter_sensitivity_axes(scored_candidates),
         "rolling_windows": _build_replay_rolling_window_stability(
             records=records or [],
             selected_patch=selected_patch or {},
@@ -7235,6 +7247,66 @@ def _build_replay_parameter_stability(
             fundamental_context_by_trade_id=fundamental_context_by_trade_id or {},
         ),
     }
+
+
+def _build_replay_parameter_sensitivity_axes(
+    scored_candidates: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if len(scored_candidates) < 2:
+        return []
+    best_score = float(scored_candidates[0]["score"])
+    grouped: dict[str, dict[str, Any]] = {}
+    for candidate in scored_candidates:
+        focus = _summarize_replay_patch_focus(candidate["patch"])
+        score = float(candidate["score"])
+        for key, raw_value in focus.items():
+            label = str(key)
+            group = grouped.setdefault(
+                label,
+                {
+                    "values": {},
+                    "best_value": raw_value,
+                    "best_score": -math.inf,
+                },
+            )
+            bucket = group["values"].setdefault(
+                str(raw_value),
+                {"value": raw_value, "scores": []},
+            )
+            bucket["scores"].append(score)
+            if score > float(group["best_score"]):
+                group["best_score"] = score
+                group["best_value"] = raw_value
+
+    axes: list[dict[str, Any]] = []
+    for label, group in grouped.items():
+        values = list(group["values"].values())
+        if len(values) < 2:
+            continue
+        value_summaries = []
+        for item in values:
+            avg_score = sum(item["scores"]) / len(item["scores"])
+            value_summaries.append(
+                {
+                    "value": item["value"],
+                    "avg_score": round(avg_score, 4),
+                    "count": len(item["scores"]),
+                }
+            )
+        value_summaries.sort(key=lambda item: float(item["avg_score"]), reverse=True)
+        spread = round(float(value_summaries[0]["avg_score"]) - float(value_summaries[-1]["avg_score"]), 4)
+        sensitivity = "较平稳" if spread <= max(abs(best_score) * 0.03, 0.03) else "较敏感"
+        axes.append(
+            {
+                "label": label,
+                "best_value": group["best_value"],
+                "score_spread": spread,
+                "sensitivity": sensitivity,
+                "values": value_summaries[:5],
+            }
+        )
+    axes.sort(key=lambda item: float(item["score_spread"]), reverse=True)
+    return axes[:6]
 
 
 def _build_replay_rolling_window_stability(
