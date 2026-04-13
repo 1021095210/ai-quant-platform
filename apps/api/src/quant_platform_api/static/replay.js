@@ -658,6 +658,29 @@ function renderReplayObjectiveCounterfactual(summary) {
                                 <strong>${item.candidate_label}</strong>
                                 <div class="muted-note">命中 ${item.hit_count} 笔 · 覆盖率 ${(item.coverage_ratio ?? 0) * 100}% · 改善 ${item.improved_count} 笔 · 过滤 ${item.skipped_count} 笔 · 变差 ${item.worsened_count} 笔</div>
                                 <div class="muted-note">平均盈亏变化 ${formatSignedValue(item.avg_pnl_delta)} · 关键参数 ${((item.parameter_focus || []).map((entry) => `${entry.parameter}（${entry.count}次）`).join("；")) || "暂无"}</div>
+                                <div class="muted-note">主要胜出环境 ${((item.dominant_regimes || []).map((entry) => `${formatReplayRegime(entry.regime)}（${entry.count}次）`).join("；")) || "暂无"}</div>
+                              </div>
+                            `,
+                          )
+                          .join("")}
+                      </div>
+                    </div>
+                  `
+                  : ""
+              }
+              ${
+                (searchLinked.regime_attribution || []).length
+                  ? `
+                    <div class="result-box light" style="margin-top:12px;">
+                      <strong>市场状态归因</strong>
+                      <div class="list" style="margin-top:10px;">
+                        ${searchLinked.regime_attribution
+                          .map(
+                            (item) => `
+                              <div class="list-item compact-item">
+                                <strong>${formatReplayRegime(item.regime)}</strong>
+                                <div class="muted-note">命中 ${item.hit_count} 笔 · 覆盖率 ${(item.coverage_ratio ?? 0) * 100}% · 改善 ${item.improved_count} 笔 · 过滤 ${item.skipped_count} 笔 · 变差 ${item.worsened_count} 笔</div>
+                                <div class="muted-note">平均盈亏变化 ${formatSignedValue(item.avg_pnl_delta)}</div>
                               </div>
                             `,
                           )
@@ -748,6 +771,19 @@ function renderReplayObjectiveCounterfactual(summary) {
       }
     </div>
   `;
+}
+
+function formatReplayRegime(value) {
+  if (value === "trend") {
+    return "趋势环境";
+  }
+  if (value === "range") {
+    return "震荡环境";
+  }
+  if (value === "unknown") {
+    return "环境未识别";
+  }
+  return value || "环境未识别";
 }
 
 function renderReplayParameterStability(stability) {

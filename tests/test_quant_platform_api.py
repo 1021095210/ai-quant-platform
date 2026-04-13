@@ -2799,6 +2799,7 @@ class QuantPlatformApiTests(unittest.TestCase):
                 },
                 "risk": {},
             },
+            daily_context_by_trade_id={"trade_loss_1": {"trend_regime": "range"}},
             minute_context_by_trade_id={"trade_loss_1": {"close_position_pct": 38.0}},
             fundamental_context_by_trade_id={},
         )
@@ -2879,6 +2880,8 @@ class QuantPlatformApiTests(unittest.TestCase):
             replay_market="cn_a_share",
             market_data_service=FakeMarketDataService(),
             selected_patch={"filters": {}, "risk": {"max_holding_bars": 2, "stop_loss_pct": -0.02}},
+            candidate_leaderboard=[],
+            daily_context_by_trade_id={"loss_1": {"trend_regime": "trend"}, "loss_2": {"trend_regime": "range"}},
             minute_context_by_trade_id={},
             fundamental_context_by_trade_id={},
         )
@@ -3103,6 +3106,7 @@ class QuantPlatformApiTests(unittest.TestCase):
                     "patch": {"filters": {}, "risk": {"stop_loss_pct": -0.015}},
                 }
             ],
+            daily_context_by_trade_id={"loss_link_1": {"trend_regime": "trend"}},
             minute_context_by_trade_id={},
             fundamental_context_by_trade_id={},
         )
@@ -3218,6 +3222,7 @@ class QuantPlatformApiTests(unittest.TestCase):
                     "patch": {"filters": {}, "risk": {"stop_loss_pct": -0.02, "max_holding_bars": 8}},
                 },
             ],
+            daily_context_by_trade_id={"loss_attr_1": {"trend_regime": "trend"}},
             minute_context_by_trade_id={},
             fundamental_context_by_trade_id={},
         )
@@ -3226,6 +3231,9 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertTrue(summary["parameter_attribution"])
         self.assertTrue(summary["winning_candidate_summary"])
         self.assertIn("coverage_ratio", summary["winning_candidate_summary"][0])
+        self.assertIn("dominant_regimes", summary["winning_candidate_summary"][0])
+        self.assertTrue(summary["regime_attribution"])
+        self.assertIn("regime", summary["regime_attribution"][0])
         self.assertIn("candidate_decisiveness", summary)
         self.assertIn("avg_gap", summary["candidate_decisiveness"])
 
