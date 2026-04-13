@@ -1248,6 +1248,7 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertEqual(["日线", "15分钟"], payload["structured_spec"]["ai_structured_hints"]["timeframe_hints"])
         self.assertIn("大盘不差时再开仓", payload["structured_spec"]["ai_structured_hints"]["filter_intent"])
         self.assertTrue(any(item["field"] == "entry_rules" for item in payload["structured_spec"]["ai_field_targets"]))
+        self.assertTrue(any(item["field"] == "entry_rules" for item in payload["structured_spec"]["ai_value_targets"]))
         self.assertIn("回踩幅度需要补充", payload["structured_spec"]["ai_unresolved_items"])
         self.assertTrue(any(item["id"] == "ai_understanding" for item in payload["generation_pipeline"]))
         self.assertTrue(any(item["title"] == "回踩幅度需要补充" for item in payload["questions_for_user"]))
@@ -1325,6 +1326,28 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertTrue(any(item["id"] == "external_event_dependency" for item in payload["unsupported_items"]))
         self.assertTrue(any(item["id"] == "session_execution_dependency" for item in payload["unsupported_items"]))
         unsupported_check = next(item for item in payload["hard_validation"]["checks"] if item["id"] == "unsupported_data_dependency")
+        self.assertEqual("fail", unsupported_check["status"])
+
+    def test_generate_strategy_rejects_capital_flow_dependencies(self) -> None:
+        client = self._build_client()
+
+        response = client.post(
+            "/api/v1/strategies/generate",
+            json={
+                "prompt": "当北向资金净流入明显放大且龙虎榜出现机构净买入时买入",
+                "market": "600519.SH",
+                "timeframe": "1d",
+                "asset_type": "stock",
+                "preferences": {"side": "long"},
+            },
+        )
+
+        self.assertEqual(200, response.status_code)
+        payload = response.json()["data"]
+        self.assertTrue(any(item["id"] == "capital_flow_dependency" for item in payload["unsupported_items"]))
+        unsupported_check = next(
+            item for item in payload["hard_validation"]["checks"] if item["id"] == "unsupported_data_dependency"
+        )
         self.assertEqual("fail", unsupported_check["status"])
 
     def test_strategy_page_shows_field_mapping_snippet_labels(self) -> None:
