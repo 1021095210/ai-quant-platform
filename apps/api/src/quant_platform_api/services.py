@@ -6514,6 +6514,14 @@ def _build_replay_objective_versions(
             selected_trade_rows=selected_trade_rows,
             simulation_mode=simulation_mode,
         )
+        objective_counterfactual = _build_replay_objective_counterfactual_summary(
+            records=records,
+            replay_market=replay_market,
+            market_data_service=market_data_service,
+            selected_patch=selected_patch,
+            minute_context_by_trade_id=minute_context_by_trade_id,
+            fundamental_context_by_trade_id=fundamental_context_by_trade_id,
+        )
         items.append(
             {
                 **spec,
@@ -6526,6 +6534,7 @@ def _build_replay_objective_versions(
                 "selected_patch": selected_patch,
                 "search_summary": search_summary,
                 "trade_set_changes": trade_set_changes,
+                "objective_counterfactual": objective_counterfactual,
             }
         )
     return items
@@ -6560,6 +6569,110 @@ def _build_replay_counterfactual_cases(
         if case is not None:
             cases.append(case)
     return cases
+
+
+def _build_replay_objective_counterfactual_summary(
+    *,
+    records: list[TradeRecordItem],
+    replay_market: str,
+    market_data_service: MarketDataService | None,
+    selected_patch: dict[str, Any],
+    minute_context_by_trade_id: dict[str, dict[str, Any]],
+    fundamental_context_by_trade_id: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    if replay_market != "cn_a_share" or market_data_service is None:
+        return {
+            "summary": "当前版本未接入真实行情反事实联动。",
+            "considered_count": 0,
+            "improved_count": 0,
+            "skipped_count": 0,
+            "worsened_count": 0,
+            "cases": [],
+            "available": False,
+        }
+
+    losing_records = sorted(
+        [item for item in records if item.pnl < 0],
+        key=lambda item: item.pnl,
+    )[:3]
+    if not losing_records:
+        return {
+            "summary": "当前样本没有亏损单，暂不需要单笔反事实联动。",
+            "considered_count": 0,
+            "improved_count": 0,
+            "skipped_count": 0,
+            "worsened_count": 0,
+            "cases": [],
+            "available": True,
+        }
+
+    cases: list[dict[str, Any]] = []
+    improved_count = 0
+    skipped_count = 0
+    worsened_count = 0
+    for item in losing_records:
+        rerun_trade = _rerun_single_replay_trade(
+            item=item,
+            market_data_service=market_data_service,
+            rule_patch=selected_patch,
+            minute_context=minute_context_by_trade_id.get(item.trade_id),
+            fundamental_context=fundamental_context_by_trade_id.get(item.trade_id),
+        )
+        original_trade = _build_replay_trade_records([item])[0]
+        if rerun_trade is None:
+            skipped_count += 1
+            cases.append(
+                {
+                    "trade_id": item.trade_id,
+                    "symbol": item.symbol,
+                    "result_type": "skipped",
+                    "original_pnl": round(float(item.pnl), 2),
+                    "counterfactual_pnl": 0.0,
+                    "pnl_delta": round(-float(item.pnl), 2),
+                    "summary": "当前版本会直接过滤掉这笔亏损交易。",
+                    "original_trade": original_trade,
+                    "trade_record": None,
+                }
+            )
+            continue
+        pnl_delta = round(float(rerun_trade["pnl"]) - float(item.pnl), 2)
+        if pnl_delta > 0:
+            improved_count += 1
+        elif pnl_delta < 0:
+            worsened_count += 1
+        cases.append(
+            {
+                "trade_id": item.trade_id,
+                "symbol": item.symbol,
+                "result_type": "rerun",
+                "original_pnl": round(float(item.pnl), 2),
+                "counterfactual_pnl": round(float(rerun_trade["pnl"]), 2),
+                "pnl_delta": pnl_delta,
+                "summary": (
+                    f"当前版本对这笔交易的结果变化为 {pnl_delta:+.2f}，"
+                    f"结果从 {float(item.pnl):.2f} 变为 {float(rerun_trade['pnl']):.2f}。"
+                ),
+                "original_trade": original_trade,
+                "trade_record": rerun_trade,
+            }
+        )
+    if skipped_count > 0:
+        headline = f"当前版本会直接过滤掉 {skipped_count} 笔 Top 亏损单。"
+    elif improved_count > 0:
+        headline = f"当前版本会改善 {improved_count} 笔 Top 亏损单。"
+    elif worsened_count > 0:
+        headline = "当前版本对 Top 亏损单的改善有限，部分结果甚至变差。"
+    else:
+        headline = "当前版本对 Top 亏损单的结果影响较有限。"
+    return {
+        "summary": headline,
+        "considered_count": len(losing_records),
+        "improved_count": improved_count,
+        "skipped_count": skipped_count,
+        "worsened_count": worsened_count,
+        "cases": cases,
+        "available": True,
+    }
 
 
 def _build_single_trade_counterfactuals(

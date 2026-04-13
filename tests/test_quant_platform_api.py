@@ -39,6 +39,7 @@ try:
         _build_replay_context_suggestions,
         _build_replay_fundamental_features,
         _build_replay_minute_context_features,
+        _build_replay_objective_counterfactual_summary,
         _build_replay_trade_set_changes,
         _replay_trade_passes_filters,
         _rerun_replay_records_on_market_data,
@@ -60,6 +61,7 @@ except ModuleNotFoundError:  # pragma: no cover - handled by skip
     _build_replay_context_suggestions = None
     _build_replay_minute_context_features = None
     _build_replay_fundamental_features = None
+    _build_replay_objective_counterfactual_summary = None
     _build_replay_trade_set_changes = None
     _replay_trade_passes_filters = None
     _rerun_replay_records_on_market_data = None
@@ -2526,6 +2528,7 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertIn("metrics", data["objective_versions"][0])
         self.assertIn("baseline_metrics", data["objective_versions"][0])
         self.assertIn("trade_set_changes", data["objective_versions"][0])
+        self.assertIn("objective_counterfactual", data["objective_versions"][0])
         self.assertIn("trade_count", data["objective_versions"][0]["metrics"])
         self.assertIn("sharpe_like", data["objective_versions"][0]["metrics"])
         self.assertLessEqual(
@@ -2537,6 +2540,7 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertIn("removed_profits", data["objective_versions"][0]["trade_set_changes"])
         self.assertFalse(data["objective_versions"][0]["trade_set_changes"]["added_trades_supported"])
         self.assertIn("parameter_stability", data["objective_versions"][0]["search_summary"])
+        self.assertIn("summary", data["objective_versions"][0]["objective_counterfactual"])
         self.assertIn("样本筛选回放", data["objective_versions"][0]["comparison_note"])
         self.assertIn("上下文评分", data["objective_versions"][0]["comparison_note"])
         self.assertIn("entry_price", data["trade_records"][0])
@@ -2709,6 +2713,82 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertIn("top_candidates", stability)
         self.assertTrue(stability["top_candidates"])
         self.assertIn("focus", stability["top_candidates"][0])
+
+    def test_replay_objective_counterfactual_summary_links_selected_patch(self) -> None:
+        class FakeMarketDataService:
+            def load_daily_bars(self, *, ts_code, start_date, end_date, adjustment_mode):
+                return (
+                    [
+                        MarketBar(
+                            ts_code=ts_code,
+                            asset_type="stock",
+                            adjustment_mode="qfq",
+                            trade_date="2024-05-01",
+                            open=10.0,
+                            high=10.4,
+                            low=9.9,
+                            close=10.3,
+                            volume=1000,
+                            amount=10000,
+                            pct_chg=0.0,
+                            turnover=1.0,
+                            data_source="internal_clickhouse_dwd",
+                            fetched_at="2026-04-09T00:00:00",
+                        ),
+                        MarketBar(
+                            ts_code=ts_code,
+                            asset_type="stock",
+                            adjustment_mode="qfq",
+                            trade_date="2024-05-02",
+                            open=10.35,
+                            high=10.55,
+                            low=9.7,
+                            close=9.85,
+                            volume=1200,
+                            amount=11000,
+                            pct_chg=0.0,
+                            turnover=1.2,
+                            data_source="internal_clickhouse_dwd",
+                            fetched_at="2026-04-09T00:00:00",
+                        ),
+                    ],
+                    {"provider": "internal_clickhouse_dwd", "status": "ready"},
+                )
+
+            def load_minute_window(self, *, ts_code, start_time, end_time, adjustment_mode):
+                return [], {"provider": "internal_clickhouse_dwd", "status": "unavailable"}
+
+        trade = TradeRecordItem(
+            trade_id="trade_loss_1",
+            symbol="600519.SH",
+            side="long",
+            entry_time=datetime.fromisoformat("2024-05-01T09:35:00+08:00"),
+            exit_time=datetime.fromisoformat("2024-05-02T15:00:00+08:00"),
+            pnl=-320.0,
+            entry_price=10.4,
+            exit_price=9.82,
+        )
+        summary = _build_replay_objective_counterfactual_summary(
+            records=[trade],
+            replay_market="cn_a_share",
+            market_data_service=FakeMarketDataService(),
+            selected_patch={
+                "filters": {
+                    "intraday_structure": {
+                        "enabled": True,
+                        "min_close_position_pct": 50,
+                    }
+                },
+                "risk": {},
+            },
+            minute_context_by_trade_id={"trade_loss_1": {"close_position_pct": 38.0}},
+            fundamental_context_by_trade_id={},
+        )
+
+        self.assertEqual(1, summary["considered_count"])
+        self.assertEqual(1, summary["skipped_count"])
+        self.assertTrue(summary["cases"])
+        self.assertEqual("skipped", summary["cases"][0]["result_type"])
 
     def test_replay_analysis_returns_analysis_scope_and_daily_context_features(self) -> None:
         client = self._build_client()
