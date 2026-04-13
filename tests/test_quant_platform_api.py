@@ -41,6 +41,7 @@ try:
         _build_replay_fundamental_features,
         _build_replay_minute_context_features,
         _build_replay_objective_counterfactual_summary,
+        _build_replay_search_linked_counterfactual_summary,
         _link_counterfactual_templates_to_stability,
         _build_replay_trade_set_changes,
         _replay_trade_passes_filters,
@@ -65,6 +66,7 @@ except ModuleNotFoundError:  # pragma: no cover - handled by skip
     _build_replay_minute_context_features = None
     _build_replay_fundamental_features = None
     _build_replay_objective_counterfactual_summary = None
+    _build_replay_search_linked_counterfactual_summary = None
     _link_counterfactual_templates_to_stability = None
     _build_replay_trade_set_changes = None
     _replay_trade_passes_filters = None
@@ -2787,6 +2789,7 @@ class QuantPlatformApiTests(unittest.TestCase):
             records=[trade],
             replay_market="cn_a_share",
             market_data_service=FakeMarketDataService(),
+            candidate_leaderboard=[],
             selected_patch={
                 "filters": {
                     "intraday_structure": {
@@ -3110,6 +3113,7 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertTrue(summary["search_linked_summary"]["focused_cases"])
         self.assertTrue(summary["search_linked_summary"]["focused_cases"][0]["candidate_options"])
         self.assertIn("candidate_scan_coverage", summary["search_linked_summary"])
+        self.assertIn("parameter_attribution", summary["search_linked_summary"])
 
     def test_replay_counterfactual_template_summary_links_to_stability_axes(self) -> None:
         linked = _link_counterfactual_templates_to_stability(
@@ -3141,6 +3145,89 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertEqual(2, len(linked[0]["linked_axes"]))
         self.assertTrue(all(axis["in_pair_heatmap"] for axis in linked[0]["linked_axes"]))
         self.assertIn("当前模板主要影响", linked[0]["attribution_summary"])
+
+    def test_replay_search_linked_counterfactual_summary_builds_parameter_attribution(self) -> None:
+        class FakeMarketDataService:
+            def load_daily_bars(self, *, ts_code, start_date, end_date, adjustment_mode):
+                return (
+                    [
+                        MarketBar(
+                            ts_code=ts_code,
+                            asset_type="stock",
+                            adjustment_mode="qfq",
+                            trade_date="2024-05-01",
+                            open=10.0,
+                            high=10.1,
+                            low=9.7,
+                            close=9.8,
+                            volume=1000,
+                            amount=10000,
+                            pct_chg=0.0,
+                            turnover=1.0,
+                            data_source="internal_clickhouse_dwd",
+                            fetched_at="2026-04-09T00:00:00",
+                        ),
+                        MarketBar(
+                            ts_code=ts_code,
+                            asset_type="stock",
+                            adjustment_mode="qfq",
+                            trade_date="2024-05-02",
+                            open=9.8,
+                            high=10.0,
+                            low=9.4,
+                            close=9.5,
+                            volume=1200,
+                            amount=11000,
+                            pct_chg=0.0,
+                            turnover=1.2,
+                            data_source="internal_clickhouse_dwd",
+                            fetched_at="2026-04-09T00:00:00",
+                        ),
+                    ],
+                    {"provider": "internal_clickhouse_dwd", "status": "ready"},
+                )
+
+            def load_minute_window(self, *, ts_code, start_time, end_time, adjustment_mode):
+                return [], {"provider": "internal_clickhouse_dwd", "status": "unavailable"}
+
+        summary = _build_replay_search_linked_counterfactual_summary(
+            losing_records=[
+                TradeRecordItem(
+                    trade_id="loss_attr_1",
+                    symbol="600519.SH",
+                    side="long",
+                    entry_time=datetime.fromisoformat("2024-05-01T09:35:00+08:00"),
+                    exit_time=datetime.fromisoformat("2024-05-02T15:00:00+08:00"),
+                    pnl=-320.0,
+                    entry_price=10.4,
+                    exit_price=9.82,
+                )
+            ],
+            market_data_service=FakeMarketDataService(),
+            candidate_leaderboard=[
+                {
+                    "label": "候选 1",
+                    "score": 1.23,
+                    "focus": {"stop_loss_pct": -0.015, "max_holding_bars": 5},
+                    "patch": {"filters": {}, "risk": {"stop_loss_pct": -0.015, "max_holding_bars": 5}},
+                },
+                {
+                    "label": "候选 2",
+                    "score": 1.11,
+                    "focus": {"stop_loss_pct": -0.02, "max_holding_bars": 8},
+                    "patch": {"filters": {}, "risk": {"stop_loss_pct": -0.02, "max_holding_bars": 8}},
+                },
+            ],
+            minute_context_by_trade_id={},
+            fundamental_context_by_trade_id={},
+        )
+
+        self.assertEqual(2, summary["candidate_scan_coverage"]["total_candidate_pool_count"])
+        self.assertTrue(summary["parameter_attribution"])
+        self.assertTrue(summary["winning_candidate_summary"])
+        self.assertIn("coverage_ratio", summary["winning_candidate_summary"][0])
+        self.assertIn("candidate_decisiveness", summary)
+        self.assertIn("avg_gap", summary["candidate_decisiveness"])
 
     def test_replay_counterfactual_cases_include_extended_templates(self) -> None:
         class FakeMarketDataService:

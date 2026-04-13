@@ -642,8 +642,68 @@ function renderReplayObjectiveCounterfactual(summary) {
               </div>
               <div class="muted-note">
                 平均每笔扫描候选 ${searchLinked.candidate_scan_coverage?.candidate_count_per_trade_avg ?? 0} 个 ·
-                当前纳入候选池 ${searchLinked.candidate_scan_coverage?.focused_candidate_count ?? 0} 个版本
+                当前扫描候选 ${searchLinked.candidate_scan_coverage?.focused_candidate_count ?? 0} 个版本 ·
+                候选池总量 ${searchLinked.candidate_scan_coverage?.total_candidate_pool_count ?? 0} 个版本
               </div>
+              ${
+                (searchLinked.winning_candidate_summary || []).length
+                  ? `
+                    <div class="result-box light" style="margin-top:12px;">
+                      <strong>全样本赢家候选摘要</strong>
+                      <div class="list" style="margin-top:10px;">
+                        ${searchLinked.winning_candidate_summary
+                          .map(
+                            (item) => `
+                              <div class="list-item compact-item">
+                                <strong>${item.candidate_label}</strong>
+                                <div class="muted-note">命中 ${item.hit_count} 笔 · 覆盖率 ${(item.coverage_ratio ?? 0) * 100}% · 改善 ${item.improved_count} 笔 · 过滤 ${item.skipped_count} 笔 · 变差 ${item.worsened_count} 笔</div>
+                                <div class="muted-note">平均盈亏变化 ${formatSignedValue(item.avg_pnl_delta)} · 关键参数 ${((item.parameter_focus || []).map((entry) => `${entry.parameter}（${entry.count}次）`).join("；")) || "暂无"}</div>
+                              </div>
+                            `,
+                          )
+                          .join("")}
+                      </div>
+                    </div>
+                  `
+                  : ""
+              }
+              ${
+                searchLinked.candidate_decisiveness?.summary
+                  ? `
+                    <div class="result-box light" style="margin-top:12px;">
+                      <strong>候选胜出稳健度</strong>
+                      <div class="muted-note" style="margin-top:6px;">${searchLinked.candidate_decisiveness.summary}</div>
+                      <div class="muted-note">
+                        平均胜出差值 ${formatSignedValue(searchLinked.candidate_decisiveness.avg_gap ?? 0)} ·
+                        险胜 ${searchLinked.candidate_decisiveness.narrow_win_count ?? 0} 笔（${((searchLinked.candidate_decisiveness.narrow_win_ratio ?? 0) * 100).toFixed(0)}%） ·
+                        明显胜出 ${searchLinked.candidate_decisiveness.clear_win_count ?? 0} 笔（${((searchLinked.candidate_decisiveness.clear_win_ratio ?? 0) * 100).toFixed(0)}%）
+                      </div>
+                    </div>
+                  `
+                  : ""
+              }
+              ${
+                (searchLinked.parameter_attribution || []).length
+                  ? `
+                    <div class="result-box light" style="margin-top:12px;">
+                      <strong>全样本参数归因摘要</strong>
+                      <div class="list" style="margin-top:10px;">
+                        ${searchLinked.parameter_attribution
+                          .map(
+                            (item) => `
+                              <div class="list-item compact-item">
+                                <strong>${item.parameter}</strong>
+                                <div class="muted-note">命中 ${item.hit_count} 笔 · 改善 ${item.improved_count} 笔 · 过滤 ${item.skipped_count} 笔 · 变差 ${item.worsened_count} 笔</div>
+                                <div class="muted-note">平均盈亏变化 ${formatSignedValue(item.avg_pnl_delta)} · 常见取值 ${((item.top_values || []).map((value) => `${value.value}（${value.count}次）`).join("；")) || "暂无"}</div>
+                              </div>
+                            `,
+                          )
+                          .join("")}
+                      </div>
+                    </div>
+                  `
+                  : ""
+              }
               <div class="list" style="margin-top:10px;">
                 ${searchLinkedCases
                   .map(
