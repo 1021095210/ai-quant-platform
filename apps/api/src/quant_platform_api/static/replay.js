@@ -640,7 +640,9 @@ function renderReplayParameterStability(stability) {
       <div class="muted-note" style="margin-top:6px;">${stability.label || "暂无稳定性结论"}</div>
       <div class="muted-note">${stability.summary || ""}</div>
       <div class="muted-note">接近当前最优的候选版本：${stability.near_best_count ?? 0} 组</div>
+      ${renderReplayNeighborCandidates(stability.neighbor_candidates || [])}
       ${renderReplayParameterSensitivity(stability.sensitivity_axes || [])}
+      ${renderReplayParameterHeatmaps(stability.heatmap_axes || [])}
       ${
         topCandidates.length
           ? `
@@ -666,6 +668,31 @@ function renderReplayParameterStability(stability) {
   `;
 }
 
+function renderReplayNeighborCandidates(items) {
+  if (!items.length) {
+    return "";
+  }
+  return `
+    <div class="result-box light" style="margin-top:12px;">
+      <strong>邻域候选对照</strong>
+      <div class="list" style="margin-top:10px;">
+        ${items
+          .map(
+            (item, index) => `
+              <div class="list-item compact-item">
+                <strong>邻域 ${index + 1}</strong>
+                <div class="muted-note">评分 ${item.score} · 与最优差值 ${formatSignedValue(item.score_delta)} · 交易数 ${item.trade_count}</div>
+                <div class="muted-note">胜率 ${item.win_rate_pct}% · 回撤 ${item.max_drawdown_pct}% · 夏普近似 ${item.sharpe_like}</div>
+                <div class="muted-note">关键参数：${renderReplayPatchFocus(item.focus || {})}</div>
+              </div>
+            `,
+          )
+          .join("")}
+      </div>
+    </div>
+  `;
+}
+
 function renderReplayParameterSensitivity(items) {
   if (!items.length) {
     return "";
@@ -684,6 +711,41 @@ function renderReplayParameterSensitivity(items) {
                   ${((item.values || [])
                     .map((value) => `${value.value}（均分 ${value.avg_score}，样本 ${value.count}）`)
                     .join("；")) || "暂无参数分层摘要"}
+                </div>
+              </div>
+            `,
+          )
+          .join("")}
+      </div>
+    </div>
+  `;
+}
+
+function renderReplayParameterHeatmaps(items) {
+  if (!items.length) {
+    return "";
+  }
+  return `
+    <div class="result-box light" style="margin-top:12px;">
+      <strong>参数热力图摘要</strong>
+      <div class="list" style="margin-top:10px;">
+        ${items
+          .map(
+            (item) => `
+              <div class="list-item compact-item">
+                <strong>${item.label}</strong>
+                <div class="muted-note">最优值 ${item.best_value}</div>
+                <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
+                  ${(item.values || [])
+                    .map((value) => {
+                      const alpha = 0.18 + Math.max(0, Math.min(1, Number(value.intensity || 0))) * 0.42;
+                      return `
+                        <span style="padding:6px 10px;border-radius:999px;background:rgba(15,118,110,${alpha});color:#083344;font-size:12px;">
+                          ${value.value} · ${value.avg_score}
+                        </span>
+                      `;
+                    })
+                    .join("")}
                 </div>
               </div>
             `,
