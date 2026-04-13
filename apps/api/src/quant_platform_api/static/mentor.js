@@ -1,6 +1,8 @@
 import {
   activateNav,
   api,
+  fetchLlmProfiles,
+  populateLlmProfileSelect,
   setStatus,
 } from "/assets/shared.js?v=20260402c";
 
@@ -15,6 +17,7 @@ const nodes = {
   question: document.querySelector("#mentor-question"),
   level: document.querySelector("#mentor-level"),
   marketScope: document.querySelector("#mentor-market-scope"),
+  llmProfile: document.querySelector("#mentor-llm-profile"),
   askButton: document.querySelector("#mentor-ask-btn"),
   answer: document.querySelector("#mentor-answer"),
   actions: document.querySelector("#mentor-actions"),
@@ -66,7 +69,7 @@ function renderAnswer(payload) {
   nodes.answer.innerHTML = `
     <div class="list-item mentor-answer-card">
       <strong>${payload.headline}</strong>
-      <div class="muted-note">当前模式：${payload.answer_mode_label || "平台导师兜底"}</div>
+      <div class="muted-note">当前模式：${payload.answer_mode_label || "平台导师兜底"}${payload.llm_profile_label ? ` · ${payload.llm_profile_label}` : ""}</div>
       <div class="muted-note">${payload.answer}</div>
     </div>
     <div class="list-item mentor-answer-card">
@@ -147,8 +150,12 @@ function appendConversationTurn(role, content, title = "") {
 }
 
 async function loadTopics() {
-  const payload = await api("/api/v1/mentor/topics");
+  const [payload, llmProfiles] = await Promise.all([
+    api("/api/v1/mentor/topics"),
+    fetchLlmProfiles(),
+  ]);
   renderTopics(payload.data.items || []);
+  populateLlmProfileSelect(nodes.llmProfile, llmProfiles, "mentor");
 }
 
 async function askMentor(question, options = {}) {
@@ -161,6 +168,7 @@ async function askMentor(question, options = {}) {
       experience_level: nodes.level.value,
       market_scope: nodes.marketScope.value,
       current_module: "mentor",
+      llm_profile: nodes.llmProfile.value || "module_default",
       conversation_history: state.history.map((item) => ({
         role: item.role,
         content: item.content,

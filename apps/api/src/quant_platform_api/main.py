@@ -81,6 +81,7 @@ from quant_platform_api.services import (
     build_backtest_result,
     build_optimization_result,
     build_replay_result,
+    list_llm_profiles,
     list_platform_capabilities,
     summarize_strategy_capability,
     validate_backtest_capability,
@@ -635,6 +636,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return _success_response(
             request,
             data={"items": list_platform_capabilities()},
+        )
+
+    @app.get(f"{app_settings.api_prefix}/platform/llm-profiles")
+    def get_platform_llm_profiles(request: Request) -> JSONResponse:
+        return _success_response(
+            request,
+            data={
+                "items": list_llm_profiles(app_settings),
+                "defaults": {
+                    "strategy": "module_default",
+                    "mentor": "module_default",
+                    "assistant": "module_default",
+                    "trade_text_parse": "module_default",
+                },
+            },
         )
 
     @app.get(f"{app_settings.api_prefix}/indicators/builtin")
@@ -1386,6 +1402,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             text=payload.text,
             market=payload.market,
             adjustment_mode=payload.adjustment_mode,
+            llm_profile=payload.llm_profile,
             user_id=current_user.user_id,
             workspace_id=current_user.workspace_id,
         )

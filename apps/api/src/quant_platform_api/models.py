@@ -155,6 +155,7 @@ class StrategyGenerateRequest(BaseModel):
     preferences: dict[str, Any] = Field(default_factory=dict)
     teaching_mode: bool = False
     clarification_answers: dict[str, str] = Field(default_factory=dict)
+    llm_profile: str = "module_default"
 
 
 class StrategyProjectListItem(BaseModel):
@@ -189,6 +190,7 @@ class MentorAskRequest(BaseModel):
     market_scope: str | None = None
     current_module: str | None = None
     conversation_history: list[dict[str, str]] = Field(default_factory=list)
+    llm_profile: str = "module_default"
 
 
 class AssistantResearchRequest(BaseModel):
@@ -199,6 +201,7 @@ class AssistantResearchRequest(BaseModel):
     research_depth: str = "standard"
     current_module: str | None = None
     conversation_history: list[dict[str, str]] = Field(default_factory=list)
+    llm_profile: str = "module_default"
 
 
 class ClientErrorReportRequest(BaseModel):
@@ -270,6 +273,7 @@ class ManualTradeTextParseRequest(BaseModel):
     text: str
     market: str = "cn_equity"
     adjustment_mode: str = "qfq"
+    llm_profile: str = "module_default"
 
 
 class TradeUploadManualCreateRequest(BaseModel):

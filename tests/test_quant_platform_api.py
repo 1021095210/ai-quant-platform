@@ -99,7 +99,15 @@ class QuantPlatformApiTests(unittest.TestCase):
         session_cookie_samesite: str = "lax",
         llm_base_url: str = "",
         llm_api_key: str = "",
+        llm_model_strategy: str = "",
+        llm_model_summary: str = "",
         llm_model_mentor: str = "",
+        llm_deepseek_base_url: str = "https://api.deepseek.com",
+        llm_deepseek_api_key: str = "",
+        llm_deepseek_model: str = "",
+        llm_volcengine_base_url: str = "https://ark.cn-beijing.volces.com/api/v3",
+        llm_volcengine_api_key: str = "",
+        llm_volcengine_model: str = "",
     ) -> TestClient:
         temp_dir = tempfile.TemporaryDirectory()
         self.addCleanup(temp_dir.cleanup)
@@ -123,7 +131,15 @@ class QuantPlatformApiTests(unittest.TestCase):
             session_cookie_samesite=session_cookie_samesite,
             llm_base_url=llm_base_url,
             llm_api_key=llm_api_key,
+            llm_model_strategy=llm_model_strategy,
+            llm_model_summary=llm_model_summary,
             llm_model_mentor=llm_model_mentor,
+            llm_deepseek_base_url=llm_deepseek_base_url,
+            llm_deepseek_api_key=llm_deepseek_api_key,
+            llm_deepseek_model=llm_deepseek_model,
+            llm_volcengine_base_url=llm_volcengine_base_url,
+            llm_volcengine_api_key=llm_volcengine_api_key,
+            llm_volcengine_model=llm_volcengine_model,
         )
         return TestClient(create_app(settings))
 
@@ -515,6 +531,37 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertIn('id="assistant-run-btn" class="btn disabled" disabled', response.text)
         self.assertIn('id="assistant-followup-btn" class="btn disabled" disabled', response.text)
         self.assertIn("继续细化研究", response.text)
+
+    def test_platform_llm_profiles_lists_enabled_profiles(self) -> None:
+        client = self._build_client(
+            llm_base_url="https://llm.example.test/v1",
+            llm_api_key="sk-test",
+            llm_model_strategy="gpt-5-coder",
+            llm_model_summary="gpt-5-research",
+            llm_model_mentor="gpt-5-mini",
+            llm_deepseek_api_key="deepseek-test",
+            llm_deepseek_model="deepseek-chat",
+            llm_volcengine_api_key="ark-test",
+            llm_volcengine_model="ep-demo",
+        )
+
+        response = client.get("/api/v1/platform/llm-profiles")
+
+        self.assertEqual(200, response.status_code)
+        data = response.json()["data"]
+        profile_map = {item["profile_id"]: item for item in data["items"]}
+        self.assertEqual("module_default", data["defaults"]["strategy"])
+        self.assertTrue(profile_map["module_default"]["enabled"])
+        self.assertEqual("gpt-5-coder", profile_map["strategy_model"]["model"])
+        self.assertTrue(profile_map["strategy_model"]["enabled"])
+        self.assertEqual("gpt-5-mini", profile_map["mentor_model"]["model"])
+        self.assertTrue(profile_map["mentor_model"]["enabled"])
+        self.assertEqual("gpt-5-research", profile_map["summary_model"]["model"])
+        self.assertTrue(profile_map["summary_model"]["enabled"])
+        self.assertEqual("deepseek-chat", profile_map["deepseek"]["model"])
+        self.assertTrue(profile_map["deepseek"]["enabled"])
+        self.assertEqual("ep-demo", profile_map["volcengine"]["model"])
+        self.assertTrue(profile_map["volcengine"]["enabled"])
 
     def test_admin_can_login_and_access_workspace(self) -> None:
         client = self._build_client()
@@ -1150,6 +1197,8 @@ class QuantPlatformApiTests(unittest.TestCase):
         llm_parse_mock.return_value = {
             "mode": "llm_assisted",
             "summary": "AI 理解到这是一个放量回踩确认后再试仓的日线策略。",
+            "llm_profile": "module_default",
+            "llm_profile_label": "模块默认模型",
             "data_dependencies": ["A股行情", "量比"],
             "entry_intent": ["放量后回踩确认入场"],
             "exit_intent": ["跌破均线离场"],
@@ -1168,6 +1217,7 @@ class QuantPlatformApiTests(unittest.TestCase):
         client = self._build_client(
             llm_base_url="https://llm.example.test/v1",
             llm_api_key="sk-test",
+            llm_model_strategy="gpt-5-strategy",
             llm_model_mentor="gpt-5-mini",
         )
 
@@ -1179,6 +1229,7 @@ class QuantPlatformApiTests(unittest.TestCase):
                 "timeframe": "1d",
                 "asset_type": "stock",
                 "preferences": {"side": "long"},
+                "llm_profile": "module_default",
             },
         )
 
@@ -1186,8 +1237,10 @@ class QuantPlatformApiTests(unittest.TestCase):
         payload = response.json()["data"]
         self.assertEqual("llm_assisted", payload["ai_interpretation"]["mode"])
         self.assertIn("放量回踩确认", payload["ai_interpretation"]["summary"])
+        self.assertEqual("模块默认模型", payload["ai_interpretation"]["llm_profile_label"])
         self.assertEqual("llm_assisted", payload["understanding_card"]["parse_mode"])
         self.assertEqual("AI 理解到这是一个放量回踩确认后再试仓的日线策略。", payload["structured_spec"]["ai_candidate_summary"])
+        self.assertEqual("模块默认模型", payload["structured_spec"]["ai_profile_label"])
         self.assertIn("回踩幅度需要补充", payload["structured_spec"]["ai_unresolved_items"])
         self.assertTrue(any(item["id"] == "ai_understanding" for item in payload["generation_pipeline"]))
         self.assertTrue(any(item["title"] == "回踩幅度需要补充" for item in payload["questions_for_user"]))
@@ -4383,6 +4436,7 @@ class QuantPlatformApiTests(unittest.TestCase):
                 ),
                 "market": "cn_equity",
                 "adjustment_mode": "qfq",
+                "llm_profile": "module_default",
             },
         )
 
@@ -4391,6 +4445,7 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertEqual("hybrid_llm", data["parse_mode"])
         self.assertTrue(data["ai_review"]["used"])
         self.assertEqual("AI 混合解析", data["ai_review"]["mode_label"])
+        self.assertEqual("模块默认模型", data["ai_review"]["profile_label"])
         self.assertIn("人工确认", data["ai_review"]["warnings"][0])
         self.assertEqual("次日开盘价买入", data["group_summaries"][0]["entry_rule"])
         self.assertEqual("下跌 3% 止损卖出", data["group_summaries"][1]["exit_rule"])

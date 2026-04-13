@@ -1,6 +1,8 @@
 import {
   activateNav,
   api,
+  fetchLlmProfiles,
+  populateLlmProfileSelect,
   setStatus,
 } from "/assets/shared.js";
 
@@ -19,6 +21,7 @@ const nodes = {
   depth: document.querySelector("#assistant-depth"),
   market: document.querySelector("#assistant-market"),
   target: document.querySelector("#assistant-target"),
+  llmProfile: document.querySelector("#assistant-llm-profile"),
   query: document.querySelector("#assistant-query"),
   runButton: document.querySelector("#assistant-run-btn"),
   summary: document.querySelector("#assistant-summary"),
@@ -129,7 +132,7 @@ function renderResearch(payload) {
   nodes.summary.innerHTML = `
     <div class="list-item mentor-answer-card">
       <strong>${payload.workflow_title}</strong>
-      <div class="muted-note">当前模式：${payload.answer_mode_label || "平台研究模板"}</div>
+      <div class="muted-note">当前模式：${payload.answer_mode_label || "平台研究模板"}${payload.llm_profile_label ? ` · ${payload.llm_profile_label}` : ""}</div>
       <div class="muted-note">${payload.executive_summary}</div>
     </div>
     <div class="list-item mentor-answer-card">
@@ -211,6 +214,7 @@ async function runAssistant(query, isFollowUp = false) {
       market_scope: nodes.market.value,
       research_depth: nodes.depth.value,
       current_module: "assistant",
+      llm_profile: nodes.llmProfile.value || "module_default",
       conversation_history: state.history.map((item) => ({
         role: item.role,
         content: item.content,
@@ -225,9 +229,13 @@ async function runAssistant(query, isFollowUp = false) {
 }
 
 async function loadAssistant() {
-  const payload = await api("/api/v1/assistant/workflows");
+  const [payload, llmProfiles] = await Promise.all([
+    api("/api/v1/assistant/workflows"),
+    fetchLlmProfiles(),
+  ]);
   renderWorkflows(payload.data.items || []);
   renderDesks(payload.data.desks || []);
+  populateLlmProfileSelect(nodes.llmProfile, llmProfiles, "assistant");
 }
 
 nodes.query.addEventListener("input", syncRunButtonState);

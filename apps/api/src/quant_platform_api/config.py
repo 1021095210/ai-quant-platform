@@ -25,6 +25,12 @@ class Settings:
     llm_model_strategy: str = ""
     llm_model_summary: str = ""
     llm_model_mentor: str = ""
+    llm_deepseek_base_url: str = "https://api.deepseek.com"
+    llm_deepseek_api_key: str = ""
+    llm_deepseek_model: str = ""
+    llm_volcengine_base_url: str = "https://ark.cn-beijing.volces.com/api/v3"
+    llm_volcengine_api_key: str = ""
+    llm_volcengine_model: str = ""
     allowed_llm_export_fields: str = "symbol,side,entry_time,exit_time,pnl,feature_snapshot"
     backtest_engine_version: str = "engine_v1"
     strategy_prompt_version: str = "v1"
@@ -94,6 +100,30 @@ class Settings:
             llm_model_mentor=os.getenv(
                 "LLM_MODEL_MENTOR",
                 os.getenv("OPENAI_MODEL", defaults.llm_model_mentor),
+            ),
+            llm_deepseek_base_url=os.getenv(
+                "LLM_DEEPSEEK_BASE_URL",
+                defaults.llm_deepseek_base_url,
+            ),
+            llm_deepseek_api_key=os.getenv(
+                "LLM_DEEPSEEK_API_KEY",
+                defaults.llm_deepseek_api_key,
+            ),
+            llm_deepseek_model=os.getenv(
+                "LLM_DEEPSEEK_MODEL",
+                defaults.llm_deepseek_model,
+            ),
+            llm_volcengine_base_url=os.getenv(
+                "LLM_VOLCENGINE_BASE_URL",
+                defaults.llm_volcengine_base_url,
+            ),
+            llm_volcengine_api_key=os.getenv(
+                "LLM_VOLCENGINE_API_KEY",
+                os.getenv("ARK_API_KEY", defaults.llm_volcengine_api_key),
+            ),
+            llm_volcengine_model=os.getenv(
+                "LLM_VOLCENGINE_MODEL",
+                os.getenv("ARK_MODEL", defaults.llm_volcengine_model),
             ),
             allowed_llm_export_fields=os.getenv(
                 "ALLOWED_LLM_EXPORT_FIELDS",
