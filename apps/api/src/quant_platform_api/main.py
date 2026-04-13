@@ -83,6 +83,7 @@ from quant_platform_api.services import (
     build_replay_result,
     list_llm_profiles,
     list_platform_capabilities,
+    make_json_safe,
     summarize_strategy_capability,
     validate_backtest_capability,
 )
@@ -255,6 +256,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         request: Request,
         exc: RequestValidationError,
     ) -> JSONResponse:
+        error_details = {"errors": make_json_safe(exc.errors())}
         services.app_log_service.record(
             message="request validation failed",
             source="server",
@@ -262,14 +264,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             level="warning",
             request_path=str(request.url.path),
             user=_get_current_user(request, services.auth_service),
-            details={"errors": exc.errors()},
+            details=error_details,
         )
         return _error_response(
             request,
             status_code=status.HTTP_400_BAD_REQUEST,
             code="INVALID_ARGUMENT",
             message="invalid request",
-            details={"errors": exc.errors()},
+            details=error_details,
         )
 
     @app.exception_handler(Exception)

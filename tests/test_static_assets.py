@@ -262,6 +262,8 @@ class StaticAssetTests(unittest.TestCase):
 
         self.assertIn("优先链路", backtests_js)
         self.assertIn("执行约束回放", backtests_js)
+        self.assertIn("nodes.adjustmentMode.value", backtests_js)
+        self.assertIn("nodes.assetType.value", backtests_js)
 
     def test_rules_js_can_bootstrap_with_stubbed_dom(self) -> None:
         node = shutil.which("node")
