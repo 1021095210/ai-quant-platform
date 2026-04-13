@@ -141,11 +141,13 @@ function renderUnderstandingCard(card) {
     return;
   }
   const sections = [
+    ["理解模式", card.parse_mode === "llm_assisted" ? "AI 候选理解 + 平台规则约束" : "规则 / 语义解析"],
     ["市场", `${card.market_scope_label} / ${card.market}`],
     ["资产类型", card.asset_type],
     ["主周期", card.primary_timeframe_label],
     ["观察周期", (card.timeframe_labels || []).join(" / ") || "未识别"],
     ["数据依赖", (card.data_dependencies || []).join(" / ") || "未识别"],
+    ["AI 候选摘要", card.ai_summary || "当前未启用 AI 候选理解或未得到稳定结果"],
     [
       "已补充说明",
       Object.entries(card.clarifications || {})
@@ -164,6 +166,16 @@ function renderUnderstandingCard(card) {
       (card.exit_conditions || [])
         .map((item) => `${item.label} ${item.operator} ${String(item.value)}`)
         .join("；") || "未识别",
+    ],
+    [
+      "AI 待确认项",
+      (card.ai_unresolved_items || [])
+        .map((item) => item.title)
+        .join("；") || "无",
+    ],
+    [
+      "AI 风险提示",
+      (card.ai_risky_items || []).join("；") || "无",
     ],
   ];
   nodes.understandingCard.innerHTML = sections
@@ -326,6 +338,8 @@ function renderStructuredSpecView(spec) {
     ],
     ["执行假设", (spec.execution_assumptions || []).join("；") || "无"],
     ["澄清上下文记忆", spec.clarification_memory || "当前无已确认补充项"],
+    ["AI 候选摘要", spec.ai_candidate_summary || "当前无 AI 候选摘要"],
+    ["AI 待确认项", (spec.ai_unresolved_items || []).join("；") || "无"],
     [
       "待补充项",
       (spec.open_questions || []).join("；") || "当前无待补充项",

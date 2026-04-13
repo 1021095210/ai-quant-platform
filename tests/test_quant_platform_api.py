@@ -1145,6 +1145,54 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertIn("量能阈值=量比 >= 1.3", payload["structured_spec"]["clarification_memory"])
         self.assertTrue(any(item["id"] == "clarification_context" for item in payload["generation_pipeline"]))
 
+    @patch("quant_platform_api.services.StrategyService._parse_strategy_with_llm")
+    def test_generate_strategy_uses_llm_candidate_understanding_without_bypassing_validation(self, llm_parse_mock) -> None:
+        llm_parse_mock.return_value = {
+            "mode": "llm_assisted",
+            "summary": "AI 理解到这是一个放量回踩确认后再试仓的日线策略。",
+            "data_dependencies": ["A股行情", "量比"],
+            "entry_intent": ["放量后回踩确认入场"],
+            "exit_intent": ["跌破均线离场"],
+            "risk_controls": ["需要明确止损比例"],
+            "position_intent": "试仓后再考虑加仓",
+            "execution_assumptions": ["当前按日线主链路理解"],
+            "unresolved_items": [
+                {
+                    "title": "回踩幅度需要补充",
+                    "detail": "当前提到了回踩确认，但没有说明相对哪条均线或允许的回踩幅度。",
+                    "suggested_choices": ["回踩 5 日均线附近", "回踩不超过前高 1%"],
+                }
+            ],
+            "risky_items": ["量能和回踩条件需要进一步量化，避免语义过宽。"],
+        }
+        client = self._build_client(
+            llm_base_url="https://llm.example.test/v1",
+            llm_api_key="sk-test",
+            llm_model_mentor="gpt-5-mini",
+        )
+
+        response = client.post(
+            "/api/v1/strategies/generate",
+            json={
+                "prompt": "放量后回踩确认再买，大盘不差的时候试仓",
+                "market": "600519.SH",
+                "timeframe": "1d",
+                "asset_type": "stock",
+                "preferences": {"side": "long"},
+            },
+        )
+
+        self.assertEqual(200, response.status_code)
+        payload = response.json()["data"]
+        self.assertEqual("llm_assisted", payload["ai_interpretation"]["mode"])
+        self.assertIn("放量回踩确认", payload["ai_interpretation"]["summary"])
+        self.assertEqual("llm_assisted", payload["understanding_card"]["parse_mode"])
+        self.assertEqual("AI 理解到这是一个放量回踩确认后再试仓的日线策略。", payload["structured_spec"]["ai_candidate_summary"])
+        self.assertIn("回踩幅度需要补充", payload["structured_spec"]["ai_unresolved_items"])
+        self.assertTrue(any(item["id"] == "ai_understanding" for item in payload["generation_pipeline"]))
+        self.assertTrue(any(item["title"] == "回踩幅度需要补充" for item in payload["questions_for_user"]))
+        self.assertEqual("needs_confirmation", payload["generation_decision"]["status"])
+
     def test_strategy_page_shows_field_mapping_snippet_labels(self) -> None:
         client = self._build_client()
         self._login(client)

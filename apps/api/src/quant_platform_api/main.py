@@ -152,6 +152,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         strategy_repository,
         indicator_repository,
         glossary_repository,
+        app_settings,
     )
     services = AppServices(
         settings=app_settings,
