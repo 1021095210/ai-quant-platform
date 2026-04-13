@@ -2545,6 +2545,7 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertIn("parameter_stability", data["objective_versions"][0]["search_summary"])
         self.assertIn("neighbor_bands", data["objective_versions"][0]["search_summary"]["parameter_stability"])
         self.assertIn("summary", data["objective_versions"][0]["objective_counterfactual"])
+        self.assertIn("search_linked_summary", data["objective_versions"][0]["objective_counterfactual"])
         self.assertTrue(isinstance(data["counterfactual_template_summary"], list))
         self.assertIn("样本筛选回放", data["objective_versions"][0]["comparison_note"])
         self.assertIn("上下文评分", data["objective_versions"][0]["comparison_note"])
@@ -3028,6 +3029,83 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertEqual("不开仓过滤", summary[0]["title"])
         self.assertEqual(2, summary[0]["sample_count"])
         self.assertEqual(2, summary[0]["skipped_count"])
+        self.assertIn("focus", summary[0])
+
+    def test_replay_objective_counterfactual_summary_links_candidate_leaderboard(self) -> None:
+        class FakeMarketDataService:
+            def load_daily_bars(self, *, ts_code, start_date, end_date, adjustment_mode):
+                return (
+                    [
+                        MarketBar(
+                            ts_code=ts_code,
+                            asset_type="stock",
+                            adjustment_mode="qfq",
+                            trade_date="2024-05-01",
+                            open=10.0,
+                            high=10.1,
+                            low=9.7,
+                            close=9.8,
+                            volume=1000,
+                            amount=10000,
+                            pct_chg=0.0,
+                            turnover=1.0,
+                            data_source="internal_clickhouse_dwd",
+                            fetched_at="2026-04-09T00:00:00",
+                        ),
+                        MarketBar(
+                            ts_code=ts_code,
+                            asset_type="stock",
+                            adjustment_mode="qfq",
+                            trade_date="2024-05-02",
+                            open=9.8,
+                            high=10.0,
+                            low=9.4,
+                            close=9.5,
+                            volume=1200,
+                            amount=11000,
+                            pct_chg=0.0,
+                            turnover=1.2,
+                            data_source="internal_clickhouse_dwd",
+                            fetched_at="2026-04-09T00:00:00",
+                        ),
+                    ],
+                    {"provider": "internal_clickhouse_dwd", "status": "ready"},
+                )
+
+            def load_minute_window(self, *, ts_code, start_time, end_time, adjustment_mode):
+                return [], {"provider": "internal_clickhouse_dwd", "status": "unavailable"}
+
+        trade = TradeRecordItem(
+            trade_id="loss_link_1",
+            symbol="600519.SH",
+            side="long",
+            entry_time=datetime.fromisoformat("2024-05-01T09:35:00+08:00"),
+            exit_time=datetime.fromisoformat("2024-05-02T15:00:00+08:00"),
+            pnl=-320.0,
+            entry_price=10.4,
+            exit_price=9.82,
+        )
+        summary = _build_replay_objective_counterfactual_summary(
+            records=[trade],
+            replay_market="cn_a_share",
+            market_data_service=FakeMarketDataService(),
+            selected_patch={"filters": {}, "risk": {"stop_loss_pct": -0.02}},
+            candidate_leaderboard=[
+                {
+                    "label": "候选 1",
+                    "score": 1.23,
+                    "focus": {"stop_loss_pct": -0.015},
+                    "patch": {"filters": {}, "risk": {"stop_loss_pct": -0.015}},
+                }
+            ],
+            minute_context_by_trade_id={},
+            fundamental_context_by_trade_id={},
+        )
+
+        self.assertIn("search_linked_summary", summary)
+        self.assertTrue(summary["search_linked_summary"])
+        self.assertEqual(1, summary["search_linked_summary"]["considered_count"])
+        self.assertTrue(summary["search_linked_summary"]["focused_cases"])
 
     def test_replay_counterfactual_cases_include_extended_templates(self) -> None:
         class FakeMarketDataService:
