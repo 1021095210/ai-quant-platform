@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -23,6 +24,28 @@ from quant_platform_api.config import Settings
 
 
 class SettingsTests(unittest.TestCase):
+    def test_from_env_loads_project_dotenv_when_process_env_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            env_path = Path(temp_dir) / ".env"
+            env_path.write_text(
+                "\n".join(
+                    [
+                        "LLM_BASE_URL=https://ark.cn-beijing.volces.com/api/v3",
+                        "LLM_API_KEY=ark-local-test",
+                        "LLM_MODEL_MENTOR=deepseek-v3-2-251201",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            with patch.dict(os.environ, {}, clear=True):
+                with patch("quant_platform_api.config._project_env_path", return_value=env_path):
+                    settings = Settings.from_env()
+
+        self.assertEqual("https://ark.cn-beijing.volces.com/api/v3", settings.llm_base_url)
+        self.assertEqual("ark-local-test", settings.llm_api_key)
+        self.assertEqual("deepseek-v3-2-251201", settings.llm_model_mentor)
+
     def test_from_env_reads_deployment_related_settings(self) -> None:
         with patch.dict(
             os.environ,

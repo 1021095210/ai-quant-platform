@@ -197,6 +197,19 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertTrue(payload["data"]["default_accounts_enabled"])
         self.assertFalse(payload["data"]["session_cookie_secure"])
 
+    def test_healthz_treats_volcengine_profile_as_llm_configured(self) -> None:
+        client = self._build_client(
+            llm_volcengine_api_key="ark-test",
+            llm_volcengine_model="deepseek-v3-2-251201",
+        )
+
+        response = client.get("/healthz")
+
+        self.assertEqual(200, response.status_code)
+        payload = response.json()
+        self.assertTrue(payload["data"]["llm_configured"])
+        self.assertIn("volcengine", payload["data"]["llm_enabled_profiles"])
+
     def test_production_profile_disables_default_accounts_and_uses_secure_cookie(self) -> None:
         client = self._build_client(
             enable_default_accounts=False,

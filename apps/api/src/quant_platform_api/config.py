@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import os
+from pathlib import Path
 
 
 @dataclass(slots=True)
@@ -52,6 +53,7 @@ class Settings:
 
     @classmethod
     def from_env(cls) -> "Settings":
+        _load_project_env_file()
         defaults = cls()
         app_env = os.getenv("APP_ENV", defaults.app_env)
         app_public_url = os.getenv("APP_PUBLIC_URL", defaults.app_public_url)
@@ -199,3 +201,23 @@ def _env_bool(name: str, default: bool) -> bool:
     if value is None:
         return default
     return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _project_env_path() -> Path:
+    return Path(__file__).resolve().parents[4] / ".env"
+
+
+def _load_project_env_file() -> None:
+    env_path = _project_env_path()
+    if not env_path.exists():
+        return
+    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if not key or key in os.environ:
+            continue
+        cleaned = value.strip().strip("'").strip('"')
+        os.environ[key] = cleaned

@@ -604,6 +604,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/healthz")
     def healthz(request: Request) -> JSONResponse:
+        llm_profiles = list_llm_profiles(app_settings)
+        llm_enabled_profiles = [item["profile_id"] for item in llm_profiles if item.get("enabled")]
         return _success_response(
             request,
             data={
@@ -616,9 +618,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 else "sqlite",
                 "redis_configured": bool(app_settings.redis_url),
                 "minio_configured": bool(app_settings.minio_endpoint),
-                "llm_configured": bool(
-                    app_settings.llm_base_url and app_settings.llm_api_key
-                ),
+                "llm_configured": bool(llm_enabled_profiles),
+                "llm_enabled_profiles": llm_enabled_profiles,
                 "default_accounts_enabled": app_settings.enable_default_accounts,
                 "session_cookie_secure": app_settings.session_cookie_secure,
                 "clickhouse_configured": bool(app_settings.clickhouse_host),
