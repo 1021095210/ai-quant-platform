@@ -220,9 +220,25 @@
               </div>
               <div class="form-grid two">
                 <label class="field">
+                  <span>买入价格</span>
+                  <input id="trade-manual-entry-price" type="number" step="0.0001" placeholder="如 10.52" />
+                </label>
+                <label class="field">
+                  <span>卖出价格</span>
+                  <input id="trade-manual-exit-price" type="number" step="0.0001" placeholder="如 10.86" />
+                </label>
+              </div>
+              <div class="form-grid two">
+                <label class="field">
+                  <span>买卖股票手数</span>
+                  <input id="trade-manual-quantity" type="number" step="1" min="0" placeholder="如 10 手" />
+                </label>
+                <label class="field">
                   <span>盈亏</span>
                   <input id="trade-manual-pnl" type="number" step="0.01" value="0" />
                 </label>
+              </div>
+              <div class="form-grid">
                 <label class="field">
                   <span>来源说明</span>
                   <input id="trade-manual-notes" placeholder="如：手动补录、券商账单摘录" />

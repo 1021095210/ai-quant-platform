@@ -3396,6 +3396,39 @@ class MentorService:
             return "".join(content_parts)
         return response.text
 
+    def _extract_completion_content(self, response: httpx.Response) -> str:
+        try:
+            payload = response.json()
+        except Exception:
+            return response.text
+        if not isinstance(payload, dict):
+            return response.text
+        choices = payload.get("choices") or []
+        if choices:
+            message = choices[0].get("message") or {}
+            content = message.get("content")
+            if isinstance(content, str):
+                return content
+            if isinstance(content, list):
+                text_parts: list[str] = []
+                for item in content:
+                    if isinstance(item, dict) and item.get("type") in {"text", "output_text"}:
+                        text_parts.append(str(item.get("text") or ""))
+                if text_parts:
+                    return "".join(text_parts)
+        output = payload.get("output")
+        if isinstance(output, list):
+            text_parts: list[str] = []
+            for item in output:
+                if not isinstance(item, dict):
+                    continue
+                for content in item.get("content", []) or []:
+                    if isinstance(content, dict) and content.get("type") in {"output_text", "text"}:
+                        text_parts.append(str(content.get("text") or ""))
+            if text_parts:
+                return "".join(text_parts)
+        return response.text
+
     def _extract_json_object(self, content: str) -> dict[str, Any]:
         candidate = content.strip()
         fenced = re.search(r"```(?:json)?\s*(\{.*\})\s*```", candidate, flags=re.S)
@@ -3740,6 +3773,7 @@ class TradeUploadService:
                 pnl=float(item.get("pnl", 0.0)),
                 entry_price=_safe_number(item.get("entry_price")),
                 exit_price=_safe_number(item.get("exit_price")),
+                quantity=_safe_number(item.get("quantity")),
                 notes=(str(item.get("notes", "")).strip() or None),
                 source_kind="screenshot_form" if upload_kind == "screenshot" else "manual_entry",
                 input_confidence="needs_review" if upload_kind == "screenshot" else "user_provided",
@@ -3753,6 +3787,7 @@ class TradeUploadService:
                     "pnl": "screenshot_form" if upload_kind == "screenshot" else "user_manual",
                     "entry_price": "screenshot_form" if upload_kind == "screenshot" else "user_manual",
                     "exit_price": "screenshot_form" if upload_kind == "screenshot" else "user_manual",
+                    "quantity": "screenshot_form" if upload_kind == "screenshot" else "user_manual",
                     "notes": "screenshot_form" if upload_kind == "screenshot" else "user_manual",
                 },
                 needs_confirmation=upload_kind == "screenshot",
@@ -3767,12 +3802,15 @@ class TradeUploadService:
             raw_text=json.dumps(records, ensure_ascii=False),
             upload_kind=upload_kind,
             status="parsed",
-            detected_columns=["symbol", "side", "entry_time", "exit_time", "pnl"],
+            detected_columns=["symbol", "side", "entry_time", "exit_time", "entry_price", "exit_price", "quantity", "pnl"],
             column_mapping={
                 "symbol": "symbol",
                 "side": "side",
                 "entry_time": "entry_time",
                 "exit_time": "exit_time",
+                "entry_price": "entry_price",
+                "exit_price": "exit_price",
+                "quantity": "quantity",
                 "pnl": "pnl",
             },
             metadata=metadata or {},
@@ -3835,6 +3873,9 @@ class TradeUploadService:
                     exit_price=_safe_number(
                         row.get(column_mapping.get("exit_price", ""), "")
                     ),
+                    quantity=_safe_number(
+                        row.get(column_mapping.get("quantity", ""), "")
+                    ),
                     notes=(row.get(column_mapping.get("notes", ""), "") or None),
                     source_kind="csv_import",
                     input_confidence="user_provided",
@@ -3848,6 +3889,7 @@ class TradeUploadService:
                         "pnl": "csv_column",
                         "entry_price": "csv_column",
                         "exit_price": "csv_column",
+                        "quantity": "csv_column",
                         "notes": "csv_column",
                     },
                     needs_confirmation=False,
@@ -3882,15 +3924,15 @@ class TradeUploadService:
         if not normalized_text:
             raise TaskExecutionError("INVALID_ARGUMENT", "请先输入需要识别的长文字内容。")
 
+        grouped_candidates = self._extract_grouped_trade_candidates(
+            normalized_text,
+            market=market,
+        )
         llm_parse = self._parse_trade_text_with_llm(
             text=normalized_text,
             market=market,
             llm_profile=llm_profile,
-        )
-
-        grouped_candidates = self._extract_grouped_trade_candidates(
-            normalized_text,
-            market=market,
+            grouped_candidate_count=len(grouped_candidates),
         )
         if len(grouped_candidates) > 1:
             cache_start_date = min(item["trade_date"] for item in grouped_candidates) - timedelta(days=40)
@@ -3986,6 +4028,8 @@ class TradeUploadService:
         cache_start_date: date | None = None,
         cache_end_date: date | None = None,
     ) -> dict[str, Any]:
+        total_symbol_count = sum(len(item["symbols"]) for item in grouped_candidates)
+        batch_placeholder_mode = total_symbol_count >= 60 or len(grouped_candidates) >= 8
         global_entry_rule = (
             self._extract_entry_rule_or_none(text)
             or self._extract_rule_from_llm_text(llm_parse.get("global_entry_rule") if llm_parse else None, kind="entry")
@@ -4031,6 +4075,8 @@ class TradeUploadService:
                     bar_cache=bar_cache,
                     cache_start_date=cache_start_date,
                     cache_end_date=cache_end_date,
+                    sync_market_data=not batch_placeholder_mode,
+                    allow_unpriced_placeholder=batch_placeholder_mode,
                 )
                 records.append(record)
                 group_records.append(record)
@@ -4123,6 +4169,8 @@ class TradeUploadService:
         bar_cache: dict[tuple[str, str, date, date], tuple[list[Any], dict[str, Any]]] | None = None,
         cache_start_date: date | None = None,
         cache_end_date: date | None = None,
+        sync_market_data: bool = True,
+        allow_unpriced_placeholder: bool = False,
     ) -> TradeRecordItem:
         bars, data_source = self._load_trade_bars(
             symbol=symbol,
@@ -4131,6 +4179,7 @@ class TradeUploadService:
             bar_cache=bar_cache,
             cache_start_date=cache_start_date,
             cache_end_date=cache_end_date,
+            sync_market_data=sync_market_data,
         )
         entry_bar = self._find_bar_by_offset(
             bars,
@@ -4138,6 +4187,42 @@ class TradeUploadService:
             entry_rule.get("offset", 0),
         ) or self._find_first_bar_on_or_after(bars, trade_date)
         if entry_bar is None:
+            if allow_unpriced_placeholder:
+                return TradeRecordItem(
+                    trade_id=f"text_trade_{index:03d}",
+                    symbol=symbol,
+                    side="long",
+                    entry_time=self._default_entry_time_for_market(trade_date, market),
+                    exit_time=None,
+                    pnl=0.0,
+                    entry_price=None,
+                    exit_price=None,
+                    quantity=None,
+                    notes=(
+                        "来源：长文字智能识别；当前批量解析未命中本地行情缓存，"
+                        "已保留结构化记录，待人工确认或后续补价。"
+                    ),
+                    source_kind="text_parse_hybrid" if llm_used else "text_parse_rule",
+                    input_confidence="needs_review",
+                    provenance_tags=[
+                        "text_parse",
+                        "pending_market_fill",
+                        "llm_hybrid" if llm_used else "rule_parser",
+                    ],
+                    derived_fields=[],
+                    field_sources={
+                        "symbol": "text_rule_parse",
+                        "side": "platform_default",
+                        "entry_time": "text_rule_parse",
+                        "exit_time": "pending_confirmation",
+                        "entry_price": "pending_confirmation",
+                        "exit_price": "pending_confirmation",
+                        "pnl": "pending_confirmation",
+                        "notes": "system_generated",
+                    },
+                    needs_confirmation=True,
+                    conflict_flags=["market_data_unavailable"],
+                )
             raise TaskExecutionError("NOT_FOUND", f"{symbol} 在 {trade_date.isoformat()} 附近没有可用行情。")
 
         entry_price = self._resolve_entry_price(entry_bar, entry_rule)
@@ -4187,6 +4272,7 @@ class TradeUploadService:
             pnl=round(pnl, 4),
             entry_price=round(entry_price, 4),
             exit_price=round(exit_price, 4) if exit_price is not None else None,
+            quantity=None,
             notes=notes,
             source_kind="text_parse_hybrid" if llm_used else "text_parse_rule",
             input_confidence="needs_review",
@@ -4215,6 +4301,7 @@ class TradeUploadService:
         bar_cache: dict[tuple[str, str, date, date], tuple[list[Any], dict[str, Any]]] | None = None,
         cache_start_date: date | None = None,
         cache_end_date: date | None = None,
+        sync_market_data: bool = True,
     ) -> tuple[list[Any], dict[str, Any]]:
         if self._market_data_service is None:
             raise TaskExecutionError("INTERNAL_ERROR", "market data service unavailable")
@@ -4228,6 +4315,7 @@ class TradeUploadService:
             start_date=start_date,
             end_date=end_date,
             adjustment_mode=adjustment_mode,
+            sync_if_missing=sync_market_data,
         )
         if bar_cache is not None:
             bar_cache[cache_key] = loaded
@@ -4279,6 +4367,32 @@ class TradeUploadService:
                 "exit_time": datetime.fromisoformat(f"{fallback_bar.trade_date}T15:00:00+00:00"),
                 "pnl": fallback_price - entry_price,
                 "note": "数据范围内未触发 ATR 阈值，已按后续可用收盘价补全",
+            }
+
+        if exit_rule["type"] == "atr_daily_open_break":
+            future_bars = [
+                bar
+                for bar in bars
+                if date.fromisoformat(bar.trade_date) >= date.fromisoformat(entry_bar.trade_date)
+            ]
+            for bar in future_bars:
+                atr_value = self._estimate_atr14(bars, bar.trade_date)
+                threshold = round(float(bar.open) - exit_rule["multiplier"] * atr_value, 4)
+                if float(bar.low) <= threshold:
+                    exit_time = datetime.fromisoformat(f"{bar.trade_date}T15:00:00+00:00")
+                    return {
+                        "exit_price": threshold,
+                        "exit_time": exit_time,
+                        "pnl": threshold - entry_price,
+                        "note": f"按买入后任一天开盘价减 ATR 阈值 {threshold:.4f} 触发卖出",
+                    }
+            fallback_bar = future_bars[min(9, len(future_bars) - 1)] if future_bars else entry_bar
+            fallback_price = float(fallback_bar.close)
+            return {
+                "exit_price": fallback_price,
+                "exit_time": datetime.fromisoformat(f"{fallback_bar.trade_date}T15:00:00+00:00"),
+                "pnl": fallback_price - entry_price,
+                "note": "数据范围内未触发买入后任一天开盘价减 ATR 阈值，已按后续可用收盘价补全",
             }
 
         if exit_rule["type"] == "explicit_price":
@@ -4572,7 +4686,10 @@ class TradeUploadService:
         text: str,
         market: str,
         llm_profile: str = "module_default",
+        grouped_candidate_count: int = 0,
     ) -> dict[str, Any] | None:
+        if grouped_candidate_count >= 8 or len(text) >= 2800:
+            return None
         runtime = _resolve_llm_runtime(
             self._settings,
             llm_profile,
@@ -4769,6 +4886,17 @@ class TradeUploadService:
                 "label": f"当最低价低于当日开盘价减去 {atr_match.group(1)} 倍 ATR 时卖出",
                 "multiplier": float(atr_match.group(1)),
             }
+        atr_daily_open_match = re.search(
+            r"(?:最低价|价格)(?:低于|跌破)买入后任何一天的开盘价-([0-9]+(?:\.[0-9]+)?)倍atr(?:的值)?(?:则)?(?:时卖出|卖出)?",
+            text,
+            flags=re.I,
+        )
+        if atr_daily_open_match is not None:
+            return {
+                "type": "atr_daily_open_break",
+                "label": f"当价格低于买入后任一天开盘价减去 {atr_daily_open_match.group(1)} 倍 ATR 时卖出",
+                "multiplier": float(atr_daily_open_match.group(1)),
+            }
         if "次日收盘价卖出" in text:
             return {"type": "next_close", "label": "次日收盘价卖出"}
         if "当日收盘价卖出" in text:
@@ -4839,8 +4967,21 @@ class FinancialAssistantService(MentorService):
         if not query:
             raise TaskExecutionError("INVALID_ARGUMENT", "query is required")
 
-        workflow = self._resolve_workflow(request.workflow_id)
-        fallback = self._build_assistant_fallback(workflow=workflow, request=request)
+        inferred_target_symbol = request.target_symbol or self._extract_research_symbol_from_query(
+            query,
+            request.market_scope,
+        )
+        normalized_target_symbol = self._normalize_research_symbol(
+            inferred_target_symbol,
+            request.market_scope,
+        )
+        workflow = self._resolve_workflow(
+            "company_deep_dive"
+            if normalized_target_symbol and request.workflow_id == "market_map"
+            else request.workflow_id
+        )
+        normalized_request = request.model_copy(update={"target_symbol": normalized_target_symbol})
+        fallback = self._build_assistant_fallback(workflow=workflow, request=normalized_request)
         response = {
             "assistant_name": "金融助手",
             "assistant_role": "机构研究协作台",
@@ -4849,7 +4990,7 @@ class FinancialAssistantService(MentorService):
             "workflow_title": workflow["title"],
             "market_scope": request.market_scope,
             "research_depth": request.research_depth,
-            "target_symbol": request.target_symbol,
+            "target_symbol": normalized_target_symbol,
             "current_module": request.current_module,
             "workflow_steps": self._workflow_steps_for(workflow["workflow_id"]),
             "desk_lineup": self.list_desks(),
@@ -4860,7 +5001,7 @@ class FinancialAssistantService(MentorService):
         try:
             llm_payload = self._answer_with_assistant_llm(
                 workflow=workflow,
-                request=request,
+                request=normalized_request,
                 fallback=response,
             )
             if llm_payload:
@@ -4870,6 +5011,31 @@ class FinancialAssistantService(MentorService):
         except Exception:
             pass
         return response
+
+    def _extract_research_symbol_from_query(self, query: str, market_scope: str) -> str:
+        normalized = (query or "").upper()
+        if market_scope == "cn_equity":
+            explicit = re.search(r"(?<!\d)(\d{6}\.(?:SH|SZ))(?![A-Z0-9])", normalized)
+            if explicit:
+                return explicit.group(1)
+            plain = re.search(r"(?<!\d)(\d{6})(?!\d)", normalized)
+            if plain:
+                return plain.group(1)
+        if market_scope == "us_equity":
+            explicit = re.search(r"\b([A-Z]{1,5})\b", normalized)
+            if explicit:
+                return explicit.group(1)
+        if market_scope == "crypto":
+            explicit = re.search(r"\b([A-Z0-9]{6,15})\b", normalized)
+            if explicit:
+                return explicit.group(1)
+        return ""
+
+    def _normalize_research_symbol(self, symbol: str, market_scope: str) -> str:
+        normalized = (symbol or "").strip().upper()
+        if market_scope == "cn_equity" and re.fullmatch(r"\d{6}", normalized):
+            return f"{normalized}.SH" if normalized.startswith(("5", "6", "9")) else f"{normalized}.SZ"
+        return normalized
 
     def _resolve_workflow(self, workflow_id: str) -> dict[str, Any]:
         for item in self.list_workflows():
@@ -4977,10 +5143,11 @@ class FinancialAssistantService(MentorService):
             "你是一名机构级金融研究助手，模拟宏观、基本面、技术、情绪、多头、空头、风控与组合经理的协作。"
             "请用中文输出结构化研究结果，不要写成泛泛聊天。"
             "输出必须是 JSON，对象字段固定为：executive_summary、desk_briefs、debate、risk_checklist、deliverables、next_actions、related_modules。"
-            "desk_briefs 是 3 到 6 个对象数组，每个对象含 desk、title、summary。"
+            "desk_briefs 是 3 到 4 个对象数组，每个对象含 desk、title、summary。"
             "debate 是 2 个对象数组，每个对象含 side、view。"
             "risk_checklist、deliverables、next_actions 都是中文字符串数组。"
             "related_modules 是对象数组，每个对象含 label、path、reason，路径仅限 /strategy /backtests /rules /indicators /replay /mentor /workspace。"
+            "请优先给简洁、可执行、少废话的结果。"
         )
         prompt_payload = {
             "workflow": workflow,
@@ -4999,7 +5166,8 @@ class FinancialAssistantService(MentorService):
         request_payload = {
             "model": runtime["model"],
             "temperature": 0.35,
-            "stream": True,
+            "stream": False,
+            "max_tokens": 1200,
             "response_format": {"type": "json_object"},
             "messages": [
                 {"role": "system", "content": system_prompt},
@@ -5007,25 +5175,21 @@ class FinancialAssistantService(MentorService):
             ],
         }
         content = ""
-        for attempt in range(3):
+        for attempt in range(1):
             try:
-                with httpx.Client(timeout=60) as client:
-                    with client.stream(
-                        "POST",
+                with httpx.Client(timeout=httpx.Timeout(8.0, connect=4.0, read=8.0, write=8.0)) as client:
+                    response = client.post(
                         endpoint,
                         headers={
                             "Authorization": f"Bearer {runtime['api_key']}",
                             "Content-Type": "application/json",
                         },
                         json=request_payload,
-                    ) as response:
-                        response.raise_for_status()
-                        content = self._extract_stream_content(response)
+                    )
+                    response.raise_for_status()
+                    content = self._extract_completion_content(response)
                 break
             except httpx.HTTPStatusError as exc:
-                if exc.response.status_code in {429, 500, 502, 503, 504} and attempt < 2:
-                    sleep(1.2 * (attempt + 1))
-                    continue
                 raise
 
         parsed = self._extract_json_object(content)

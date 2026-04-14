@@ -1093,6 +1093,7 @@ class MarketDataService:
         end_date: date,
         asset_type: str | None = None,
         adjustment_mode: str = "qfq",
+        sync_if_missing: bool = True,
     ) -> tuple[list[MarketBar], dict[str, Any]]:
         actual_asset_type = asset_type or infer_asset_type(ts_code)
         start_text = start_date.strftime("%Y%m%d")
@@ -1109,7 +1110,7 @@ class MarketDataService:
 
         provider_name = "cache"
         fallback_reason = ""
-        if not cached:
+        if not cached and sync_if_missing:
             provider_name, fallback_reason = self._sync_range(
                 ts_code=ts_code,
                 asset_type=actual_asset_type,
@@ -1117,6 +1118,8 @@ class MarketDataService:
                 start_date=start_text,
                 end_date=end_text,
             )
+        elif not cached:
+            fallback_reason = "sync_skipped_for_batch_parse"
 
         bars = self._cache_repository.get_bars(
             ts_code=ts_code,

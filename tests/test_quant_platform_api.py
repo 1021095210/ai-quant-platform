@@ -1749,6 +1749,25 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertTrue(data["risk_checklist"])
         self.assertTrue(data["related_modules"])
 
+    def test_assistant_endpoint_normalizes_plain_cn_symbol(self) -> None:
+        client = self._build_client()
+        self._login(client)
+
+        response = client.post(
+            "/api/v1/assistant/analyze",
+            json={
+                "query": "请深度研究 688655 这个个股。",
+                "workflow_id": "company_deep_dive",
+                "target_symbol": "688655",
+                "market_scope": "cn_equity",
+                "research_depth": "standard",
+                "current_module": "assistant",
+            },
+        )
+
+        self.assertEqual(200, response.status_code)
+        self.assertEqual("688655.SH", response.json()["data"]["target_symbol"])
+
     @patch("quant_platform_api.services.httpx.Client")
     def test_mentor_can_use_llm_answer_when_configured(self, client_mock) -> None:
         stream_response = Mock()
@@ -4390,6 +4409,40 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertEqual("parsed", data["status"])
         self.assertEqual(1, data["record_count"])
 
+    def test_manual_trade_upload_keeps_prices_and_quantity(self) -> None:
+        client = self._build_client()
+        self._login(client)
+
+        response = client.post(
+            "/api/v1/trades/uploads/manual",
+            json={
+                "source_type": "manual",
+                "source_file_name": "manual-entry.json",
+                "source_notes": "手动补录",
+                "records": [
+                    {
+                        "symbol": "600519.SH",
+                        "side": "long",
+                        "entry_time": "2024-05-01T09:30:00Z",
+                        "exit_time": "2024-05-03T15:00:00Z",
+                        "entry_price": 10.52,
+                        "exit_price": 10.86,
+                        "quantity": 10,
+                        "pnl": 340.0,
+                    }
+                ],
+            },
+        )
+
+        self.assertEqual(200, response.status_code)
+        upload_id = response.json()["data"]["upload_id"]
+        records_response = client.get(f"/api/v1/trades/uploads/{upload_id}/records")
+        self.assertEqual(200, records_response.status_code)
+        record = records_response.json()["data"]["items"][0]
+        self.assertEqual(10.52, record["entry_price"])
+        self.assertEqual(10.86, record["exit_price"])
+        self.assertEqual(10.0, record["quantity"])
+
     def test_manual_text_parse_endpoint_recognizes_symbols_and_rules(self) -> None:
         client = self._build_client()
         self._login(client)
@@ -4549,6 +4602,28 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertTrue(all("长文字智能识别" in item["notes"] for item in data["records"]))
         self.assertEqual(2, data["group_count"])
         self.assertEqual("当日开盘价买入", data["group_summaries"][0]["entry_rule"])
+
+    def test_manual_text_parse_endpoint_supports_daily_open_atr_exit_rule(self) -> None:
+        client = self._build_client()
+        self._login(client)
+
+        response = client.post(
+            "/api/v1/trades/uploads/manual/parse-text",
+            json={
+                "text": (
+                    "2025-07-25 买入：603590.SH；"
+                    "买入方式：当日开盘价买入；"
+                    "卖出方式：价格低于买入后任何一天的开盘价-0.5倍atr时卖出"
+                ),
+                "market": "cn_equity",
+                "adjustment_mode": "qfq",
+            },
+        )
+
+        self.assertEqual(200, response.status_code)
+        data = response.json()["data"]
+        self.assertIn("买入后任一天开盘价", data["exit_rule"])
+        self.assertIn("买入后任一天开盘价减 ATR 阈值", data["records"][0]["notes"])
 
     def test_manual_text_parse_reuses_daily_bar_cache_for_repeated_symbols(self) -> None:
         class StubMarketDataService:
@@ -4720,6 +4795,100 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertEqual("下跌 3% 止损卖出", data["group_summaries"][1]["exit_rule"])
         self.assertIn("买入规则：次日开盘价买入", data["records"][0]["notes"])
         self.assertIn("卖出规则：下跌 3% 止损卖出", data["records"][-1]["notes"])
+
+    @patch("quant_platform_api.services.httpx.Client")
+    def test_manual_text_parse_skips_llm_for_large_grouped_text(self, client_mock) -> None:
+        class FakeMarketDataService:
+            def load_daily_bars(self, **kwargs):
+                return [], {"provider": "cache", "fallback_reason": "sync_skipped_for_batch_parse"}
+
+        service = TradeUploadService(
+            Mock(),
+            market_data_service=FakeMarketDataService(),
+            settings=Settings(
+                llm_base_url="https://llm.example.test/v1",
+                llm_api_key="sk-test",
+                llm_model_mentor="gpt-5-mini",
+            ),
+        )
+
+        text = "\n\n".join(
+            [
+                f"2025-08-{day:02d}\n（2 只）：603590.SH, 002225.SZ"
+                for day in range(1, 10)
+            ]
+        ) + "\n\n买入方式：当日开盘价买入\n卖出方式：价格低于买入后任何一天的开盘价-0.5倍atr时卖出"
+
+        result = service.parse_manual_trade_text(
+            text=text,
+            market="cn_equity",
+            adjustment_mode="qfq",
+            llm_profile="module_default",
+            user_id="user_test",
+            workspace_id="ws_test",
+        )
+
+        self.assertEqual("deterministic", result["parse_mode"])
+        client_mock.assert_not_called()
+
+    def test_assistant_endpoint_infers_cn_symbol_from_query_and_uses_company_deep_dive(self) -> None:
+        client = self._build_client(
+            llm_base_url="https://llm.example.test/v1",
+            llm_api_key="sk-test",
+            llm_model_mentor="gpt-5-mini",
+        )
+        self._login(client)
+
+        response = client.post(
+            "/api/v1/assistant/analyze",
+            json={
+                "query": "请深度研究688655这个个股",
+                "workflow_id": "market_map",
+                "target_symbol": "",
+                "market_scope": "cn_equity",
+                "research_depth": "standard",
+                "current_module": "assistant",
+                "llm_profile": "module_default",
+                "conversation_history": [],
+            },
+        )
+
+        self.assertEqual(200, response.status_code)
+        data = response.json()["data"]
+        self.assertEqual("688655.SH", data["target_symbol"])
+        self.assertEqual("company_deep_dive", data["workflow_id"])
+
+    def test_manual_text_parse_large_grouped_text_keeps_records_when_market_fill_is_skipped(self) -> None:
+        class EmptyMarketDataService:
+            def load_daily_bars(self, **kwargs):
+                return [], {"provider": "cache", "fallback_reason": "sync_skipped_for_batch_parse"}
+
+        service = TradeUploadService(
+            Mock(),
+            market_data_service=EmptyMarketDataService(),
+            settings=Settings(),
+        )
+
+        text = "\n\n".join(
+            [
+                f"2025-08-{day:02d}\n（6 只）：603590.SH, 002225.SZ, 001283.SZ, 603185.SH, 002360.SZ, 000513.SZ"
+                for day in range(1, 12)
+            ]
+        ) + "\n\n买入方式：当日开盘价买入\n卖出方式：价格低于买入后任何一天的开盘价-0.5倍atr时卖出"
+
+        result = service.parse_manual_trade_text(
+            text=text,
+            market="cn_equity",
+            adjustment_mode="qfq",
+            user_id="user_test",
+            workspace_id="ws_test",
+        )
+
+        self.assertEqual(11, result["group_count"])
+        self.assertEqual(66, result["record_count"])
+        self.assertTrue(all(item["needs_confirmation"] for item in result["records"]))
+        self.assertTrue(all(item["entry_price"] is None for item in result["records"]))
+        self.assertTrue(any("market_data_unavailable" in item["conflict_flags"] for item in result["records"]))
 
     def test_screenshot_trade_upload_creates_structured_record(self) -> None:
         client = self._build_client()
