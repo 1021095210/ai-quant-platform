@@ -735,6 +735,10 @@ th {
   min-height: 220px;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 .source-panel {
   display: grid;
   gap: 16px;

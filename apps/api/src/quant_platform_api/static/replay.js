@@ -66,6 +66,9 @@ const nodes = {
   manualSide: document.querySelector("#trade-manual-side"),
   manualEntry: document.querySelector("#trade-manual-entry"),
   manualExit: document.querySelector("#trade-manual-exit"),
+  manualEntryPrice: document.querySelector("#trade-manual-entry-price"),
+  manualExitPrice: document.querySelector("#trade-manual-exit-price"),
+  manualQuantity: document.querySelector("#trade-manual-quantity"),
   manualPnl: document.querySelector("#trade-manual-pnl"),
   manualNotes: document.querySelector("#trade-manual-notes"),
   manualMarket: document.querySelector("#trade-manual-market"),
@@ -282,6 +285,7 @@ async function parseManualText() {
     pnl: item.pnl,
     entry_price: item.entry_price,
     exit_price: item.exit_price,
+    quantity: item.quantity,
     notes: item.notes || "来源：长文字智能识别",
   })));
   renderManualTrades();
@@ -352,7 +356,7 @@ function renderManualTrades() {
             <div class="list-item compact-item">
               <strong>${item.symbol} · ${item.side === "short" ? "反向 / 做空" : "买入后卖出 / 做多"}</strong>
               <div class="muted-note">买入 ${item.entry_time.slice(0, 16).replace("T", " ")} · 卖出 ${item.exit_time ? item.exit_time.slice(0, 16).replace("T", " ") : "未填写"}</div>
-              <div class="muted-note">买入价 ${item.entry_price ?? "-"} · 卖出价 ${item.exit_price ?? "-"} · 盈亏 ${item.pnl}</div>
+              <div class="muted-note">买入价 ${item.entry_price ?? "-"} · 卖出价 ${item.exit_price ?? "-"} · 手数 ${item.quantity ?? "-"} · 盈亏 ${item.pnl}</div>
               <div class="muted-note">${item.notes || "无补充说明"}</div>
               <button class="btn ghost manual-remove-btn" type="button" data-manual-index="${index}">删除</button>
             </div>
@@ -381,12 +385,18 @@ function addManualTrade() {
     side: nodes.manualSide.value,
     entry_time: toIsoTimestamp(nodes.manualEntry.value),
     exit_time: nodes.manualExit.value ? toIsoTimestamp(nodes.manualExit.value) : null,
+    entry_price: nodes.manualEntryPrice.value ? Number(nodes.manualEntryPrice.value) : null,
+    exit_price: nodes.manualExitPrice.value ? Number(nodes.manualExitPrice.value) : null,
+    quantity: nodes.manualQuantity.value ? Number(nodes.manualQuantity.value) : null,
     pnl: Number(nodes.manualPnl.value || 0),
     notes: nodes.manualNotes.value.trim(),
   });
   nodes.manualSymbol.value = "";
   nodes.manualEntry.value = "";
   nodes.manualExit.value = "";
+  nodes.manualEntryPrice.value = "";
+  nodes.manualExitPrice.value = "";
+  nodes.manualQuantity.value = "";
   nodes.manualPnl.value = "0";
   nodes.manualNotes.value = "";
   renderManualTrades();

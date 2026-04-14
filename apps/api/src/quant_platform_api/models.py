@@ -249,6 +249,7 @@ class TradeRecordItem(BaseModel):
     pnl: float
     entry_price: float | None = None
     exit_price: float | None = None
+    quantity: float | None = None
     notes: str | None = None
     source_kind: str | None = None
     input_confidence: str | None = None
@@ -267,6 +268,7 @@ class ManualTradeRecordInput(BaseModel):
     pnl: float = 0.0
     entry_price: float | None = None
     exit_price: float | None = None
+    quantity: float | None = None
     notes: str | None = None
 
 

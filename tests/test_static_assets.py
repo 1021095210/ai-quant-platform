@@ -84,6 +84,9 @@ class StaticAssetTests(unittest.TestCase):
 
         self.assertIn('id="trade-manual-smart-text"', replay_html)
         self.assertIn('id="parse-manual-text-btn"', replay_html)
+        self.assertIn('id="trade-manual-entry-price"', replay_html)
+        self.assertIn('id="trade-manual-exit-price"', replay_html)
+        self.assertIn('id="trade-manual-quantity"', replay_html)
         self.assertIn("长文字智能识别", replay_html)
         self.assertIn('id="replay-overview"', replay_html)
         self.assertIn('id="replay-loss-features"', replay_html)
@@ -97,6 +100,31 @@ class StaticAssetTests(unittest.TestCase):
         self.assertIn('id="trade-manual-llm-profile"', replay_html)
         self.assertIn("/api/v1/trades/uploads/manual/parse-text", replay_js)
         self.assertIn("智能识别并加入记录", replay_js)
+
+    def test_replay_assets_hide_inactive_source_panels(self) -> None:
+        replay_html = (
+            WORKSPACE_ROOT
+            / "apps"
+            / "api"
+            / "src"
+            / "quant_platform_api"
+            / "static"
+            / "replay.html"
+        ).read_text(encoding="utf-8")
+        theme_css = (
+            WORKSPACE_ROOT
+            / "apps"
+            / "api"
+            / "src"
+            / "quant_platform_api"
+            / "static"
+            / "theme.css"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn('id="source-panel-screenshot" class="source-panel" hidden', replay_html)
+        self.assertIn('id="source-panel-manual" class="source-panel" hidden', replay_html)
+        self.assertIn("[hidden]", theme_css)
+        self.assertIn("display: none !important;", theme_css)
 
     def test_replay_assets_include_screenshot_ocr_flow(self) -> None:
         replay_html = (
