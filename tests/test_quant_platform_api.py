@@ -2789,6 +2789,7 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertEqual("夏普最大", data["overview"]["default_objective_label"])
         self.assertIn("input_truth_summary", data["overview"])
         self.assertIn("source_breakdown", data["overview"]["input_truth_summary"])
+        self.assertIn("field_source_breakdown", data["overview"]["input_truth_summary"])
         self.assertEqual("做多交易的累计盈亏和整体表现当前更优", data["winning_patterns"][0]["pattern"])
         self.assertTrue(data["loss_features"])
         self.assertTrue(data["profit_features"])
@@ -2798,6 +2799,7 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertTrue(data["parameter_changes"])
         self.assertTrue(data["condition_replacements"])
         self.assertTrue(data["trade_records"])
+        self.assertIn("field_sources", data["trade_records"][0])
         self.assertEqual("sharpe_max", data["objective_versions"][0]["objective"])
         self.assertTrue(data["objective_versions"][0]["equity_curve"])
         self.assertTrue(data["objective_versions"][0]["trade_records"])
@@ -2853,6 +2855,12 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertEqual("text_parse", data["input_truth_summary"]["source_context"])
         self.assertEqual(2, data["input_truth_summary"]["record_count"])
         self.assertIn("entry_price", data["input_truth_summary"]["derived_field_counts"])
+        self.assertIn("field_source_breakdown", data["input_truth_summary"])
+        self.assertIn("entry_price", data["input_truth_summary"]["field_source_breakdown"])
+        self.assertIn(
+            "market_fill",
+            data["input_truth_summary"]["field_source_breakdown"]["entry_price"],
+        )
         self.assertGreaterEqual(data["input_truth_summary"]["needs_confirmation_count"], 1)
 
     def test_replay_trade_set_changes_separates_removed_losses_and_profits(self) -> None:
