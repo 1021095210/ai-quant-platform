@@ -1,13 +1,17 @@
 import {
   activateNav,
   api,
+  clearInlineStatus,
   fetchLlmProfiles,
   getSelectedVersion,
   handle,
   populateLlmProfileSelect,
   pretty,
+  registerBackgroundTask,
   setSelectedVersion,
   setStatus,
+  setInlineStatus,
+  subscribeBackgroundTasks,
 } from "/assets/shared.js";
 
 activateNav("/strategy");
@@ -27,6 +31,7 @@ const state = {
 
 const nodes = {
   prompt: document.querySelector("#strategy-prompt"),
+  inlineStatus: document.querySelector("#strategy-inline-status"),
   marketScope: document.querySelector("#strategy-market-scope"),
   market: document.querySelector("#strategy-market"),
   assetType: document.querySelector("#strategy-asset-type"),
@@ -60,6 +65,8 @@ const nodes = {
   generationPipelineView: document.querySelector("#strategy-generation-pipeline-view"),
   fieldMappingView: document.querySelector("#strategy-field-mapping-view"),
 };
+
+let pendingGenerationTaskId = null;
 
 const MARKET_PRESETS = {
   cn_equity: { symbol: "600519.SH", assetType: "stock" },
@@ -562,8 +569,7 @@ async function generateStrategy() {
   const clarificationAnswers = Object.fromEntries(
     Object.entries(state.clarificationAnswers).filter(([, value]) => String(value || "").trim()),
   );
-  setStatus("正在生成 Python 策略...");
-  const payload = await api("/api/v1/strategies/generate", {
+  const created = await api("/api/v1/strategies/generations", {
     method: "POST",
     body: JSON.stringify({
       prompt: nodes.prompt.value,
@@ -578,51 +584,67 @@ async function generateStrategy() {
       llm_profile: nodes.llmProfile.value || "module_default",
     }),
   });
-  state.strategySpec = payload.data.strategy_dsl;
-  state.strategyPython = payload.data.strategy_python;
-  state.generationDecision = payload.data.generation_decision;
-  state.structuredSpec = payload.data.structured_spec;
-  state.hardValidation = payload.data.hard_validation;
-  state.generationPipeline = payload.data.generation_pipeline || [];
-  state.fieldMapping = payload.data.field_mapping || [];
-  state.clarificationRound = payload.data.clarification_round || null;
-  nodes.summary.textContent = payload.data.human_summary;
-  nodes.python.textContent = payload.data.strategy_python;
-  nodes.spec.textContent = pretty(payload.data.strategy_dsl);
+  pendingGenerationTaskId = created.data.task_id;
+  registerBackgroundTask({
+    task_id: created.data.task_id,
+    status_url: created.data.status_url,
+    label: "策略生成任务",
+    module: "strategy",
+    queued_message: "策略生成已转入后台，你可以先去其他模块继续操作。",
+    success_message: "策略生成已完成。",
+    failure_message: "策略生成失败。",
+  });
+  setInlineStatus(nodes.inlineStatus, "策略生成已转入后台。", "running");
+  setStatus("正在后台生成 Python 策略...");
+}
+
+function applyGeneratedStrategy(data) {
+  state.strategySpec = data.strategy_dsl;
+  state.strategyPython = data.strategy_python;
+  state.generationDecision = data.generation_decision;
+  state.structuredSpec = data.structured_spec;
+  state.hardValidation = data.hard_validation;
+  state.generationPipeline = data.generation_pipeline || [];
+  state.fieldMapping = data.field_mapping || [];
+  state.clarificationRound = data.clarification_round || null;
+  nodes.summary.textContent = data.human_summary;
+  nodes.python.textContent = data.strategy_python;
+  nodes.spec.textContent = pretty(data.strategy_dsl);
   renderNaturalLanguageView();
-  renderGenerationDecision(payload.data.generation_decision);
-  renderUnderstandingCard(payload.data.understanding_card);
-  renderStructuredSpecView(payload.data.structured_spec);
-  renderHardValidationView(payload.data.hard_validation);
-  renderGenerationPipelineView(payload.data.generation_pipeline);
-  renderFieldMappingView(payload.data.field_mapping);
-  renderClarificationRound(payload.data.clarification_round);
-  renderQuestions(payload.data.questions_for_user);
-  renderUnsupportedItems(payload.data.unsupported_items);
-  nodes.ambiguities.innerHTML = payload.data.ambiguities.length
-      ? payload.data.ambiguities.map((item) => `<span class="pill">${item}</span>`).join("")
+  renderGenerationDecision(data.generation_decision);
+  renderUnderstandingCard(data.understanding_card);
+  renderStructuredSpecView(data.structured_spec);
+  renderHardValidationView(data.hard_validation);
+  renderGenerationPipelineView(data.generation_pipeline);
+  renderFieldMappingView(data.field_mapping);
+  renderClarificationRound(data.clarification_round);
+  renderQuestions(data.questions_for_user);
+  renderUnsupportedItems(data.unsupported_items);
+  nodes.ambiguities.innerHTML = data.ambiguities.length
+      ? data.ambiguities.map((item) => `<span class="pill">${item}</span>`).join("")
       : '<span class="pill">无额外歧义</span>';
-  if (payload.data.matched_custom_indicators?.length) {
-    nodes.ambiguities.innerHTML += payload.data.matched_custom_indicators
+  if (data.matched_custom_indicators?.length) {
+    nodes.ambiguities.innerHTML += data.matched_custom_indicators
       .map((item) => `<span class="pill">已调用指标：${item.name}</span>`)
       .join("");
   }
-  if (payload.data.matched_terms?.length) {
-    nodes.ambiguities.innerHTML += payload.data.matched_terms
+  if (data.matched_terms?.length) {
+    nodes.ambiguities.innerHTML += data.matched_terms
       .map((item) => `<span class="pill">术语已识别：${item.term}</span>`)
       .join("");
   }
-  if (payload.data.capability_summary) {
+  if (data.capability_summary) {
     renderCapabilitySummary({
-      ...payload.data.capability_summary,
+      ...data.capability_summary,
       requiresCompatibilityNotice:
-        payload.data.capability_summary.requires_compatibility_notice || false,
+        data.capability_summary.requires_compatibility_notice || false,
     });
   }
-  if (payload.data.generation_decision?.summary) {
-    document.querySelector("#status-banner").textContent = payload.data.generation_decision.summary;
+  if (data.generation_decision?.summary) {
+    document.querySelector("#status-banner").textContent = data.generation_decision.summary;
   }
   syncStrategyActionState();
+  setInlineStatus(nodes.inlineStatus, "策略生成完成。", "success");
   setStatus("策略生成完成。");
 }
 
@@ -742,3 +764,19 @@ renderQuestions([]);
 renderUnsupportedItems([]);
 syncStrategyActionState();
 loadKnowledgePreview().catch((error) => setStatus(error.message));
+subscribeBackgroundTasks((task) => {
+  if (task.module !== "strategy" || task.task_id !== pendingGenerationTaskId) {
+    return;
+  }
+  if (task.status === "succeeded" && task.data) {
+    applyGeneratedStrategy(task.data);
+    pendingGenerationTaskId = null;
+    return;
+  }
+  if (["failed", "canceled"].includes(task.status)) {
+    setInlineStatus(nodes.inlineStatus, task.data?.error?.message || task.error_message || "策略生成失败。", "error");
+    setStatus(task.data?.error?.message || task.error_message || "策略生成失败。");
+    pendingGenerationTaskId = null;
+  }
+});
+clearInlineStatus(nodes.inlineStatus, "等待你描述策略想法。生成任务会在后台完成，并在完成后提醒你。");

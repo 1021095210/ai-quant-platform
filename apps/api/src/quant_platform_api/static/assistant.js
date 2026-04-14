@@ -1,9 +1,13 @@
 import {
   activateNav,
   api,
+  clearInlineStatus,
   fetchLlmProfiles,
   populateLlmProfileSelect,
+  registerBackgroundTask,
   setStatus,
+  setInlineStatus,
+  subscribeBackgroundTasks,
 } from "/assets/shared.js";
 
 activateNav("/assistant");
@@ -27,9 +31,13 @@ const nodes = {
   summary: document.querySelector("#assistant-summary"),
   riskPanel: document.querySelector("#assistant-risk-panel"),
   conversation: document.querySelector("#assistant-conversation"),
+  inlineStatus: document.querySelector("#assistant-inline-status"),
+  followupStatus: document.querySelector("#assistant-followup-status"),
   followup: document.querySelector("#assistant-followup"),
   followupButton: document.querySelector("#assistant-followup-btn"),
 };
+
+const pendingResearchTasks = new Map();
 
 function syncRunButtonState() {
   const canRun = Boolean(nodes.query.value.trim());
@@ -204,8 +212,7 @@ function renderResearch(payload) {
 
 async function runAssistant(query, isFollowUp = false) {
   const workflow = selectedWorkflow();
-  setStatus(isFollowUp ? "金融助手正在深化研究..." : "金融助手正在组织多专家研究...");
-  const payload = await api("/api/v1/assistant/analyze", {
+  const created = await api("/api/v1/assistant/research-tasks", {
     method: "POST",
     body: JSON.stringify({
       query,
@@ -221,11 +228,25 @@ async function runAssistant(query, isFollowUp = false) {
       })),
     }),
   });
-  const data = payload.data;
   appendConversation("user", isFollowUp ? "继续深化" : "研究任务", query);
-  appendConversation("assistant", "研究结果", `${data.workflow_title}\n${data.executive_summary}`);
-  renderResearch(data);
-  setStatus(isFollowUp ? "金融助手已补充更深入的研究结果。" : "金融助手已生成研究结果。");
+  pendingResearchTasks.set(created.data.task_id, { query, isFollowUp });
+  registerBackgroundTask({
+    task_id: created.data.task_id,
+    status_url: created.data.status_url,
+    label: isFollowUp ? "金融助手继续深化研究" : "金融助手研究任务",
+    module: "assistant",
+    queued_message: isFollowUp
+      ? "继续深化研究已转入后台，你可以先去使用其他模块。"
+      : "研究任务已转入后台，你可以先去使用其他模块。",
+    success_message: isFollowUp ? "金融助手补充研究已完成。" : "金融助手研究已完成。",
+    failure_message: isFollowUp ? "金融助手继续深化研究失败。" : "金融助手研究失败。",
+  });
+  setInlineStatus(
+    isFollowUp ? nodes.followupStatus : nodes.inlineStatus,
+    isFollowUp ? "继续深化研究已转入后台生成。" : "研究任务已转入后台生成。",
+    "running",
+  );
+  setStatus(isFollowUp ? "金融助手正在后台深化研究..." : "金融助手正在后台组织多专家研究...");
 }
 
 async function loadAssistant() {
@@ -267,7 +288,40 @@ nodes.followupButton.addEventListener("click", async () => {
   }
 });
 
+subscribeBackgroundTasks((task) => {
+  if (task.module !== "assistant" || !pendingResearchTasks.has(task.task_id)) {
+    return;
+  }
+  const meta = pendingResearchTasks.get(task.task_id);
+  if (!meta) {
+    return;
+  }
+  if (task.status === "succeeded" && task.data) {
+    appendConversation("assistant", "研究结果", `${task.data.workflow_title}\n${task.data.executive_summary}`);
+    renderResearch(task.data);
+    setInlineStatus(
+      meta.isFollowUp ? nodes.followupStatus : nodes.inlineStatus,
+      meta.isFollowUp ? "继续深化研究已完成。" : "研究任务已完成。",
+      "success",
+    );
+    setStatus(meta.isFollowUp ? "金融助手已补充更深入的研究结果。" : "金融助手已生成研究结果。");
+    pendingResearchTasks.delete(task.task_id);
+    return;
+  }
+  if (["failed", "canceled"].includes(task.status)) {
+    setInlineStatus(
+      meta.isFollowUp ? nodes.followupStatus : nodes.inlineStatus,
+      task.data?.error?.message || task.error_message || "后台研究任务失败。",
+      "error",
+    );
+    setStatus(task.data?.error?.message || task.error_message || "后台研究任务失败。");
+    pendingResearchTasks.delete(task.task_id);
+  }
+});
+
 renderConversation();
 syncRunButtonState();
 syncFollowupButtonState();
+clearInlineStatus(nodes.inlineStatus, "等待你发起研究任务。");
+clearInlineStatus(nodes.followupStatus, "继续细化也会转入后台处理，完成后会自动提醒你。");
 loadAssistant().catch((error) => setStatus(error.message));

@@ -184,6 +184,7 @@
                     placeholder="如：2025-07-25 买入：603590.SH, 002225.SZ；买入方式：当日开盘价买入；卖出方式：当最低价低于当日开盘价-0.5倍atr的值则卖出"
                   ></textarea>
                 </label>
+                <div id="trade-manual-inline-status" class="inline-status idle">等待你粘贴长文字内容。大批量文本会转入后台解析，并在完成后提醒你。</div>
                 <div class="actions">
                   <button id="parse-manual-text-btn" class="btn disabled" type="button" disabled>智能识别并加入记录</button>
                 </div>
@@ -254,6 +255,7 @@
               </div>
             </div>
 
+            <div id="replay-inline-status" class="inline-status idle">等待你运行复盘。复盘任务会在后台执行，完成后自动提醒你。</div>
             <div class="actions">
               <button id="run-replay-btn" class="btn secondary disabled" disabled>运行 AI 复盘</button>
               <a class="btn secondary" href="/mentor">先问金融导师</a>

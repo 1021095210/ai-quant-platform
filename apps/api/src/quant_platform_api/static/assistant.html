@@ -115,6 +115,7 @@
               <option value="module_default">正在读取可用模型...</option>
             </select>
           </label>
+          <div id="assistant-inline-status" class="inline-status idle">等待你发起研究任务。</div>
           <label class="field">
             <span>研究任务</span>
             <textarea id="assistant-query" placeholder="例如：请按公司深研模式，梳理 600519.SH 当前的盈利驱动、估值预期差、潜在催化剂与关键风险。"></textarea>
@@ -148,6 +149,7 @@
         </div>
         <div id="assistant-conversation" class="mentor-conversation empty-state">先完成一次研究任务后，这里会保留你的任务和助手返回结果。</div>
         <div class="form-grid" style="margin-top: 16px">
+          <div id="assistant-followup-status" class="inline-status idle">继续细化也会转入后台处理，完成后会自动提醒你。</div>
           <label class="field">
             <span>继续细化</span>
             <textarea id="assistant-followup" placeholder="例如：请把多头和空头研究员的分歧再展开，并说明最需要继续验证的变量。"></textarea>

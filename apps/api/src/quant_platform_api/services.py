@@ -6367,6 +6367,108 @@ def build_optimization_result() -> Callable[[str, dict[str, Any]], dict[str, Any
     return _builder
 
 
+def build_strategy_generation_result(
+    strategy_service: StrategyService,
+) -> Callable[[str, dict[str, Any]], dict[str, Any]]:
+    def _builder(task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        request = StrategyGenerateRequest(
+            **{
+                key: value
+                for key, value in payload.items()
+                if key
+                in {
+                    "prompt",
+                    "market",
+                    "market_scope",
+                    "timeframe",
+                    "timeframes",
+                    "asset_type",
+                    "preferences",
+                    "teaching_mode",
+                    "clarification_answers",
+                    "llm_profile",
+                }
+            }
+        )
+        result = strategy_service.generate_strategy(request)
+        result["generation_id"] = task_id
+        return result
+
+    return _builder
+
+
+def build_mentor_answer_result(
+    mentor_service: MentorService,
+) -> Callable[[str, dict[str, Any]], dict[str, Any]]:
+    def _builder(task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        request = MentorAskRequest(
+            **{
+                key: value
+                for key, value in payload.items()
+                if key
+                in {
+                    "question",
+                    "experience_level",
+                    "market_scope",
+                    "current_module",
+                    "conversation_history",
+                    "llm_profile",
+                }
+            }
+        )
+        result = mentor_service.answer(request)
+        result["mentor_task_id"] = task_id
+        return result
+
+    return _builder
+
+
+def build_assistant_research_result(
+    assistant_service: FinancialAssistantService,
+) -> Callable[[str, dict[str, Any]], dict[str, Any]]:
+    def _builder(task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        request = AssistantResearchRequest(
+            **{
+                key: value
+                for key, value in payload.items()
+                if key
+                in {
+                    "query",
+                    "workflow_id",
+                    "target_symbol",
+                    "market_scope",
+                    "research_depth",
+                    "current_module",
+                    "conversation_history",
+                    "llm_profile",
+                }
+            }
+        )
+        result = assistant_service.analyze(request)
+        result["research_task_id"] = task_id
+        return result
+
+    return _builder
+
+
+def build_trade_text_parse_result(
+    trade_upload_service: TradeUploadService,
+) -> Callable[[str, dict[str, Any]], dict[str, Any]]:
+    def _builder(task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        result = trade_upload_service.parse_manual_trade_text(
+            text=str(payload.get("text", "")),
+            market=str(payload.get("market", "cn_equity")),
+            adjustment_mode=str(payload.get("adjustment_mode", "qfq")),
+            llm_profile=str(payload.get("llm_profile", "module_default")),
+            user_id=str(payload.get("user_id", "")),
+            workspace_id=str(payload.get("workspace_id", "ws_default")),
+        )
+        result["parse_task_id"] = task_id
+        return result
+
+    return _builder
+
+
 def build_replay_result(
     settings: Settings,
     trade_upload_service: TradeUploadService,

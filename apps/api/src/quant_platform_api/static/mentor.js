@@ -1,9 +1,13 @@
 import {
   activateNav,
   api,
+  clearInlineStatus,
   fetchLlmProfiles,
   populateLlmProfileSelect,
+  registerBackgroundTask,
   setStatus,
+  setInlineStatus,
+  subscribeBackgroundTasks,
 } from "/assets/shared.js?v=20260402c";
 
 activateNav("/mentor");
@@ -22,9 +26,12 @@ const nodes = {
   answer: document.querySelector("#mentor-answer"),
   actions: document.querySelector("#mentor-actions"),
   conversation: document.querySelector("#mentor-conversation"),
+  inlineStatus: document.querySelector("#mentor-inline-status"),
   followup: document.querySelector("#mentor-followup"),
   followupButton: document.querySelector("#mentor-followup-btn"),
 };
+
+const pendingMentorTasks = new Map();
 
 function syncAskButtonState() {
   const canAsk = Boolean(nodes.question.value.trim());
@@ -160,8 +167,7 @@ async function loadTopics() {
 
 async function askMentor(question, options = {}) {
   const { isFollowUp = false } = options;
-  setStatus(isFollowUp ? "金融导师正在补充解释..." : "金融导师正在整理建议...");
-  const payload = await api("/api/v1/mentor/ask", {
+  const created = await api("/api/v1/mentor/ask-tasks", {
     method: "POST",
     body: JSON.stringify({
       question,
@@ -175,14 +181,23 @@ async function askMentor(question, options = {}) {
       })),
     }),
   });
-  const data = payload.data;
   appendConversationTurn("user", question, isFollowUp ? "继续追问" : "首次提问");
-  appendConversationTurn("assistant", `${data.headline}\n${data.answer}`, "导师回复");
-  renderAnswer(data);
-  if (!isFollowUp) {
-    nodes.followup.focus();
-  }
-  setStatus(isFollowUp ? "导师补充解释已生成。" : "导师建议已生成。");
+  pendingMentorTasks.set(created.data.task_id, { isFollowUp });
+  registerBackgroundTask({
+    task_id: created.data.task_id,
+    status_url: created.data.status_url,
+    label: isFollowUp ? "金融导师继续追问" : "金融导师问答",
+    module: "mentor",
+    queued_message: isFollowUp ? "追问已转入后台生成。" : "导师回答已转入后台生成。",
+    success_message: isFollowUp ? "导师补充解释已完成。" : "导师建议已完成。",
+    failure_message: isFollowUp ? "导师继续追问失败。" : "导师回答失败。",
+  });
+  setInlineStatus(
+    nodes.inlineStatus,
+    isFollowUp ? "继续追问已转入后台生成。" : "导师回答已转入后台生成。",
+    "running",
+  );
+  setStatus(isFollowUp ? "金融导师正在后台补充解释..." : "金融导师正在后台整理建议...");
 }
 
 nodes.question.addEventListener("input", syncAskButtonState);
@@ -214,7 +229,34 @@ nodes.followupButton.addEventListener("click", async () => {
   }
 });
 
+subscribeBackgroundTasks((task) => {
+  if (task.module !== "mentor" || !pendingMentorTasks.has(task.task_id)) {
+    return;
+  }
+  const meta = pendingMentorTasks.get(task.task_id);
+  if (!meta) {
+    return;
+  }
+  if (task.status === "succeeded" && task.data) {
+    appendConversationTurn("assistant", `${task.data.headline}\n${task.data.answer}`, "导师回复");
+    renderAnswer(task.data);
+    if (!meta.isFollowUp) {
+      nodes.followup.focus();
+    }
+    setInlineStatus(nodes.inlineStatus, meta.isFollowUp ? "继续追问已完成。" : "导师建议已完成。", "success");
+    setStatus(meta.isFollowUp ? "导师补充解释已生成。" : "导师建议已生成。");
+    pendingMentorTasks.delete(task.task_id);
+    return;
+  }
+  if (["failed", "canceled"].includes(task.status)) {
+    setInlineStatus(nodes.inlineStatus, task.data?.error?.message || task.error_message || "导师任务失败。", "error");
+    setStatus(task.data?.error?.message || task.error_message || "导师任务失败。");
+    pendingMentorTasks.delete(task.task_id);
+  }
+});
+
 renderConversation();
 syncAskButtonState();
 syncFollowupButtonState();
+clearInlineStatus(nodes.inlineStatus, "等待你输入问题。较长回答会转入后台生成。");
 loadTopics().catch((error) => setStatus(error.message));

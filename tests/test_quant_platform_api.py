@@ -4858,6 +4858,130 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertEqual("688655.SH", data["target_symbol"])
         self.assertEqual("company_deep_dive", data["workflow_id"])
 
+    def test_assistant_research_task_completes_and_returns_structured_result(self) -> None:
+        client = self._build_client(
+            llm_base_url="https://llm.example.test/v1",
+            llm_api_key="sk-test",
+            llm_model_mentor="gpt-5-mini",
+        )
+        self._login(client)
+
+        created = client.post(
+            "/api/v1/assistant/research-tasks",
+            json={
+                "query": "请深度研究688655这个个股",
+                "workflow_id": "market_map",
+                "target_symbol": "",
+                "market_scope": "cn_equity",
+                "research_depth": "standard",
+                "current_module": "assistant",
+                "llm_profile": "module_default",
+                "conversation_history": [],
+            },
+        )
+
+        self.assertEqual(202, created.status_code)
+        task_id = created.json()["data"]["research_task_id"]
+        fetched = client.get(f"/api/v1/assistant/research-tasks/{task_id}")
+
+        self.assertEqual(200, fetched.status_code)
+        data = fetched.json()["data"]
+        self.assertEqual("succeeded", data["status"])
+        self.assertEqual("688655.SH", data["target_symbol"])
+        self.assertEqual("company_deep_dive", data["workflow_id"])
+        self.assertIn("research_task_id", data)
+        self.assertIn("workflow_title", data)
+
+    def test_mentor_task_completes_and_returns_answer(self) -> None:
+        client = self._build_client(
+            llm_base_url="https://llm.example.test/v1",
+            llm_api_key="sk-test",
+            llm_model_mentor="gpt-5-mini",
+        )
+        self._login(client)
+
+        created = client.post(
+            "/api/v1/mentor/ask-tasks",
+            json={
+                "question": "均线、MACD、RSI 这些技术指标分别适合看什么？",
+                "topic_id": "indicator_basics",
+                "llm_profile": "module_default",
+                "conversation_history": [],
+            },
+        )
+
+        self.assertEqual(202, created.status_code)
+        task_id = created.json()["data"]["mentor_task_id"]
+        fetched = client.get(f"/api/v1/mentor/ask-tasks/{task_id}")
+
+        self.assertEqual(200, fetched.status_code)
+        data = fetched.json()["data"]
+        self.assertEqual("succeeded", data["status"])
+        self.assertIn("mentor_name", data)
+        self.assertIn("answer", data)
+        self.assertIn("mentor_task_id", data)
+
+    def test_strategy_generation_task_completes_and_returns_generated_strategy(self) -> None:
+        client = self._build_client(
+            llm_base_url="https://llm.example.test/v1",
+            llm_api_key="sk-test",
+            llm_model_strategy="gpt-5-mini",
+            llm_model_mentor="gpt-5-mini",
+        )
+        self._login(client)
+
+        created = client.post(
+            "/api/v1/strategies/generations",
+            json={
+                "prompt": "当 5 日均线上穿 20 日均线且成交量放大时做多",
+                "market": "600519.SH",
+                "timeframe": "1d",
+                "asset_type": "stock",
+                "preferences": {"side": "long"},
+            },
+        )
+
+        self.assertEqual(202, created.status_code)
+        task_id = created.json()["data"]["generation_id"]
+        fetched = client.get(f"/api/v1/strategies/generations/{task_id}")
+
+        self.assertEqual(200, fetched.status_code)
+        data = fetched.json()["data"]
+        self.assertEqual("succeeded", data["status"])
+        self.assertIn("strategy_dsl", data)
+        self.assertIn("generation_decision", data)
+        self.assertEqual("ready", data["generation_decision"]["status"])
+        self.assertIn("structured_spec", data)
+
+    def test_manual_text_parse_task_completes_and_returns_records(self) -> None:
+        client = self._build_client(
+            llm_base_url="https://llm.example.test/v1",
+            llm_api_key="sk-test",
+            llm_model_mentor="gpt-5-mini",
+        )
+        self._login(client)
+
+        created = client.post(
+            "/api/v1/trades/uploads/manual/parse-text-tasks",
+            json={
+                "text": "2025-07-25（2只）：603590.SH, 002225.SZ\n买入方式：当日开盘价买入\n卖出方式：价格低于买入后任何一天的开盘价-0.5倍atr时卖出",
+                "market": "cn_equity",
+                "adjustment_mode": "qfq",
+                "llm_profile": "module_default",
+            },
+        )
+
+        self.assertEqual(202, created.status_code)
+        task_id = created.json()["data"]["parse_task_id"]
+        fetched = client.get(f"/api/v1/trades/uploads/manual/parse-text-tasks/{task_id}")
+
+        self.assertEqual(200, fetched.status_code)
+        data = fetched.json()["data"]
+        self.assertEqual("succeeded", data["status"])
+        self.assertEqual(2, data["record_count"])
+        self.assertEqual("2025-07-25", data["trade_date"])
+        self.assertTrue(data["records"])
+
     def test_manual_text_parse_large_grouped_text_keeps_records_when_market_fill_is_skipped(self) -> None:
         class EmptyMarketDataService:
             def load_daily_bars(self, **kwargs):

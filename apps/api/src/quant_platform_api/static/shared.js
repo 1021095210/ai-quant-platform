@@ -2,12 +2,18 @@ const STORAGE_KEYS = {
   selectedVersionId: "quant.selectedVersionId",
   selectedVersionLabel: "quant.selectedVersionLabel",
   selectedProjectTitle: "quant.selectedProjectTitle",
+  backgroundTasks: "quant.backgroundTasks",
 };
+
+let backgroundTaskMonitorHandle = null;
+const BACKGROUND_TASK_EVENT = "quant-background-task-update";
 
 export function activateNav(currentPath) {
   document.querySelectorAll("[data-nav]").forEach((node) => {
     node.classList.toggle("active", node.getAttribute("href") === currentPath);
   });
+  ensureTaskNotificationCenter();
+  startBackgroundTaskMonitor();
 }
 
 export function setStatus(message) {
@@ -15,6 +21,20 @@ export function setStatus(message) {
   if (node) {
     node.textContent = message;
   }
+}
+
+export function setInlineStatus(target, message, kind = "info") {
+  const node = typeof target === "string" ? document.querySelector(target) : target;
+  if (!node) {
+    return;
+  }
+  node.hidden = false;
+  node.className = `inline-status ${kind}`;
+  node.textContent = message;
+}
+
+export function clearInlineStatus(target, fallback = "等待开始。") {
+  setInlineStatus(target, fallback, "idle");
 }
 
 export async function api(path, options = {}) {
@@ -128,6 +148,149 @@ export async function pollTask(url) {
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
   throw new Error("任务轮询超时");
+}
+
+function ensureTaskNotificationCenter() {
+  if (document.querySelector("#task-notification-center")) {
+    return;
+  }
+  const container = document.createElement("div");
+  container.id = "task-notification-center";
+  container.className = "task-notification-center";
+  document.body.appendChild(container);
+}
+
+function renderTaskNotification(message, kind = "info") {
+  ensureTaskNotificationCenter();
+  const container = document.querySelector("#task-notification-center");
+  if (!container) {
+    return;
+  }
+  const item = document.createElement("div");
+  item.className = `task-toast ${kind}`;
+  item.textContent = message;
+  container.appendChild(item);
+  const later =
+    typeof window !== "undefined" && typeof window.setTimeout === "function"
+      ? window.setTimeout.bind(window)
+      : globalThis.setTimeout.bind(globalThis);
+  later(() => {
+    item.classList.add("leaving");
+    later(() => item.remove(), 280);
+  }, 4200);
+}
+
+function loadBackgroundTasks() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.backgroundTasks) || "[]";
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveBackgroundTasks(tasks) {
+  localStorage.setItem(STORAGE_KEYS.backgroundTasks, JSON.stringify(tasks));
+}
+
+export function registerBackgroundTask(task) {
+  if (typeof localStorage === "undefined") {
+    renderTaskNotification(task.queued_message || `${task.label || "任务"} 已转入后台，可继续使用其他模块。`, "info");
+    return;
+  }
+  const tasks = loadBackgroundTasks().filter((item) => item.task_id !== task.task_id);
+  tasks.push({
+    ...task,
+    status: task.status || "queued",
+    notified_complete: false,
+    created_at: new Date().toISOString(),
+  });
+  saveBackgroundTasks(tasks);
+  renderTaskNotification(task.queued_message || `${task.label || "任务"} 已转入后台，可继续使用其他模块。`, "info");
+  startBackgroundTaskMonitor();
+}
+
+export function subscribeBackgroundTasks(handler) {
+  const listener = (event) => handler(event.detail);
+  window.addEventListener(BACKGROUND_TASK_EVENT, listener);
+  return () => window.removeEventListener(BACKGROUND_TASK_EVENT, listener);
+}
+
+async function refreshBackgroundTasks() {
+  const tasks = loadBackgroundTasks();
+  if (!tasks.length) {
+    return;
+  }
+  let changed = false;
+  const nextTasks = [];
+  for (const task of tasks) {
+    if (["succeeded", "failed", "canceled"].includes(task.status)) {
+      nextTasks.push(task);
+      continue;
+    }
+    try {
+      const payload = await api(task.status_url);
+      const data = payload.data;
+      const updatedTask = {
+        ...task,
+        status: data.status,
+        data,
+      };
+      changed = true;
+      window.dispatchEvent(new CustomEvent(BACKGROUND_TASK_EVENT, { detail: updatedTask }));
+      if (["succeeded", "failed", "canceled"].includes(data.status)) {
+        if (!task.notified_complete) {
+          const kind = data.status === "succeeded" ? "success" : "error";
+          const message =
+            data.status === "succeeded"
+              ? task.success_message || `${task.label || "任务"} 已完成。`
+              : task.failure_message || `${task.label || "任务"} 执行失败。`;
+          renderTaskNotification(message, kind);
+        }
+        updatedTask.notified_complete = true;
+      }
+      nextTasks.push(updatedTask);
+    } catch (error) {
+      nextTasks.push(task);
+      window.dispatchEvent(
+        new CustomEvent(BACKGROUND_TASK_EVENT, {
+          detail: {
+            ...task,
+            status: "failed",
+            error_message: error.message || "后台任务状态获取失败",
+          },
+        }),
+      );
+    }
+  }
+  const activeTasks = nextTasks.filter((item) => {
+    if (!["succeeded", "failed", "canceled"].includes(item.status)) {
+      return true;
+    }
+    const createdAt = item.created_at ? new Date(item.created_at).getTime() : Date.now();
+    return Date.now() - createdAt < 15 * 60 * 1000;
+  });
+  if (changed || activeTasks.length !== tasks.length) {
+    saveBackgroundTasks(activeTasks);
+  }
+}
+
+export function startBackgroundTaskMonitor() {
+  if (typeof localStorage === "undefined") {
+    return;
+  }
+  if (backgroundTaskMonitorHandle) {
+    return;
+  }
+  const schedule =
+    typeof window !== "undefined" && typeof window.setInterval === "function"
+      ? window.setInterval.bind(window)
+      : globalThis.setInterval.bind(globalThis);
+  backgroundTaskMonitorHandle = schedule(() => {
+    refreshBackgroundTasks().catch(() => {});
+  }, 1200);
+  refreshBackgroundTasks().catch(() => {});
 }
 
 export function setSelectedVersion(versionId, title = "", versionLabel = "") {

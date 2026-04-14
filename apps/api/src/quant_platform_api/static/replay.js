@@ -1,11 +1,14 @@
 import {
   activateNav,
   api,
+  clearInlineStatus,
   fetchLlmProfiles,
   handle,
-  pollTask,
   populateLlmProfileSelect,
+  registerBackgroundTask,
   setStatus,
+  setInlineStatus,
+  subscribeBackgroundTasks,
 } from "/assets/shared.js";
 
 activateNav("/replay");
@@ -17,6 +20,8 @@ const state = {
   manualTrades: [],
   objectiveVersions: [],
   selectedObjective: "sharpe_max",
+  pendingParseTaskId: null,
+  pendingReplayTaskId: null,
 };
 
 const SOURCE_MODE_META = {
@@ -75,6 +80,7 @@ const nodes = {
   manualAdjustment: document.querySelector("#trade-manual-adjustment"),
   manualLlmProfile: document.querySelector("#trade-manual-llm-profile"),
   manualSmartText: document.querySelector("#trade-manual-smart-text"),
+  manualInlineStatus: document.querySelector("#trade-manual-inline-status"),
   manualParseSummary: document.querySelector("#trade-manual-parse-summary"),
   manualList: document.querySelector("#manual-trade-list"),
   uploadId: document.querySelector("#current-upload-id"),
@@ -96,6 +102,7 @@ const nodes = {
   addManualTradeButton: document.querySelector("#add-manual-trade-btn"),
   parseManualTextButton: document.querySelector("#parse-manual-text-btn"),
   replayButton: document.querySelector("#run-replay-btn"),
+  replayInlineStatus: document.querySelector("#replay-inline-status"),
   sourceModeTitle: document.querySelector("#source-mode-title"),
   sourceModeIntro: document.querySelector("#source-mode-intro"),
   sourceModeSteps: document.querySelector("#source-mode-steps"),
@@ -119,6 +126,8 @@ syncReplayActionState();
 fetchLlmProfiles()
   .then((payload) => populateLlmProfileSelect(nodes.manualLlmProfile, payload, "trade_text_parse"))
   .catch((error) => setStatus(error.message));
+clearInlineStatus(nodes.manualInlineStatus, "等待你粘贴长文字内容。大批量文本会转入后台解析，并在完成后提醒你。");
+clearInlineStatus(nodes.replayInlineStatus, "等待你运行复盘。复盘任务会在后台执行，完成后自动提醒你。");
 
 async function uploadTrades() {
   syncReplayActionState({ uploadBusy: true });
@@ -266,8 +275,7 @@ async function parseManualText() {
   if (!nodes.manualSmartText.value.trim()) {
     throw new Error("请先输入需要识别的长文字内容。");
   }
-  setStatus("正在识别长文字中的股票代码、日期和买卖规则。大批量文本会按日期块逐组处理，请稍等...");
-  const payload = await api("/api/v1/trades/uploads/manual/parse-text", {
+  const created = await api("/api/v1/trades/uploads/manual/parse-text-tasks", {
     method: "POST",
     body: JSON.stringify({
       text: nodes.manualSmartText.value,
@@ -276,7 +284,22 @@ async function parseManualText() {
       llm_profile: nodes.manualLlmProfile.value || "module_default",
     }),
   });
-  const items = payload.data.records || [];
+  state.pendingParseTaskId = created.data.task_id;
+  registerBackgroundTask({
+    task_id: created.data.task_id,
+    status_url: created.data.status_url,
+    label: "长文字智能识别",
+    module: "trade_text_parse",
+    queued_message: "长文字识别已转入后台，你可以先去使用其他模块。",
+    success_message: "长文字识别已完成。",
+    failure_message: "长文字识别失败。",
+  });
+  setInlineStatus(nodes.manualInlineStatus, "长文字识别已转入后台解析。", "running");
+  setStatus("正在后台识别长文字中的股票代码、日期和买卖规则...");
+}
+
+function applyManualParseResult(result) {
+  const items = result.records || [];
   state.manualTrades.push(...items.map((item) => ({
     symbol: item.symbol,
     side: item.side,
@@ -289,9 +312,10 @@ async function parseManualText() {
     notes: item.notes || "来源：长文字智能识别",
   })));
   renderManualTrades();
-  renderManualParseSummary(payload.data);
+  renderManualParseSummary(result);
   syncReplayActionState();
-  setStatus(payload.data.summary || "长文字智能识别完成，已加入手动记录。");
+  setInlineStatus(nodes.manualInlineStatus, result.summary || "长文字智能识别完成，已加入手动记录。", "success");
+  setStatus(result.summary || "长文字智能识别完成，已加入手动记录。");
 }
 
 function renderManualParseSummary(result) {
@@ -409,7 +433,6 @@ async function runReplay() {
     throw new Error("请先上传并解析交割单。");
   }
   syncReplayActionState({ replayBusy: true });
-  setStatus("正在运行 AI 复盘...");
   const created = await api("/api/v1/replays/analyses", {
     method: "POST",
     body: JSON.stringify({
@@ -426,7 +449,21 @@ async function runReplay() {
       },
     }),
   });
-  const result = await pollTask(created.data.status_url);
+  state.pendingReplayTaskId = created.data.task_id;
+  registerBackgroundTask({
+    task_id: created.data.task_id,
+    status_url: created.data.status_url,
+    label: "交易复盘分析",
+    module: "replay_analysis",
+    queued_message: "AI 复盘已转入后台，你可以先去使用其他模块。",
+    success_message: "AI 复盘已完成。",
+    failure_message: "AI 复盘失败。",
+  });
+  setInlineStatus(nodes.replayInlineStatus, "AI 复盘已转入后台执行。", "running");
+  setStatus("正在后台运行 AI 复盘...");
+}
+
+function applyReplayResult(result) {
   state.objectiveVersions = result.objective_versions || [];
   const defaultObjective =
     state.objectiveVersions.find((item) => item.is_default)?.objective || "sharpe_max";
@@ -446,6 +483,7 @@ async function runReplay() {
   renderReplayRules(result.suggestion_rules || []);
   renderReplayTradeRecords(result.trade_records || []);
   syncReplayActionState();
+  setInlineStatus(nodes.replayInlineStatus, "AI 复盘已完成。", "success");
   setStatus("AI 复盘完成。");
 }
 
@@ -1610,3 +1648,39 @@ document.querySelector("#run-replay-btn").addEventListener(
     }
   }),
 );
+
+subscribeBackgroundTasks((task) => {
+  if (task.module === "trade_text_parse" && task.task_id === state.pendingParseTaskId) {
+    if (task.status === "succeeded" && task.data) {
+      applyManualParseResult(task.data);
+      state.pendingParseTaskId = null;
+      return;
+    }
+    if (["failed", "canceled"].includes(task.status)) {
+      setInlineStatus(
+        nodes.manualInlineStatus,
+        task.data?.error?.message || task.error_message || "长文字识别失败。",
+        "error",
+      );
+      setStatus(task.data?.error?.message || task.error_message || "长文字识别失败。");
+      state.pendingParseTaskId = null;
+    }
+    return;
+  }
+  if (task.module === "replay_analysis" && task.task_id === state.pendingReplayTaskId) {
+    if (task.status === "succeeded" && task.data) {
+      applyReplayResult(task.data);
+      state.pendingReplayTaskId = null;
+      return;
+    }
+    if (["failed", "canceled"].includes(task.status)) {
+      setInlineStatus(
+        nodes.replayInlineStatus,
+        task.data?.error?.message || task.error_message || "AI 复盘失败。",
+        "error",
+      );
+      setStatus(task.data?.error?.message || task.error_message || "AI 复盘失败。");
+      state.pendingReplayTaskId = null;
+    }
+  }
+});
