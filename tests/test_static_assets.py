@@ -448,6 +448,10 @@ export function populateLlmProfileSelect(node) {
   }
 }
 export function setStatus() {}
+export function setInlineStatus() {}
+export function clearInlineStatus() {}
+export function registerBackgroundTask() {}
+export function subscribeBackgroundTasks() { return () => {}; }
                 """,
                 encoding="utf-8",
             )
@@ -755,15 +759,18 @@ console.log('mentor-bootstrapped');
 
         self.assertIn("金融导师", mentor_html)
         self.assertIn('id="mentor-topic-list"', mentor_html)
+        self.assertIn('id="mentor-inline-status"', mentor_html)
         self.assertIn('id="mentor-ask-btn" class="btn disabled" disabled', mentor_html)
         self.assertIn('id="mentor-followup-btn" class="btn disabled" disabled', mentor_html)
         self.assertIn("/api/v1/mentor/topics", mentor_js)
-        self.assertIn("/api/v1/mentor/ask", mentor_js)
+        self.assertIn("/api/v1/mentor/ask-tasks", mentor_js)
         self.assertIn("renderTopics", mentor_js)
         self.assertIn("conversation_history", mentor_js)
         self.assertIn("renderConversation", mentor_js)
         self.assertIn("answer_mode_label", mentor_js)
         self.assertIn("当前模式", mentor_js)
+        self.assertIn("registerBackgroundTask", mentor_js)
+        self.assertIn("subscribeBackgroundTasks", mentor_js)
         self.assertIn("导师判断", mentor_html)
         self.assertIn("建议下一步", mentor_html)
         self.assertIn("继续追问导师", mentor_html)
@@ -794,15 +801,75 @@ console.log('mentor-bootstrapped');
         assistant_js = assistant_js_path.read_text(encoding="utf-8")
 
         self.assertIn("金融助手", assistant_html)
+        self.assertIn('id="assistant-inline-status"', assistant_html)
+        self.assertIn('id="assistant-followup-status"', assistant_html)
         self.assertIn('id="assistant-workflows"', assistant_html)
         self.assertIn('id="assistant-desks"', assistant_html)
         self.assertIn('id="assistant-run-btn" class="btn disabled" disabled', assistant_html)
         self.assertIn('id="assistant-followup-btn" class="btn disabled" disabled', assistant_html)
         self.assertIn("/api/v1/assistant/workflows", assistant_js)
-        self.assertIn("/api/v1/assistant/analyze", assistant_js)
+        self.assertIn("/api/v1/assistant/research-tasks", assistant_js)
         self.assertIn("renderWorkflows", assistant_js)
+        self.assertIn("registerBackgroundTask", assistant_js)
+        self.assertIn("subscribeBackgroundTasks", assistant_js)
         self.assertIn("assistant-selected-workflow", assistant_html)
         self.assertIn("/assets/assistant.js?v=20260403a", assistant_html)
+
+    def test_strategy_and_replay_assets_expose_background_task_status_hooks(self) -> None:
+        strategy_html_path = (
+            WORKSPACE_ROOT
+            / "apps"
+            / "api"
+            / "src"
+            / "quant_platform_api"
+            / "static"
+            / "strategy.html"
+        )
+        strategy_js_path = (
+            WORKSPACE_ROOT
+            / "apps"
+            / "api"
+            / "src"
+            / "quant_platform_api"
+            / "static"
+            / "strategy.js"
+        )
+        replay_html_path = (
+            WORKSPACE_ROOT
+            / "apps"
+            / "api"
+            / "src"
+            / "quant_platform_api"
+            / "static"
+            / "replay.html"
+        )
+        replay_js_path = (
+            WORKSPACE_ROOT
+            / "apps"
+            / "api"
+            / "src"
+            / "quant_platform_api"
+            / "static"
+            / "replay.js"
+        )
+
+        strategy_html = strategy_html_path.read_text(encoding="utf-8")
+        strategy_js = strategy_js_path.read_text(encoding="utf-8")
+        replay_html = replay_html_path.read_text(encoding="utf-8")
+        replay_js = replay_js_path.read_text(encoding="utf-8")
+
+        self.assertIn('id="strategy-inline-status"', strategy_html)
+        self.assertIn("/api/v1/strategies/generations", strategy_js)
+        self.assertIn("registerBackgroundTask", strategy_js)
+        self.assertIn("subscribeBackgroundTasks", strategy_js)
+
+        self.assertIn('id="trade-manual-inline-status"', replay_html)
+        self.assertIn('id="replay-inline-status"', replay_html)
+        self.assertIn("/api/v1/trades/uploads/manual/parse-text-tasks", replay_js)
+        self.assertIn("registerBackgroundTask", replay_js)
+        self.assertIn("subscribeBackgroundTasks", replay_js)
+        self.assertIn("applyManualParseResult", replay_js)
+        self.assertIn("applyReplayResult", replay_js)
 
     def test_admin_and_shared_assets_include_error_logging_hooks(self) -> None:
         admin_html_path = (

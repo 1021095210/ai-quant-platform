@@ -127,6 +127,80 @@ select {
   color: var(--text-soft);
 }
 
+.inline-status {
+  margin: 0 0 12px;
+  padding: 10px 14px;
+  border-radius: 14px;
+  font-size: 14px;
+  line-height: 1.5;
+  border: 1px solid rgba(18, 48, 95, 0.08);
+  background: rgba(244, 248, 255, 0.88);
+  color: #17314f;
+}
+
+.inline-status.idle,
+.inline-status.info {
+  background: rgba(244, 248, 255, 0.88);
+  color: #17314f;
+}
+
+.inline-status.running {
+  background: rgba(232, 240, 255, 0.92);
+  color: #1d4ed8;
+}
+
+.inline-status.success {
+  background: rgba(236, 253, 245, 0.92);
+  color: #0f766e;
+}
+
+.inline-status.error {
+  background: rgba(255, 241, 242, 0.92);
+  color: #be123c;
+}
+
+.task-notification-center {
+  position: fixed;
+  right: 22px;
+  bottom: 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  z-index: 1200;
+  width: min(360px, calc(100vw - 32px));
+}
+
+.task-toast {
+  padding: 12px 14px;
+  border-radius: 14px;
+  box-shadow: 0 18px 40px rgba(15, 30, 56, 0.18);
+  border: 1px solid rgba(18, 48, 95, 0.08);
+  background: rgba(255, 255, 255, 0.98);
+  color: #17314f;
+  transform: translateY(0);
+  opacity: 1;
+  transition: opacity 180ms ease, transform 180ms ease;
+}
+
+.task-toast.info {
+  background: rgba(244, 248, 255, 0.98);
+}
+
+.task-toast.success {
+  background: rgba(236, 253, 245, 0.98);
+  color: #0f766e;
+}
+
+.task-toast.error {
+  background: rgba(255, 241, 242, 0.98);
+  color: #be123c;
+}
+
+.task-toast.leaving {
+  opacity: 0;
+  transform: translateY(10px);
+}
+
 .hero {
   margin-top: 24px;
   padding: 28px;

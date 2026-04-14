@@ -77,10 +77,14 @@ from quant_platform_api.services import (
     StrategyService,
     TradeUploadService,
     WorkspaceService,
+    build_assistant_research_result,
     _normalize_execution_contract,
+    build_mentor_answer_result,
     build_backtest_result,
     build_optimization_result,
     build_replay_result,
+    build_strategy_generation_result,
+    build_trade_text_parse_result,
     list_llm_profiles,
     list_platform_capabilities,
     make_json_safe,
@@ -105,6 +109,10 @@ class AppServices:
     trade_upload_service: TradeUploadService
     workspace_service: WorkspaceService
     market_data_service: MarketDataService
+    strategy_generation_service: AsyncTaskService
+    mentor_answer_service: AsyncTaskService
+    assistant_research_service: AsyncTaskService
+    trade_text_parse_service: AsyncTaskService
     backtest_service: AsyncTaskService
     optimization_service: AsyncTaskService
     replay_service: AsyncTaskService
@@ -189,6 +197,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             market_data_service=market_data_service,
         ),
         market_data_service=market_data_service,
+        strategy_generation_service=AsyncTaskService(
+            repository=task_repository,
+            settings=app_settings,
+        ),
+        mentor_answer_service=AsyncTaskService(
+            repository=task_repository,
+            settings=app_settings,
+        ),
+        assistant_research_service=AsyncTaskService(
+            repository=task_repository,
+            settings=app_settings,
+        ),
+        trade_text_parse_service=AsyncTaskService(
+            repository=task_repository,
+            settings=app_settings,
+        ),
         backtest_service=AsyncTaskService(
             repository=task_repository,
             settings=app_settings,
@@ -634,6 +658,54 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         generated = services.strategy_service.generate_strategy(payload)
         return _success_response(request, data=generated)
 
+    @app.post(f"{app_settings.api_prefix}/strategies/generations")
+    def create_strategy_generation_task(
+        request: Request,
+        payload: StrategyGenerateRequest,
+    ) -> JSONResponse:
+        current_user = _require_current_user(request, services.auth_service)
+        payload_dict = payload.model_dump(mode="json")
+        payload_dict["user_id"] = current_user.user_id
+        payload_dict["workspace_id"] = current_user.workspace_id
+        record = services.strategy_generation_service.submit(
+            kind="strategy_generation",
+            payload=payload_dict,
+            build_result=build_strategy_generation_result(services.strategy_service),
+            request_id=request.state.request_id,
+            user_id=current_user.user_id,
+            workspace_id=current_user.workspace_id,
+            idempotency_key=request.headers.get("Idempotency-Key"),
+        )
+        return _success_response(
+            request,
+            data={
+                "generation_id": record.id,
+                "task_id": record.id,
+                "status": record.status.value,
+                "state": record.status.value,
+                "progress_pct": record.progress_pct,
+                "config_revision": record.config_revision,
+                "status_url": f"{app_settings.api_prefix}/strategies/generations/{record.id}",
+                "result_url": f"{app_settings.api_prefix}/strategies/generations/{record.id}",
+            },
+            status_code=status.HTTP_202_ACCEPTED,
+        )
+
+    @app.get(f"{app_settings.api_prefix}/strategies/generations/{{generation_id}}")
+    def get_strategy_generation_task(
+        request: Request,
+        generation_id: str,
+    ) -> JSONResponse:
+        current_user = _require_current_user(request, services.auth_service)
+        record = _require_task(
+            services.strategy_generation_service.get(
+                generation_id,
+                user_id=current_user.user_id,
+                workspace_id=current_user.workspace_id,
+            )
+        )
+        return _success_response(request, data=_serialize_task(record, "generation_id"))
+
     @app.get(f"{app_settings.api_prefix}/platform/capabilities")
     def get_platform_capabilities(request: Request) -> JSONResponse:
         return _success_response(
@@ -757,6 +829,54 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         answer = services.mentor_service.answer(payload)
         return _success_response(request, data=answer)
 
+    @app.post(f"{app_settings.api_prefix}/mentor/ask-tasks")
+    def create_mentor_task(
+        request: Request,
+        payload: MentorAskRequest,
+    ) -> JSONResponse:
+        current_user = _require_current_user(request, services.auth_service)
+        payload_dict = payload.model_dump(mode="json")
+        payload_dict["user_id"] = current_user.user_id
+        payload_dict["workspace_id"] = current_user.workspace_id
+        record = services.mentor_answer_service.submit(
+            kind="mentor_answer",
+            payload=payload_dict,
+            build_result=build_mentor_answer_result(services.mentor_service),
+            request_id=request.state.request_id,
+            user_id=current_user.user_id,
+            workspace_id=current_user.workspace_id,
+            idempotency_key=request.headers.get("Idempotency-Key"),
+        )
+        return _success_response(
+            request,
+            data={
+                "mentor_task_id": record.id,
+                "task_id": record.id,
+                "status": record.status.value,
+                "state": record.status.value,
+                "progress_pct": record.progress_pct,
+                "config_revision": record.config_revision,
+                "status_url": f"{app_settings.api_prefix}/mentor/ask-tasks/{record.id}",
+                "result_url": f"{app_settings.api_prefix}/mentor/ask-tasks/{record.id}",
+            },
+            status_code=status.HTTP_202_ACCEPTED,
+        )
+
+    @app.get(f"{app_settings.api_prefix}/mentor/ask-tasks/{{mentor_task_id}}")
+    def get_mentor_task(
+        request: Request,
+        mentor_task_id: str,
+    ) -> JSONResponse:
+        current_user = _require_current_user(request, services.auth_service)
+        record = _require_task(
+            services.mentor_answer_service.get(
+                mentor_task_id,
+                user_id=current_user.user_id,
+                workspace_id=current_user.workspace_id,
+            )
+        )
+        return _success_response(request, data=_serialize_task(record, "mentor_task_id"))
+
     @app.get(f"{app_settings.api_prefix}/assistant/workflows")
     def list_assistant_workflows(request: Request) -> JSONResponse:
         _require_current_user(request, services.auth_service)
@@ -776,6 +896,54 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         _require_current_user(request, services.auth_service)
         answer = services.assistant_service.analyze(payload)
         return _success_response(request, data=answer)
+
+    @app.post(f"{app_settings.api_prefix}/assistant/research-tasks")
+    def create_assistant_research_task(
+        request: Request,
+        payload: AssistantResearchRequest,
+    ) -> JSONResponse:
+        current_user = _require_current_user(request, services.auth_service)
+        payload_dict = payload.model_dump(mode="json")
+        payload_dict["user_id"] = current_user.user_id
+        payload_dict["workspace_id"] = current_user.workspace_id
+        record = services.assistant_research_service.submit(
+            kind="assistant_research",
+            payload=payload_dict,
+            build_result=build_assistant_research_result(services.assistant_service),
+            request_id=request.state.request_id,
+            user_id=current_user.user_id,
+            workspace_id=current_user.workspace_id,
+            idempotency_key=request.headers.get("Idempotency-Key"),
+        )
+        return _success_response(
+            request,
+            data={
+                "research_task_id": record.id,
+                "task_id": record.id,
+                "status": record.status.value,
+                "state": record.status.value,
+                "progress_pct": record.progress_pct,
+                "config_revision": record.config_revision,
+                "status_url": f"{app_settings.api_prefix}/assistant/research-tasks/{record.id}",
+                "result_url": f"{app_settings.api_prefix}/assistant/research-tasks/{record.id}",
+            },
+            status_code=status.HTTP_202_ACCEPTED,
+        )
+
+    @app.get(f"{app_settings.api_prefix}/assistant/research-tasks/{{research_task_id}}")
+    def get_assistant_research_task(
+        request: Request,
+        research_task_id: str,
+    ) -> JSONResponse:
+        current_user = _require_current_user(request, services.auth_service)
+        record = _require_task(
+            services.assistant_research_service.get(
+                research_task_id,
+                user_id=current_user.user_id,
+                workspace_id=current_user.workspace_id,
+            )
+        )
+        return _success_response(request, data=_serialize_task(record, "research_task_id"))
 
     @app.post(f"{app_settings.api_prefix}/strategies/projects")
     def create_strategy_project(
@@ -1410,6 +1578,54 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             workspace_id=current_user.workspace_id,
         )
         return _success_response(request, data=parsed)
+
+    @app.post(f"{app_settings.api_prefix}/trades/uploads/manual/parse-text-tasks")
+    def create_manual_trade_text_task(
+        request: Request,
+        payload: ManualTradeTextParseRequest,
+    ) -> JSONResponse:
+        current_user = _require_current_user(request, services.auth_service)
+        payload_dict = payload.model_dump(mode="json")
+        payload_dict["user_id"] = current_user.user_id
+        payload_dict["workspace_id"] = current_user.workspace_id
+        record = services.trade_text_parse_service.submit(
+            kind="trade_text_parse",
+            payload=payload_dict,
+            build_result=build_trade_text_parse_result(services.trade_upload_service),
+            request_id=request.state.request_id,
+            user_id=current_user.user_id,
+            workspace_id=current_user.workspace_id,
+            idempotency_key=request.headers.get("Idempotency-Key"),
+        )
+        return _success_response(
+            request,
+            data={
+                "parse_task_id": record.id,
+                "task_id": record.id,
+                "status": record.status.value,
+                "state": record.status.value,
+                "progress_pct": record.progress_pct,
+                "config_revision": record.config_revision,
+                "status_url": f"{app_settings.api_prefix}/trades/uploads/manual/parse-text-tasks/{record.id}",
+                "result_url": f"{app_settings.api_prefix}/trades/uploads/manual/parse-text-tasks/{record.id}",
+            },
+            status_code=status.HTTP_202_ACCEPTED,
+        )
+
+    @app.get(f"{app_settings.api_prefix}/trades/uploads/manual/parse-text-tasks/{{parse_task_id}}")
+    def get_manual_trade_text_task(
+        request: Request,
+        parse_task_id: str,
+    ) -> JSONResponse:
+        current_user = _require_current_user(request, services.auth_service)
+        record = _require_task(
+            services.trade_text_parse_service.get(
+                parse_task_id,
+                user_id=current_user.user_id,
+                workspace_id=current_user.workspace_id,
+            )
+        )
+        return _success_response(request, data=_serialize_task(record, "parse_task_id"))
 
     @app.post(f"{app_settings.api_prefix}/trades/uploads/screenshot")
     async def upload_trade_screenshot(
