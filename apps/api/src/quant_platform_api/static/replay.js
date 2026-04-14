@@ -455,7 +455,9 @@ function renderReplayOverview(overview) {
     ["分钟级特征状态", replayAnalysisStatusLabel(scope.minute_feature_status)],
     ["基本面复盘状态", replayAnalysisStatusLabel(scope.fundamental_status)],
     ["待人工确认记录", truth.needs_confirmation_count != null ? `${truth.needs_confirmation_count} 笔` : "-"],
+    ["验收状态", truth.validation_readiness || "-"],
     ["输入来源分布", renderReplayTruthMap(truth.source_breakdown || {})],
+    ["字段来源分布", renderReplayFieldSourceBreakdown(truth.field_source_breakdown || {})],
     ["字段补全分布", renderReplayTruthMap(truth.derived_field_counts || {})],
     ["冲突标记", renderReplayTruthMap(truth.conflict_flag_counts || {})],
   ];
@@ -477,6 +479,16 @@ function renderReplayTruthMap(data) {
     return "暂无";
   }
   return entries.map(([key, value]) => `${key}（${value}）`).join(" / ");
+}
+
+function renderReplayFieldSourceBreakdown(data) {
+  const entries = Object.entries(data || {});
+  if (!entries.length) {
+    return "暂无";
+  }
+  return entries
+    .map(([field, sources]) => `${field}：${renderReplayTruthMap(sources || {})}`)
+    .join(" / ");
 }
 
 function replayAnalysisStatusLabel(value) {
@@ -588,6 +600,7 @@ function renderReplayObjectiveDetail() {
               <th>卖出价</th>
               <th>持仓时长</th>
               <th>盈亏比例</th>
+              <th>字段来源</th>
             </tr>
           </thead>
           <tbody>
@@ -1329,6 +1342,7 @@ function renderReplayTradeRecords(items) {
               <th>卖出价</th>
               <th>持仓时长</th>
               <th>盈亏比例</th>
+              <th>字段来源</th>
             </tr>
           </thead>
           <tbody>${renderReplayTradeRows(items)}</tbody>
@@ -1351,11 +1365,20 @@ function renderReplayTradeRows(items) {
               <td>${item.exit_price ?? "-"}</td>
               <td>${item.holding_label || "-"}</td>
               <td class="${Number(item.pnl || 0) >= 0 ? "positive" : "negative"}">${item.pnl_pct != null ? `${item.pnl_pct}%` : "-"}</td>
+              <td>${renderReplayTradeFieldSources(item.field_sources || {})}</td>
             </tr>
           `,
         )
         .join("")
-    : '<tr><td colspan="7" class="empty-state">暂无成交记录。</td></tr>';
+    : '<tr><td colspan="8" class="empty-state">暂无成交记录。</td></tr>';
+}
+
+function renderReplayTradeFieldSources(fieldSources) {
+  const focusFields = ["entry_time", "entry_price", "exit_time", "exit_price", "pnl"];
+  const parts = focusFields
+    .filter((field) => fieldSources[field])
+    .map((field) => `${field}=${fieldSources[field]}`);
+  return parts.length ? parts.join(" / ") : "-";
 }
 
 function formatTime(value) {

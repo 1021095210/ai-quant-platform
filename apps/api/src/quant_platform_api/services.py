@@ -3745,6 +3745,16 @@ class TradeUploadService:
                 input_confidence="needs_review" if upload_kind == "screenshot" else "user_provided",
                 provenance_tags=[upload_kind],
                 derived_fields=[],
+                field_sources={
+                    "symbol": "screenshot_form" if upload_kind == "screenshot" else "user_manual",
+                    "side": "screenshot_form" if upload_kind == "screenshot" else "user_manual",
+                    "entry_time": "screenshot_form" if upload_kind == "screenshot" else "user_manual",
+                    "exit_time": "screenshot_form" if upload_kind == "screenshot" else "user_manual",
+                    "pnl": "screenshot_form" if upload_kind == "screenshot" else "user_manual",
+                    "entry_price": "screenshot_form" if upload_kind == "screenshot" else "user_manual",
+                    "exit_price": "screenshot_form" if upload_kind == "screenshot" else "user_manual",
+                    "notes": "screenshot_form" if upload_kind == "screenshot" else "user_manual",
+                },
                 needs_confirmation=upload_kind == "screenshot",
                 conflict_flags=[],
             )
@@ -3830,6 +3840,16 @@ class TradeUploadService:
                     input_confidence="user_provided",
                     provenance_tags=["csv_import"],
                     derived_fields=[],
+                    field_sources={
+                        "symbol": "csv_column",
+                        "side": "csv_column",
+                        "entry_time": "csv_column",
+                        "exit_time": "csv_column",
+                        "pnl": "csv_column",
+                        "entry_price": "csv_column",
+                        "exit_price": "csv_column",
+                        "notes": "csv_column",
+                    },
                     needs_confirmation=False,
                     conflict_flags=[],
                 )
@@ -4172,6 +4192,16 @@ class TradeUploadService:
             input_confidence="needs_review",
             provenance_tags=provenance_tags,
             derived_fields=derived_fields,
+            field_sources={
+                "symbol": "text_rule_parse",
+                "side": "platform_default",
+                "entry_time": "text_llm_parse" if llm_used else "text_rule_parse",
+                "exit_time": "text_llm_parse" if llm_used and exit_rule is not None else "market_fill",
+                "entry_price": "market_fill",
+                "exit_price": "market_fill" if exit_price is not None else "pending_confirmation",
+                "pnl": "derived_from_prices" if exit_price is not None else "pending_confirmation",
+                "notes": "system_generated",
+            },
             needs_confirmation=True,
             conflict_flags=conflict_flags,
         )
@@ -6577,6 +6607,7 @@ def _build_replay_trade_records(records: list[TradeRecordItem]) -> list[dict[str
                 "input_confidence": item.input_confidence,
                 "provenance_tags": list(item.provenance_tags or []),
                 "derived_fields": list(item.derived_fields or []),
+                "field_sources": dict(item.field_sources or {}),
                 "needs_confirmation": bool(item.needs_confirmation),
                 "conflict_flags": list(item.conflict_flags or []),
             }
@@ -6636,6 +6667,7 @@ def _build_trade_input_truth_summary(
     derived_field_counts: dict[str, int] = {}
     provenance_tag_counts: dict[str, int] = {}
     conflict_flag_counts: dict[str, int] = {}
+    field_source_breakdown: dict[str, dict[str, int]] = {}
     needs_confirmation_count = 0
     for item in records:
         source_kind = item.source_kind or "unknown"
@@ -6650,6 +6682,10 @@ def _build_trade_input_truth_summary(
             provenance_tag_counts[tag] = provenance_tag_counts.get(tag, 0) + 1
         for flag in item.conflict_flags or []:
             conflict_flag_counts[flag] = conflict_flag_counts.get(flag, 0) + 1
+        for field_name, source_name in (item.field_sources or {}).items():
+            field_bucket = field_source_breakdown.setdefault(field_name, {})
+            normalized_source = source_name or "unknown"
+            field_bucket[normalized_source] = field_bucket.get(normalized_source, 0) + 1
     return {
         "record_count": len(records),
         "source_context": source_context or "trade_records",
@@ -6657,11 +6693,17 @@ def _build_trade_input_truth_summary(
         "confidence_breakdown": confidence_breakdown,
         "needs_confirmation_count": needs_confirmation_count,
         "derived_field_counts": derived_field_counts,
+        "field_source_breakdown": field_source_breakdown,
         "provenance_tag_counts": provenance_tag_counts,
         "conflict_flag_counts": conflict_flag_counts,
+        "validation_readiness": (
+            "需人工确认"
+            if needs_confirmation_count or conflict_flag_counts
+            else "可直接复盘"
+        ),
         "summary": (
             f"共 {len(records)} 笔记录，其中需要人工确认 {needs_confirmation_count} 笔。"
-            "平台会区分用户提供字段、系统补价字段和待确认冲突项。"
+            "平台会区分用户提供字段、系统补价字段、字段级来源和待确认冲突项。"
         ),
     }
 

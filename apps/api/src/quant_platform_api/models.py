@@ -254,6 +254,7 @@ class TradeRecordItem(BaseModel):
     input_confidence: str | None = None
     provenance_tags: list[str] = Field(default_factory=list)
     derived_fields: list[str] = Field(default_factory=list)
+    field_sources: dict[str, str] = Field(default_factory=dict)
     needs_confirmation: bool = False
     conflict_flags: list[str] = Field(default_factory=list)
 
