@@ -259,6 +259,34 @@ class StaticAssetTests(unittest.TestCase):
         self.assertIn("打开结果", assistant_js)
         self.assertIn("/api/v1/platform/llm-profiles", shared_js)
 
+    def test_theme_and_app_assets_include_finance_ui_baseline(self) -> None:
+        theme_css = (
+            WORKSPACE_ROOT
+            / "apps"
+            / "api"
+            / "src"
+            / "quant_platform_api"
+            / "static"
+            / "theme.css"
+        ).read_text(encoding="utf-8")
+        app_css = (
+            WORKSPACE_ROOT
+            / "apps"
+            / "api"
+            / "src"
+            / "quant_platform_api"
+            / "static"
+            / "app.css"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("--accent-deep", theme_css)
+        self.assertIn("linear-gradient(135deg, rgba(17, 30, 48, 0.98)", theme_css)
+        self.assertIn(".hero::before", theme_css)
+        self.assertIn(".quick-card:hover", theme_css)
+        self.assertIn('family=Manrope', app_css)
+        self.assertIn("grid-template-columns: 320px 1fr", app_css)
+        self.assertIn("linear-gradient(180deg, rgba(17, 30, 48, 0.96)", app_css)
+
     def test_replay_assets_include_validation_summary_rendering(self) -> None:
         replay_js = (
             WORKSPACE_ROOT
