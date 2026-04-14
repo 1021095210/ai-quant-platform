@@ -362,6 +362,7 @@ function renderStructuredSpecView(spec) {
     ["AI 离场意图", (aiHints.exit_intent || []).join("；") || "当前无"],
     ["AI 风控意图", (aiHints.risk_controls || []).join("；") || "当前无"],
     ["AI 仓位意图", aiHints.position_intent || "当前无"],
+    ["AI 执行时序意图", aiHints.execution_timing_intent || "当前无"],
     ["AI 执行假设", (aiHints.execution_assumptions || []).join("；") || "当前无"],
     ["AI 建议优先核对字段", aiFieldTargets || "当前无"],
     ["AI 建议优先确认值域", aiValueTargets || "当前无"],
