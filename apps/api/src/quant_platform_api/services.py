@@ -4009,6 +4009,11 @@ class TradeUploadService:
                 records,
                 source_context="text_parse",
             ),
+            "validation_summary": _build_trade_parse_validation_summary(
+                records,
+                grouped_candidates=grouped_candidates,
+                source_context="text_parse",
+            ),
             "records": [item.model_dump(mode="json") for item in records],
             "summary": (
                 f"已识别 {len(records)} 笔交易，日期为 {trade_date.isoformat()}，"
@@ -4107,6 +4112,11 @@ class TradeUploadService:
             "group_summaries": group_summaries,
             "input_truth_summary": _build_trade_input_truth_summary(
                 records,
+                source_context="text_parse",
+            ),
+            "validation_summary": _build_trade_parse_validation_summary(
+                records,
+                grouped_candidates=grouped_candidates,
                 source_context="text_parse",
             ),
             "records": [item.model_dump(mode="json") for item in records],
@@ -6031,6 +6041,21 @@ class AsyncTaskService:
             workspace_id=workspace_id,
         )
 
+    def list(
+        self,
+        *,
+        kind: str,
+        user_id: str | None = None,
+        workspace_id: str | None = None,
+        limit: int = 20,
+    ) -> list[TaskRecord]:
+        items = self._repository.list(
+            kind,
+            user_id=user_id,
+            workspace_id=workspace_id,
+        )
+        return items[:limit]
+
     def cancel(self, task_id: str) -> TaskRecord | None:
         return self._repository.cancel(task_id)
 
@@ -6970,6 +6995,55 @@ def _build_trade_input_truth_summary(
         "summary": (
             f"共 {len(records)} 笔记录，其中需要人工确认 {needs_confirmation_count} 笔。"
             "平台会区分用户提供字段、系统补价字段、字段级来源和待确认冲突项。"
+        ),
+    }
+
+
+def _build_trade_parse_validation_summary(
+    records: list[TradeRecordItem],
+    *,
+    grouped_candidates: list[dict[str, Any]] | None = None,
+    source_context: str = "text_parse",
+) -> dict[str, Any]:
+    grouped_candidates = grouped_candidates or []
+    truth_summary = _build_trade_input_truth_summary(records, source_context=source_context)
+    market_fill_count = 0
+    derived_pnl_count = 0
+    inferred_exit_count = 0
+    inferred_entry_count = 0
+    trade_dates: list[str] = []
+    seen_dates: set[str] = set()
+    for item in records:
+        field_sources = item.field_sources or {}
+        if field_sources.get("entry_price") == "market_fill":
+            market_fill_count += 1
+        if field_sources.get("exit_price") == "market_fill":
+            market_fill_count += 1
+        if field_sources.get("pnl") == "derived_from_prices":
+            derived_pnl_count += 1
+        if field_sources.get("entry_time") == "text_rule_parse":
+            inferred_entry_count += 1
+        if field_sources.get("exit_time") == "market_fill":
+            inferred_exit_count += 1
+        trade_date = item.entry_time.date().isoformat()
+        if trade_date not in seen_dates:
+            seen_dates.add(trade_date)
+            trade_dates.append(trade_date)
+    return {
+        "sample_mode": "grouped" if len(grouped_candidates) > 1 else "single",
+        "requested_group_count": len(grouped_candidates) or 1,
+        "parsed_group_count": len(grouped_candidates) or 1,
+        "trade_dates": trade_dates,
+        "record_count": len(records),
+        "needs_confirmation_count": truth_summary["needs_confirmation_count"],
+        "validation_readiness": truth_summary["validation_readiness"],
+        "market_fill_field_count": market_fill_count,
+        "derived_pnl_count": derived_pnl_count,
+        "inferred_entry_count": inferred_entry_count,
+        "inferred_exit_count": inferred_exit_count,
+        "summary": (
+            f"样本验收摘要：{len(records)} 笔记录，覆盖 {len(trade_dates)} 个交易日，"
+            f"需人工确认 {truth_summary['needs_confirmation_count']} 笔。"
         ),
     }
 

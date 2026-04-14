@@ -322,13 +322,16 @@ function renderManualParseSummary(result) {
   const groups = result.group_summaries || [];
   const aiReview = result.ai_review || {};
   const truthSummary = result.input_truth_summary || {};
+  const validationSummary = result.validation_summary || {};
   const warningLines = (aiReview.warnings || []).map((item) => `- ${item}`);
+  const validationLines = buildManualParseValidationLines(validationSummary);
   if (!groups.length) {
     nodes.manualParseSummary.textContent = [
       result.summary || "长文字智能识别完成，已加入手动记录。",
       aiReview.mode_label ? `解析方式：${aiReview.mode_label}` : "",
       aiReview.profile_label ? `使用模型：${aiReview.profile_label}` : "",
       truthSummary.record_count ? `输入真值摘要：共 ${truthSummary.record_count} 笔，需人工确认 ${truthSummary.needs_confirmation_count || 0} 笔` : "",
+      ...validationLines,
       ...warningLines,
     ]
       .filter(Boolean)
@@ -341,6 +344,7 @@ function renderManualParseSummary(result) {
     aiReview.profile_label ? `使用模型：${aiReview.profile_label}` : "",
     `共识别 ${result.group_count || groups.length} 个日期块，加入 ${result.record_count || 0} 笔记录。`,
     truthSummary.record_count ? `输入真值摘要：共 ${truthSummary.record_count} 笔，需人工确认 ${truthSummary.needs_confirmation_count || 0} 笔。` : "",
+    ...validationLines,
     "",
     ...groups.map(
       (group, index) =>
@@ -352,6 +356,46 @@ function renderManualParseSummary(result) {
     ...(warningLines.length ? ["", "需要你重点确认：", ...warningLines] : []),
   ];
   nodes.manualParseSummary.textContent = lines.join("\n");
+}
+
+function buildManualParseValidationLines(summary) {
+  if (!summary || !Object.keys(summary).length) {
+    return [];
+  }
+  const lines = [];
+  const tradeDates = summary.trade_dates || [];
+  lines.push(
+    `验收摘要：${summary.validation_readiness || "待确认"} · ` +
+      `样本模式 ${summary.sample_mode === "grouped" ? "分组批量" : "单批次"}`
+  );
+  if (summary.requested_group_count != null || summary.parsed_group_count != null) {
+    lines.push(
+      `日期块请求 / 识别：${summary.requested_group_count ?? "-"} / ${summary.parsed_group_count ?? "-"}`
+    );
+  }
+  if (tradeDates.length) {
+    lines.push(`识别日期：${tradeDates.join("、")}`);
+  }
+  if (summary.needs_confirmation_count != null || summary.market_fill_field_count != null) {
+    lines.push(
+      `待确认 ${summary.needs_confirmation_count ?? 0} 笔 · ` +
+        `真实行情补价字段 ${summary.market_fill_field_count ?? 0} 个`
+    );
+  }
+  if (
+    summary.inferred_entry_count != null ||
+    summary.inferred_exit_count != null ||
+    summary.derived_pnl_count != null
+  ) {
+    lines.push(
+      `推断字段：入场 ${summary.inferred_entry_count ?? 0} / ` +
+        `离场 ${summary.inferred_exit_count ?? 0} / 盈亏 ${summary.derived_pnl_count ?? 0}`
+    );
+  }
+  if (summary.summary) {
+    lines.push(summary.summary);
+  }
+  return lines;
 }
 
 function renderRecords(items) {
