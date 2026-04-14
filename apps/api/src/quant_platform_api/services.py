@@ -923,6 +923,46 @@ def _build_context_rules(prompt: str, selected_timeframes: list[str]) -> tuple[l
     return entry_context, exit_context
 
 
+def _derive_strategy_execution_timing(prompt: str, normalized: str) -> dict[str, Any]:
+    decision_timing = "intraday_realtime"
+    execution_timing = "same_session"
+    trigger_visibility = "current_bar_only"
+    summary = "默认按盘中实时观察、同交易时段内执行理解。"
+
+    if "收盘后" in prompt or "盘后" in prompt:
+        decision_timing = "after_close_confirmation"
+        trigger_visibility = "close_bar_visible"
+        summary = "已识别为收盘后确认，允许引用当日收盘结果，但执行应延后到下一交易时点。"
+
+    if any(marker in prompt for marker in ["次日开盘", "次日执行", "第二天开盘", "隔日开盘"]):
+        execution_timing = "next_session_open"
+        if decision_timing == "intraday_realtime":
+            summary = "已识别为次日开盘执行。当前条件需要与前一日已知信息或收盘后确认逻辑配合。"
+        else:
+            summary = "已识别为收盘后确认、次日开盘执行。"
+    elif any(marker in prompt for marker in ["次日收盘", "隔日收盘"]):
+        execution_timing = "next_session_close"
+        summary = "已识别为延后到下一交易日收盘附近执行。"
+    elif "收盘后" in prompt:
+        execution_timing = "next_session_open"
+
+    if any(marker in prompt or marker in normalized for marker in ["尾盘买入", "尾盘卖出", "尾盘执行"]):
+        decision_timing = "near_close_intraday"
+        if trigger_visibility != "close_bar_visible":
+            trigger_visibility = "intraday_partial_bar"
+        if execution_timing == "same_session":
+            summary = "已识别为尾盘阶段执行，不能引用尚未形成的最终收盘结果。"
+
+    return {
+        "decision_timing": decision_timing,
+        "execution_timing": execution_timing,
+        "trigger_visibility": trigger_visibility,
+        "summary": summary,
+        "safe_for_close_reference": decision_timing == "after_close_confirmation"
+        and execution_timing in {"next_session_open", "next_session_close"},
+    }
+
+
 def _extract_strategy_questions(
     prompt: str,
     normalized: str,
@@ -1246,6 +1286,7 @@ def _build_strategy_clarification_round(
 
 def _extract_strategy_unsupported_items(prompt: str, normalized: str) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
+    execution_timing = _derive_strategy_execution_timing(prompt, normalized)
 
     def add(item_id: str, title: str, detail: str, level: str = "hard") -> None:
         if any(entry["id"] == item_id for entry in items):
@@ -1339,9 +1380,28 @@ def _extract_strategy_unsupported_items(prompt: str, normalized: str) -> list[di
             ("买入", "开仓", "卖出", "止盈", "止损", "确认"),
             "直接使用“当日成交量/全天成交量/最终成交量”作为盘中条件，会把尚未完成的全天成交结果当成已知信息。需要改写成当前量比、当前分钟成交量或上一周期量能。",
         ),
+        (
+            "future_reference_amount",
+            ("当日成交额", "今日成交额", "全天成交额", "最终成交额"),
+            ("买入", "开仓", "卖出", "止盈", "止损", "确认"),
+            "直接使用“当日成交额/全天成交额/最终成交额”作为盘中条件，会把尚未完成的全天成交额当成已知信息。需要改写成当前成交额、分钟成交额或上一周期成交额。",
+        ),
+        (
+            "future_reference_turnover",
+            ("当日换手率", "今日换手率", "全天换手率", "最终换手率"),
+            ("买入", "开仓", "卖出", "止盈", "止损", "确认"),
+            "直接使用“当日换手率/全天换手率/最终换手率”作为盘中条件，会把尚未完成的全天换手结果当成已知信息。需要改写成当前成交强度或上一周期换手率。",
+        ),
     ]
     for item_id, metric_markers, action_markers, detail in future_rules:
-        if any(marker in prompt for marker in metric_markers) and any(marker in prompt for marker in action_markers):
+        if (
+            any(marker in prompt for marker in metric_markers)
+            and any(marker in prompt for marker in action_markers)
+            and not (
+                item_id == "future_reference_close"
+                and execution_timing.get("safe_for_close_reference")
+            )
+        ):
             add(item_id, "当前表达存在未来函数风险", detail)
     if ("收盘前" in prompt or "尾盘前" in prompt) and ("确认" in prompt or "判断" in prompt) and ("收盘价" in prompt):
         add(
@@ -1428,6 +1488,7 @@ def _build_strategy_understanding(
         "exit_context": exit_context,
         "risk_controls": [item for item in risk_controls if item["value"] is not None],
         "position_rules": strategy_dsl.get("position", {}),
+        "execution_timing": strategy_dsl.get("execution_timing", {}),
         "clarifications": strategy_dsl.get("clarifications", {}),
         "execution_assumptions": execution_assumptions,
         "ambiguities": [item["title"] for item in questions_for_user],
@@ -1478,6 +1539,8 @@ def _build_strategy_structured_spec(
         "exit_context_count": len(strategy_dsl.get("exit_context", [])),
         "data_dependencies": capability_summary.get("notes", []),
         "position": strategy_dsl.get("position", {}),
+        "filters": strategy_dsl.get("filters", {}),
+        "execution_timing": strategy_dsl.get("execution_timing", {}),
         "execution_assumptions": [
             f"主执行周期：{_timeframe_label(strategy_dsl['timeframe'])}",
             f"回测兼容层：{_timeframe_label(strategy_dsl.get('backtest_timeframe', strategy_dsl['timeframe']))}",
@@ -1544,6 +1607,17 @@ def _build_strategy_hard_validation(
         "当前没有待补充问题。"
         if not questions_for_user
         else "仍有模糊条件或缺参数，需要用户补充后再进入正式版本。",
+    )
+
+    execution_timing = capability_summary.get("execution_timing") or {}
+    add(
+        "execution_timing_visibility",
+        "触发可见性与执行时序",
+        "pass"
+        if execution_timing.get("trigger_visibility") in {"current_bar_only", "close_bar_visible"}
+        else "warn",
+        execution_timing.get("summary")
+        or "当前还没有明确的触发可见性与执行时序说明。",
     )
 
     future_risk_items = [
@@ -1661,6 +1735,14 @@ def _build_strategy_generation_pipeline(
             or "当前还没有已确认的补充项。",
         },
         {
+            "id": "execution_timing",
+            "title": "触发可见性与执行时序",
+            "status": "pass",
+            "summary": "平台会先判断条件在何时可见，再判断允许在何时执行，避免把收盘结果错误用到盘中。",
+            "detail": strategy_dsl.get("execution_timing", {}).get("summary")
+            or "当前按盘中实时观察、同交易时段内执行理解。",
+        },
+        {
             "id": "dsl",
             "title": "DSL / 结构化执行规格",
             "status": "pass",
@@ -1750,6 +1832,7 @@ def _build_strategy_ai_structured_hints(
             "position_intent": "",
             "execution_assumptions": [],
             "filter_intent": [],
+            "execution_timing_intent": "",
         }
     timeframe_hints = [
         _timeframe_label(_canonicalize_timeframe(item))
@@ -1790,6 +1873,7 @@ def _build_strategy_ai_structured_hints(
             for item in ai_interpretation.get("filter_intent", [])
             if str(item).strip()
         ],
+        "execution_timing_intent": str(ai_interpretation.get("execution_timing_intent") or "").strip(),
     }
 
 
@@ -1819,6 +1903,8 @@ def _build_strategy_ai_field_targets(ai_hints: dict[str, Any], unresolved_items:
         add("risk_controls", "风控规则", "AI 已提炼出风控意图，建议确认是否需要固化为止损或仓位约束。")
     if ai_hints.get("position_intent"):
         add("position", "仓位规则", "AI 已提炼出仓位或加仓意图，建议确认仓位字段。")
+    if ai_hints.get("execution_timing_intent") or ai_hints.get("execution_assumptions"):
+        add("execution_timing", "执行时序", "AI 已识别出触发可见性或执行时序意图，建议核对是否是收盘确认或次日执行。")
 
     unresolved_text = " ".join(unresolved_items)
     if any(marker in unresolved_text for marker in ["量能", "量比", "成交量", "成交额"]):
@@ -1902,6 +1988,12 @@ def _build_strategy_ai_value_targets(
         "仓位规则建议值",
         [ai_hints.get("position_intent", "")],
         "AI 已提炼仓位或加仓意图，建议确认是否写入仓位规则。",
+    )
+    add(
+        "execution_timing",
+        "执行时序建议值",
+        [ai_hints.get("execution_timing_intent", ""), *(ai_hints.get("execution_assumptions", []))],
+        "AI 已提炼出执行时序意图，建议确认是否应该按收盘后确认、次日执行或盘中执行处理。",
     )
 
     unresolved_text = " ".join(unresolved_items)
@@ -2029,6 +2121,24 @@ def _build_strategy_field_mapping(
             ) if entry_context else "当前无 entry_context 代码片段",
         },
         {
+            "id": "filters",
+            "label": "过滤规则",
+            "user_expression": "；".join(
+                value for key, value in strategy_dsl.get("clarifications", {}).items() if key in {"chase_guard", "market_regime", "market_regime_metric"}
+            ) or request.prompt,
+            "structured_value": "；".join(
+                f"{key}={value}" for key, value in strategy_dsl.get("filters", {}).items()
+            ) or "当前无过滤规则",
+            "dsl_path": "filters",
+            "python_mapping": "build_filter_constraints()",
+            "dsl_snippet": dsl_snippet(strategy_dsl.get("filters", {})),
+            "python_snippet": "\n".join(
+                [
+                    f"        'filters': {repr(strategy_dsl.get('filters', {}))},",
+                ]
+            ),
+        },
+        {
             "id": "exit_rules",
             "label": "离场与风控",
             "user_expression": request.prompt,
@@ -2057,6 +2167,26 @@ def _build_strategy_field_mapping(
             "python_snippet": "\n".join(
                 [
                     f"        'position': {repr(strategy_dsl.get('position', {}))},",
+                ]
+            ),
+        },
+        {
+            "id": "execution_timing",
+            "label": "触发可见性与执行时序",
+            "user_expression": request.prompt,
+            "structured_value": "；".join(
+                [
+                    f"decision_timing={strategy_dsl.get('execution_timing', {}).get('decision_timing', '')}",
+                    f"execution_timing={strategy_dsl.get('execution_timing', {}).get('execution_timing', '')}",
+                    f"trigger_visibility={strategy_dsl.get('execution_timing', {}).get('trigger_visibility', '')}",
+                ]
+            ),
+            "dsl_path": "execution_timing",
+            "python_mapping": "build_execution_timing_config()",
+            "dsl_snippet": dsl_snippet(strategy_dsl.get("execution_timing", {})),
+            "python_snippet": "\n".join(
+                [
+                    f"        'execution_timing': {repr(strategy_dsl.get('execution_timing', {}))},",
                 ]
             ),
         },
@@ -2360,6 +2490,7 @@ class StrategyService:
                 ]
             },
             "position": {"side": side, "max_positions": 1},
+            "execution_timing": _derive_strategy_execution_timing(prompt, normalized),
         }
         _apply_strategy_clarifications(
             strategy_dsl=strategy_dsl,
@@ -2372,6 +2503,7 @@ class StrategyService:
             timeframes=selected_timeframes,
             analysis_mode=strategy_dsl["analysis_mode"],
         )
+        capability_summary["execution_timing"] = strategy_dsl.get("execution_timing", {})
         understanding = _build_strategy_understanding(
             request=request,
             market_scope_label=market_scope_label,
@@ -2523,6 +2655,7 @@ class StrategyService:
             "用于后续平台结构化约束和人工确认。不要直接输出 Python 代码，不要编造平台未明确给出的规则。"
             "无法确认就留空或列为 unresolved_items。"
             "输出必须是 JSON 对象，字段固定为：summary、market_scope_hint、timeframe_hints、data_dependencies、entry_intent、exit_intent、risk_controls、filter_intent、position_intent、execution_assumptions、unresolved_items、risky_items。"
+            "如能识别执行时序，请补充 execution_timing_intent。"
             "其中 unresolved_items 是数组，每项字段固定为：title、detail、suggested_choices。"
             "其中 risky_items 是数组字符串，用于提醒可能存在的语义风险，但不能替代平台硬校验。"
         )
@@ -2603,6 +2736,7 @@ class StrategyService:
                 if str(item).strip()
             ],
             "position_intent": str(parsed.get("position_intent") or "").strip(),
+            "execution_timing_intent": str(parsed.get("execution_timing_intent") or "").strip(),
             "execution_assumptions": [
                 str(item).strip()
                 for item in parsed.get("execution_assumptions", [])

@@ -1073,6 +1073,8 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertTrue(any(item["id"] == "entry_rules" for item in payload["field_mapping"]))
         self.assertTrue(any(item.get("python_snippet") for item in payload["field_mapping"]))
         self.assertEqual("首次仓位 20%", payload["strategy_dsl"]["position"]["clarified_rule"])
+        self.assertTrue(any(item["id"] == "filters" for item in payload["field_mapping"]))
+        self.assertTrue(any(item["id"] == "execution_timing" for item in payload["field_mapping"]))
         self.assertIn("已应用你补充的条件说明", payload["human_summary"])
 
     def test_generate_strategy_can_enter_followup_clarification_round(self) -> None:
@@ -1184,6 +1186,50 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertTrue(any(item["id"] == "future_reference_amplitude" for item in payload["unsupported_items"]))
         self.assertEqual("fail", next(item["status"] for item in payload["hard_validation"]["checks"] if item["id"] == "future_function_risk"))
 
+    def test_generate_strategy_flags_intraday_amount_and_turnover_future_risk(self) -> None:
+        client = self._build_client()
+
+        response = client.post(
+            "/api/v1/strategies/generate",
+            json={
+                "prompt": "当日成交额超过过去 20 日均值且当日换手率高于 8% 时买入",
+                "market": "600519.SH",
+                "timeframe": "1d",
+                "asset_type": "stock",
+                "preferences": {"side": "long"},
+            },
+        )
+
+        self.assertEqual(200, response.status_code)
+        payload = response.json()["data"]
+        self.assertTrue(any(item["id"] == "future_reference_amount" for item in payload["unsupported_items"]))
+        self.assertTrue(any(item["id"] == "future_reference_turnover" for item in payload["unsupported_items"]))
+        self.assertEqual("fail", next(item["status"] for item in payload["hard_validation"]["checks"] if item["id"] == "future_function_risk"))
+
+    def test_generate_strategy_allows_close_reference_after_close_for_next_session_execution(self) -> None:
+        client = self._build_client()
+
+        response = client.post(
+            "/api/v1/strategies/generate",
+            json={
+                "prompt": "收盘后若当日收盘价高于10日均线，则次日开盘买入；若次日收盘前跌破5日均线则卖出",
+                "market": "600519.SH",
+                "timeframe": "1d",
+                "asset_type": "stock",
+                "preferences": {"side": "long"},
+            },
+        )
+
+        self.assertEqual(200, response.status_code)
+        payload = response.json()["data"]
+        self.assertFalse(any(item["id"] == "future_reference_close" for item in payload["unsupported_items"]))
+        timing = payload["strategy_dsl"]["execution_timing"]
+        self.assertEqual("after_close_confirmation", timing["decision_timing"])
+        self.assertEqual("next_session_open", timing["execution_timing"])
+        self.assertEqual("close_bar_visible", timing["trigger_visibility"])
+        timing_check = next(item for item in payload["hard_validation"]["checks"] if item["id"] == "execution_timing_visibility")
+        self.assertEqual("pass", timing_check["status"])
+
     def test_generate_strategy_structured_spec_contains_clarification_memory(self) -> None:
         client = self._build_client()
 
@@ -1264,6 +1310,7 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertIn("大盘不差时再开仓", payload["structured_spec"]["ai_structured_hints"]["filter_intent"])
         self.assertTrue(any(item["field"] == "entry_rules" for item in payload["structured_spec"]["ai_field_targets"]))
         self.assertTrue(any(item["field"] == "entry_rules" for item in payload["structured_spec"]["ai_value_targets"]))
+        self.assertIn("execution_timing_intent", payload["structured_spec"]["ai_structured_hints"])
         self.assertIn("回踩幅度需要补充", payload["structured_spec"]["ai_unresolved_items"])
         self.assertTrue(any(item["id"] == "ai_understanding" for item in payload["generation_pipeline"]))
         self.assertTrue(any(item["title"] == "回踩幅度需要补充" for item in payload["questions_for_user"]))
