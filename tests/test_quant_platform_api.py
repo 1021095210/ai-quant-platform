@@ -5159,6 +5159,61 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertGreaterEqual(data["suggested_pnl"], 1280)
         self.assertIn("来源：截图 OCR 识别", data["suggested_notes"])
 
+    def test_screenshot_ocr_endpoint_supports_history_list_pairing(self) -> None:
+        client = self._build_client()
+        self._login(client)
+        mocked_lines = [
+            "当日委托",
+            "历史成交",
+            "买入",
+            "悦心健康",
+            "300",
+            "6.060",
+            "1818.000",
+            "买2026030410:20:39",
+            "买入",
+            "农发种业",
+            "200",
+            "9.240",
+            "1848.000",
+            "买2026030410:27:54",
+            "卖出",
+            "悦心健康",
+            "300",
+            "6.350",
+            "1905.000",
+            "卖2026030511:08:32",
+        ]
+        with patch.object(TradeUploadService, "_ocr_image_lines", return_value=mocked_lines), patch.object(
+            TradeUploadService,
+            "_lookup_cn_equity_symbols_by_names",
+            return_value={"悦心健康": "002162.SZ", "农发种业": "600313.SH"},
+        ):
+            response = client.post(
+                "/api/v1/trades/uploads/screenshot/ocr",
+                data={"market": "cn_equity"},
+                files={"file": ("trade.png", b"fake-image", "image/png")},
+            )
+
+        self.assertEqual(200, response.status_code)
+        data = response.json()["data"]
+        self.assertEqual("history_list", data["screenshot_mode"])
+        self.assertEqual(3, data["detected_execution_count"])
+        self.assertEqual(1, data["detected_record_count"])
+        self.assertEqual(1, data["pending_execution_count"])
+        self.assertEqual([], data["unresolved_names"])
+        self.assertIn("历史成交列表", data["pairing_summary"])
+        self.assertEqual("002162.SZ", data["suggested_symbol"])
+        self.assertEqual("2026-03-04", data["detected_trade_date"])
+        self.assertEqual("2026-03-04T10:20:39+00:00", data["suggested_entry_time"])
+        self.assertEqual("2026-03-05T11:08:32+00:00", data["suggested_exit_time"])
+        self.assertEqual(87.0, data["suggested_pnl"])
+        self.assertEqual(1, len(data["detected_records"]))
+        record = data["detected_records"][0]
+        self.assertEqual("002162.SZ", record["symbol"])
+        self.assertEqual(300, record["quantity"])
+        self.assertIn("历史成交列表配对生成", record["notes"])
+
     def test_replay_page_supports_csv_screenshot_and_manual_sources(self) -> None:
         client = self._build_client()
         self._login(client)

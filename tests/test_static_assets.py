@@ -148,8 +148,11 @@ class StaticAssetTests(unittest.TestCase):
 
         self.assertIn('id="ocr-screenshot-btn"', replay_html)
         self.assertIn('id="screenshot-ocr-summary"', replay_html)
+        self.assertIn('id="import-screenshot-records-btn"', replay_html)
         self.assertIn("/api/v1/trades/uploads/screenshot/ocr", replay_js)
         self.assertIn("智能识别截图内容", replay_js)
+        self.assertIn("detected_records", replay_js)
+        self.assertIn("importScreenshotRecordsToManualList", replay_js)
 
     def test_strategy_and_backtests_assets_include_capability_guidance(self) -> None:
         strategy_html = (

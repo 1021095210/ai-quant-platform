@@ -4137,6 +4137,46 @@ class TradeUploadService:
         if not combined_text:
             raise TaskExecutionError("INVALID_ARGUMENT", "当前截图里未识别到可用文字，请换一张更清晰的成交截图或继续手工补录。")
 
+        history_result = self._extract_cn_equity_history_screenshot_records(lines, market=market)
+        if history_result is not None:
+            detected_records = history_result["records"]
+            first_record = detected_records[0] if detected_records else {}
+            detected_date = None
+            if first_record.get("entry_time"):
+                detected_date = first_record["entry_time"].split("T", 1)[0]
+            notes_parts = [
+                "来源：截图 OCR 批量识别",
+                f"识别成交行 {history_result['detected_execution_count']}",
+                f"配对成交记录 {history_result['detected_record_count']}",
+            ]
+            if history_result["pending_execution_count"]:
+                notes_parts.append(
+                    f"仍有 {history_result['pending_execution_count']} 条未配对成交行待后续补全"
+                )
+            if history_result["unresolved_names"]:
+                notes_parts.append(
+                    f"未映射证券名称：{', '.join(history_result['unresolved_names'][:5])}"
+                )
+            return {
+                "raw_text": combined_text,
+                "symbol_candidates": [item["symbol"] for item in detected_records if item.get("symbol")][:5],
+                "suggested_symbol": first_record.get("symbol", ""),
+                "suggested_side": first_record.get("side", "long"),
+                "suggested_market": market,
+                "detected_trade_date": detected_date,
+                "suggested_entry_time": first_record.get("entry_time"),
+                "suggested_exit_time": first_record.get("exit_time"),
+                "suggested_pnl": first_record.get("pnl", 0.0),
+                "suggested_notes": "；".join(notes_parts),
+                "screenshot_mode": "history_list",
+                "detected_records": detected_records,
+                "detected_execution_count": history_result["detected_execution_count"],
+                "detected_record_count": history_result["detected_record_count"],
+                "pending_execution_count": history_result["pending_execution_count"],
+                "unresolved_names": history_result["unresolved_names"],
+                "pairing_summary": history_result["pairing_summary"],
+            }
+
         detected_date = self._extract_trade_date(combined_text)
         symbol_candidates = self._extract_symbols_by_market(combined_text, market)
         side = self._extract_trade_side(combined_text, market)
@@ -4162,7 +4202,306 @@ class TradeUploadService:
             "suggested_exit_time": None,
             "suggested_pnl": pnl,
             "suggested_notes": "；".join(notes_parts),
+            "screenshot_mode": "single_trade",
+            "detected_records": [],
+            "detected_execution_count": 0,
+            "detected_record_count": 0,
+            "pending_execution_count": 0,
+            "unresolved_names": [],
+            "pairing_summary": "",
         }
+
+    def _extract_cn_equity_history_screenshot_records(
+        self,
+        lines: list[str],
+        *,
+        market: str,
+    ) -> dict[str, Any] | None:
+        if market != "cn_equity":
+            return None
+        executions = self._extract_cn_equity_history_screenshot_executions(lines)
+        if len(executions) < 2:
+            return None
+
+        name_map = self._lookup_cn_equity_symbols_by_names(
+            [item["name"] for item in executions if item.get("name")]
+        )
+        unresolved_names: list[str] = []
+        for item in executions:
+            symbol = name_map.get(item.get("name", ""))
+            item["symbol"] = symbol
+            if not symbol and item.get("name") and item["name"] not in unresolved_names:
+                unresolved_names.append(item["name"])
+
+        paired = self._pair_cn_equity_history_executions_to_trades(executions)
+        records = paired["records"]
+        return {
+            "records": records,
+            "detected_execution_count": len(executions),
+            "detected_record_count": len(records),
+            "pending_execution_count": paired["pending_execution_count"],
+            "unresolved_names": unresolved_names,
+            "pairing_summary": (
+                f"从历史成交列表识别 {len(executions)} 条成交行，"
+                f"已配对 {len(records)} 笔记录，"
+                f"剩余 {paired['pending_execution_count']} 条未完成成交。"
+            ),
+        }
+
+    def _extract_cn_equity_history_screenshot_executions(
+        self,
+        lines: list[str],
+    ) -> list[dict[str, Any]]:
+        executions: list[dict[str, Any]] = []
+        buffer: list[str] = []
+        current_side: str | None = None
+        for raw_line in lines:
+            line = raw_line.strip()
+            if not line:
+                continue
+            normalized = line.replace(" ", "")
+            if normalized in {"买入", "卖出"}:
+                current_side = "buy" if normalized == "买入" else "sell"
+                if not any(self._line_looks_like_cn_equity_name(item) for item in buffer):
+                    buffer = []
+                buffer.append(normalized)
+                continue
+            if any(token in normalized for token in ("历史成交", "世纪证券", "返回", "筛选", "导出", "搜索")):
+                continue
+            timestamp_match = re.search(
+                r"([买卖])\s*(20\d{2})(\d{2})(\d{2})\s*(\d{2}:\d{2}:\d{2})",
+                normalized,
+            )
+            if timestamp_match is None:
+                buffer.append(line)
+                continue
+
+            side = "buy" if timestamp_match.group(1) == "买" else "sell"
+            trade_date = f"{timestamp_match.group(2)}-{timestamp_match.group(3)}-{timestamp_match.group(4)}"
+            executed_at = f"{trade_date}T{timestamp_match.group(5)}+00:00"
+            chunk = buffer + [line]
+            parsed = self._parse_cn_equity_execution_chunk(
+                chunk,
+                side=current_side or side,
+                executed_at=executed_at,
+            )
+            if parsed is not None:
+                executions.append(parsed)
+            buffer = []
+            current_side = None
+        return executions
+
+    def _parse_cn_equity_execution_chunk(
+        self,
+        chunk: list[str],
+        *,
+        side: str,
+        executed_at: str,
+    ) -> dict[str, Any] | None:
+        name = self._extract_cn_equity_name_from_chunk(chunk)
+        if not name:
+            return None
+        numeric_tokens = self._extract_chunk_numeric_tokens(chunk)
+        quantity, price, amount = self._resolve_execution_numbers(numeric_tokens)
+        return {
+            "name": name,
+            "side": side,
+            "executed_at": executed_at,
+            "quantity": quantity,
+            "price": price,
+            "amount": amount,
+        }
+
+    def _extract_cn_equity_name_from_chunk(self, chunk: list[str]) -> str | None:
+        for line in chunk:
+            normalized = line.strip().replace(" ", "")
+            if not normalized:
+                continue
+            if normalized in {"买入", "卖出"} or self._is_generic_cn_equity_label(normalized):
+                continue
+            if re.search(r"[买卖]\s*20\d{6}", normalized):
+                continue
+            if re.fullmatch(r"[0-9.]+", normalized):
+                continue
+            chinese_only = re.sub(r"[^一-龥]", "", normalized)
+            if len(chinese_only) >= 2:
+                return chinese_only
+        return None
+
+    def _line_looks_like_cn_equity_name(self, value: str) -> bool:
+        normalized = value.strip().replace(" ", "")
+        if not normalized or self._is_generic_cn_equity_label(normalized):
+            return False
+        chinese_only = re.sub(r"[^一-龥]", "", normalized)
+        return len(chinese_only) >= 2
+
+    def _is_generic_cn_equity_label(self, value: str) -> bool:
+        chinese_only = re.sub(r"[^一-龥]", "", value)
+        if not chinese_only:
+            return False
+        generic_tokens = {
+            "当日委托",
+            "当日成交",
+            "历史委托",
+            "历史成交",
+            "默认",
+            "按股票",
+            "按做",
+            "确定",
+            "成交价",
+            "成交量",
+            "成交日期",
+            "成交额",
+        }
+        return any(token in chinese_only for token in generic_tokens)
+
+    def _extract_chunk_numeric_tokens(self, chunk: list[str]) -> list[float]:
+        values: list[float] = []
+        for line in chunk:
+            normalized = line.replace(",", "").replace("，", "").strip()
+            if re.search(r"[买卖]\s*20\d{6}", normalized.replace(" ", "")):
+                continue
+            for token in re.findall(r"\d+(?:\.\d+)?", normalized):
+                try:
+                    values.append(float(token))
+                except ValueError:
+                    continue
+        return values
+
+    def _resolve_execution_numbers(self, values: list[float]) -> tuple[float | None, float | None, float | None]:
+        if not values:
+            return None, None, None
+        quantity_candidates = [
+            value
+            for value in values
+            if float(value).is_integer() and 1 <= value <= 100000 and int(value) % 10 == 0
+        ]
+        price_candidates = [value for value in values if 0 < value < 10000 and not float(value).is_integer()]
+        amount_candidates = [value for value in values if value >= 100]
+        best_combo: tuple[float | None, float | None, float | None] = (None, None, None)
+        best_error: float | None = None
+        for quantity in quantity_candidates:
+            for price in price_candidates:
+                for amount in amount_candidates:
+                    error = abs(price * quantity - amount)
+                    if best_error is None or error < best_error:
+                        best_error = error
+                        best_combo = (quantity, round(price, 4), round(amount, 4))
+        if best_combo != (None, None, None):
+            return best_combo
+
+        quantity = quantity_candidates[0] if quantity_candidates else None
+        price = round(price_candidates[0], 4) if price_candidates else None
+        amount = round(amount_candidates[-1], 4) if amount_candidates else None
+        return quantity, price, amount
+
+    def _lookup_cn_equity_symbols_by_names(self, names: list[str]) -> dict[str, str]:
+        deduped_names = [item.strip() for item in names if item and item.strip()]
+        deduped_names = list(dict.fromkeys(deduped_names))
+        if not deduped_names or not self._settings.clickhouse_host or not self._settings.clickhouse_username:
+            return {}
+        quoted_names = ", ".join(self._quote_clickhouse_string(item) for item in deduped_names)
+        query = (
+            "SELECT name, ts_code "
+            "FROM quant_dwd.dim_stock "
+            f"WHERE name IN ({quoted_names}) "
+            "FORMAT JSONEachRow"
+        )
+        scheme = "https" if self._settings.clickhouse_secure else "http"
+        url = f"{scheme}://{self._settings.clickhouse_host}:{self._settings.clickhouse_port}/"
+        try:
+            response = httpx.post(
+                url,
+                params={"database": "quant_dwd"},
+                content=query.encode("utf-8"),
+                auth=(self._settings.clickhouse_username, self._settings.clickhouse_password),
+                timeout=8.0,
+            )
+            response.raise_for_status()
+        except Exception:
+            return {}
+
+        resolved: dict[str, str] = {}
+        for line in response.text.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            name = str(row.get("name", "")).strip()
+            ts_code = str(row.get("ts_code", "")).strip().upper()
+            if name and ts_code and name not in resolved:
+                resolved[name] = ts_code
+        return resolved
+
+    def _pair_cn_equity_history_executions_to_trades(
+        self,
+        executions: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        open_positions: dict[str, list[dict[str, Any]]] = {}
+        records: list[dict[str, Any]] = []
+        pending_execution_count = 0
+        sorted_executions = sorted(executions, key=lambda item: item["executed_at"])
+        for item in sorted_executions:
+            symbol = item.get("symbol")
+            if not symbol:
+                pending_execution_count += 1
+                continue
+            quantity = float(item.get("quantity") or 0.0)
+            if quantity <= 0:
+                pending_execution_count += 1
+                continue
+            if item["side"] == "buy":
+                open_positions.setdefault(symbol, []).append(
+                    {
+                        **item,
+                        "remaining_quantity": quantity,
+                    }
+                )
+                continue
+            remaining_sell = quantity
+            fifo_queue = open_positions.get(symbol, [])
+            while fifo_queue and remaining_sell > 0:
+                entry = fifo_queue[0]
+                matched_quantity = min(float(entry["remaining_quantity"]), remaining_sell)
+                entry_price = float(entry.get("price") or 0.0)
+                exit_price = float(item.get("price") or 0.0)
+                pnl = round((exit_price - entry_price) * matched_quantity, 4)
+                records.append(
+                    {
+                        "symbol": symbol,
+                        "side": "long",
+                        "entry_time": entry["executed_at"],
+                        "exit_time": item["executed_at"],
+                        "entry_price": round(entry_price, 4) if entry_price else None,
+                        "exit_price": round(exit_price, 4) if exit_price else None,
+                        "quantity": matched_quantity,
+                        "pnl": pnl,
+                        "notes": (
+                            f"来源：成交截图 OCR 批量识别；从历史成交列表配对生成；"
+                            f"证券名称：{entry.get('name') or item.get('name')}"
+                        ),
+                    }
+                )
+                entry["remaining_quantity"] = round(float(entry["remaining_quantity"]) - matched_quantity, 4)
+                remaining_sell = round(remaining_sell - matched_quantity, 4)
+                if entry["remaining_quantity"] <= 0:
+                    fifo_queue.pop(0)
+            if remaining_sell > 0:
+                pending_execution_count += 1
+
+        pending_execution_count += sum(
+            1 for queue in open_positions.values() for item in queue if float(item.get("remaining_quantity") or 0.0) > 0
+        )
+        return {
+            "records": records,
+            "pending_execution_count": pending_execution_count,
+        }
+
+    def _quote_clickhouse_string(self, value: str) -> str:
+        return "'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'"
 
     def _build_text_trade_record(
         self,
@@ -4629,15 +4968,30 @@ class TradeUploadService:
     def _ocr_image_lines(self, content: bytes) -> list[str]:
         try:
             import numpy as np
-            from PIL import Image
+            from PIL import Image, ImageOps
             from rapidocr_onnxruntime import RapidOCR
         except Exception as exc:  # pragma: no cover - import is validated in runtime tests
             raise TaskExecutionError("INTERNAL_ERROR", "OCR 依赖不可用，请重新安装应用依赖。") from exc
 
         if self._ocr_engine is None:
-            self._ocr_engine = RapidOCR()
+            self._ocr_engine = RapidOCR(
+                use_cls=False,
+                max_side_len=960,
+                min_side_len=30,
+                intra_op_num_threads=1,
+                inter_op_num_threads=1,
+            )
 
         image = Image.open(BytesIO(content)).convert("RGB")
+        width, height = image.size
+        crop_top = int(height * 0.08)
+        crop_bottom = int(height * 0.07)
+        if crop_top + crop_bottom < height:
+            image = image.crop((0, crop_top, width, height - crop_bottom))
+        if image.width > 720:
+            resized_height = max(int(image.height * (720 / image.width)), 1)
+            image = image.resize((720, resized_height))
+        image = ImageOps.autocontrast(image)
         result, _ = self._ocr_engine(np.array(image))
         if not result:
             return []

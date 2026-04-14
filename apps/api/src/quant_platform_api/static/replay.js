@@ -18,6 +18,7 @@ const state = {
   replayReady: false,
   sourceMode: "csv",
   manualTrades: [],
+  pendingScreenshotRecords: [],
   objectiveVersions: [],
   selectedObjective: "sharpe_max",
   pendingParseTaskId: null,
@@ -66,6 +67,7 @@ const nodes = {
   screenshotExit: document.querySelector("#trade-screenshot-exit"),
   screenshotNotes: document.querySelector("#trade-screenshot-notes"),
   screenshotOcrButton: document.querySelector("#ocr-screenshot-btn"),
+  importScreenshotRecordsButton: document.querySelector("#import-screenshot-records-btn"),
   screenshotOcrSummary: document.querySelector("#screenshot-ocr-summary"),
   manualSymbol: document.querySelector("#trade-manual-symbol"),
   manualSide: document.querySelector("#trade-manual-side"),
@@ -216,6 +218,17 @@ async function recognizeScreenshotTrade() {
     body: formData,
   });
   const data = payload.data;
+  state.pendingScreenshotRecords = (data.detected_records || []).map((item) => ({
+    symbol: item.symbol,
+    side: item.side,
+    entry_time: item.entry_time,
+    exit_time: item.exit_time,
+    entry_price: item.entry_price,
+    exit_price: item.exit_price,
+    quantity: item.quantity,
+    pnl: item.pnl,
+    notes: item.notes || "来源：成交截图 OCR 批量识别",
+  }));
   if (data.suggested_symbol) {
     nodes.screenshotSymbol.value = data.suggested_symbol;
   }
@@ -235,14 +248,42 @@ async function recognizeScreenshotTrade() {
     nodes.screenshotNotes.value = data.suggested_notes;
   }
   nodes.screenshotOcrSummary.textContent = [
+    data.screenshot_mode === "history_list" ? "识别模式：历史成交列表批量识别" : "识别模式：单笔截图识别",
+    data.detected_execution_count != null ? `识别成交行：${data.detected_execution_count}` : "",
+    data.detected_record_count != null ? `配对成交记录：${data.detected_record_count}` : "",
+    data.pending_execution_count != null ? `仍待后续截图补全的成交行：${data.pending_execution_count}` : "",
+    data.unresolved_names?.length ? `未映射名称：${data.unresolved_names.join("、")}` : "",
+    data.pairing_summary ? `批量摘要：${data.pairing_summary}` : "",
     data.raw_text ? `识别文字：\n${data.raw_text}` : "",
     data.suggested_symbol ? `建议代码：${data.suggested_symbol}` : "",
     data.detected_trade_date ? `识别日期：${data.detected_trade_date}` : "",
   ]
     .filter(Boolean)
     .join("\n\n");
+  nodes.importScreenshotRecordsButton.disabled = !state.pendingScreenshotRecords.length;
+  nodes.importScreenshotRecordsButton.className = state.pendingScreenshotRecords.length
+    ? "btn ghost"
+    : "btn ghost disabled";
   syncReplayActionState();
-  setStatus("截图 OCR 识别完成，请确认识别结果后再登记成交记录。");
+  setStatus(
+    state.pendingScreenshotRecords.length
+      ? "截图 OCR 识别完成，可将批量识别结果加入手动记录。"
+      : "截图 OCR 识别完成，请确认识别结果后再登记成交记录。"
+  );
+}
+
+function importScreenshotRecordsToManualList() {
+  if (!state.pendingScreenshotRecords.length) {
+    throw new Error("当前没有可导入的截图识别记录。");
+  }
+  state.manualTrades.push(...state.pendingScreenshotRecords.map((item) => ({ ...item })));
+  state.pendingScreenshotRecords = [];
+  nodes.importScreenshotRecordsButton.disabled = true;
+  nodes.importScreenshotRecordsButton.className = "btn ghost disabled";
+  renderManualTrades();
+  syncReplayActionState();
+  applySourceMode("manual");
+  setStatus("截图识别结果已加入手动记录，请确认后再统一提交复盘。");
 }
 
 async function uploadManualTrades() {
@@ -1560,6 +1601,16 @@ function syncReplayActionState(options = {}) {
     ? "先用 OCR 读取截图里的日期、股票代码和方向，再人工确认。"
     : "请先上传一张成交截图。";
 
+  if (nodes.importScreenshotRecordsButton) {
+    const screenshotBatchReady = Boolean(state.pendingScreenshotRecords.length);
+    nodes.importScreenshotRecordsButton.disabled = uploadBusy || !screenshotBatchReady;
+    nodes.importScreenshotRecordsButton.className =
+      screenshotBatchReady && !uploadBusy ? "btn ghost" : "btn ghost disabled";
+    nodes.importScreenshotRecordsButton.title = screenshotBatchReady
+      ? "将当前截图中批量识别出的成交记录加入手动记录列表。"
+      : "当前没有可导入的截图识别记录。";
+  }
+
   nodes.uploadManualButton.disabled = uploadBusy || !manualUploadReady;
   nodes.uploadManualButton.className =
     manualUploadReady && !uploadBusy ? "btn primary" : "btn disabled";
@@ -1631,6 +1682,14 @@ document.querySelector("#ocr-screenshot-btn").addEventListener(
   }),
 );
 
+document.querySelector("#import-screenshot-records-btn").addEventListener(
+  "click",
+  handle(async () => {
+    importScreenshotRecordsToManualList();
+    syncReplayActionState();
+  }),
+);
+
 document.querySelector("#upload-manual-btn").addEventListener(
   "click",
   handle(async () => {
@@ -1680,6 +1739,15 @@ nodes.sourceModeButtons.forEach((button) => {
 ].forEach((node) => {
   node.addEventListener("input", () => syncReplayActionState());
   node.addEventListener("change", () => syncReplayActionState());
+});
+
+nodes.screenshotFile.addEventListener("change", () => {
+  state.pendingScreenshotRecords = [];
+  nodes.importScreenshotRecordsButton.disabled = true;
+  nodes.importScreenshotRecordsButton.className = "btn ghost disabled";
+  nodes.screenshotOcrSummary.textContent =
+    "上传截图后，可以先用 OCR 识别日期、代码和方向。对于券商历史成交列表截图，系统会尽量批量提取并配对成多笔记录。";
+  syncReplayActionState();
 });
 
 document.querySelector("#run-replay-btn").addEventListener(
