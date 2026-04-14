@@ -930,6 +930,39 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             status_code=status.HTTP_202_ACCEPTED,
         )
 
+    @app.get(f"{app_settings.api_prefix}/assistant/research-tasks")
+    def list_assistant_research_tasks(request: Request) -> JSONResponse:
+        current_user = _require_current_user(request, services.auth_service)
+        records = services.assistant_research_service.list(
+            kind="assistant_research",
+            user_id=current_user.user_id,
+            workspace_id=current_user.workspace_id,
+            limit=20,
+        )
+        items = []
+        for record in records:
+            payload = record.payload or {}
+            result = record.result or {}
+            items.append(
+                {
+                    "research_task_id": record.id,
+                    "task_id": record.id,
+                    "status": record.status.value,
+                    "state": record.status.value,
+                    "query": result.get("query") or payload.get("query", ""),
+                    "workflow_id": result.get("workflow_id") or payload.get("workflow_id", ""),
+                    "workflow_title": result.get("workflow_title") or payload.get("workflow_id", ""),
+                    "target_symbol": result.get("target_symbol") or payload.get("target_symbol", ""),
+                    "market_scope": result.get("market_scope") or payload.get("market_scope", ""),
+                    "answer_source": result.get("answer_source", ""),
+                    "summary": result.get("executive_summary", ""),
+                    "status_url": f"{app_settings.api_prefix}/assistant/research-tasks/{record.id}",
+                    "created_at": record.created_at.isoformat(),
+                    "ended_at": record.finished_at.isoformat() if record.finished_at else None,
+                }
+            )
+        return _success_response(request, data={"items": items})
+
     @app.get(f"{app_settings.api_prefix}/assistant/research-tasks/{{research_task_id}}")
     def get_assistant_research_task(
         request: Request,

@@ -4892,6 +4892,42 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertIn("research_task_id", data)
         self.assertIn("workflow_title", data)
 
+    def test_assistant_research_tasks_endpoint_lists_recent_background_results(self) -> None:
+        client = self._build_client(
+            llm_base_url="https://llm.example.test/v1",
+            llm_api_key="sk-test",
+            llm_model_mentor="gpt-5-mini",
+        )
+        self._login(client)
+
+        created = client.post(
+            "/api/v1/assistant/research-tasks",
+            json={
+                "query": "请深度研究600619.SH这个个股",
+                "workflow_id": "market_map",
+                "target_symbol": "",
+                "market_scope": "cn_equity",
+                "research_depth": "deep",
+                "current_module": "assistant",
+                "llm_profile": "module_default",
+                "conversation_history": [],
+            },
+        )
+
+        self.assertEqual(202, created.status_code)
+        listed = client.get("/api/v1/assistant/research-tasks")
+
+        self.assertEqual(200, listed.status_code)
+        items = listed.json()["data"]["items"]
+        self.assertTrue(items)
+        first = items[0]
+        self.assertIn("research_task_id", first)
+        self.assertIn("status_url", first)
+        self.assertIn("query", first)
+        self.assertIn("workflow_title", first)
+        self.assertIn("summary", first)
+        self.assertEqual("600619.SH", first["target_symbol"])
+
     def test_mentor_task_completes_and_returns_answer(self) -> None:
         client = self._build_client(
             llm_base_url="https://llm.example.test/v1",
@@ -4981,6 +5017,70 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertEqual(2, data["record_count"])
         self.assertEqual("2025-07-25", data["trade_date"])
         self.assertTrue(data["records"])
+        self.assertIn("validation_summary", data)
+        self.assertEqual("single", data["validation_summary"]["sample_mode"])
+
+    def test_manual_text_parse_endpoint_builds_validation_summary_for_sampled_grouped_text(self) -> None:
+        client = self._build_client()
+        self._login(client)
+
+        response = client.post(
+            "/api/v1/trades/uploads/manual/parse-text",
+            json={
+                "text": (
+                    "2025-08-14 (Thursday)\n"
+                    "（5 只）：000590.SZ, 003017.SZ, 601231.SH, 600501con9.SH, 002174.SZfinalsell\n\n"
+                    "2025-08-20 (Wednesday)\n"
+                    "（2 只）：603320.SH, 002823.SZ\n\n"
+                    "2025-08-22 (Friday)\n"
+                    "（3 只）：002382.SZ, 002566.SZ, 002664.SZ\n\n"
+                    "买入方式：当日开盘价买入\n"
+                    "卖出方式：价格低于买入后任何一天的开盘价-0.5倍atr时卖出"
+                ),
+                "market": "cn_equity",
+                "adjustment_mode": "qfq",
+            },
+        )
+
+        self.assertEqual(200, response.status_code)
+        data = response.json()["data"]
+        self.assertEqual(3, data["group_count"])
+        self.assertEqual(10, data["record_count"])
+        self.assertEqual("grouped", data["validation_summary"]["sample_mode"])
+        self.assertEqual(3, data["validation_summary"]["requested_group_count"])
+        self.assertEqual(3, data["validation_summary"]["parsed_group_count"])
+        self.assertIn("2025-08-14", data["validation_summary"]["trade_dates"])
+        self.assertIn("2025-08-22", data["validation_summary"]["trade_dates"])
+        symbols = {item["symbol"] for item in data["records"]}
+        self.assertIn("600501.SH", symbols)
+        self.assertIn("002174.SZ", symbols)
+
+    def test_manual_text_parse_endpoint_builds_validation_summary_for_sampled_single_text(self) -> None:
+        client = self._build_client()
+        self._login(client)
+
+        response = client.post(
+            "/api/v1/trades/uploads/manual/parse-text",
+            json={
+                "text": (
+                    "2025-07-25 (Friday)\n"
+                    "（2 只）：603590.SH, 002225.SZ\n"
+                    "买入方式：当日开盘价买入\n"
+                    "卖出方式：价格低于买入后任何一天的开盘价-0.5倍atr时卖出"
+                ),
+                "market": "cn_equity",
+                "adjustment_mode": "qfq",
+            },
+        )
+
+        self.assertEqual(200, response.status_code)
+        data = response.json()["data"]
+        summary = data["validation_summary"]
+        self.assertEqual("single", summary["sample_mode"])
+        self.assertEqual(2, summary["record_count"])
+        self.assertIn("2025-07-25", summary["trade_dates"])
+        self.assertGreaterEqual(summary["market_fill_field_count"], 1)
+        self.assertIn("需人工确认", summary["summary"])
 
     def test_manual_text_parse_large_grouped_text_keeps_records_when_market_fill_is_skipped(self) -> None:
         class EmptyMarketDataService:

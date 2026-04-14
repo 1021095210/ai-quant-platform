@@ -16,6 +16,7 @@ const state = {
   workflows: [],
   selectedWorkflowId: "market_map",
   history: [],
+  taskCenterItems: [],
 };
 
 const nodes = {
@@ -35,6 +36,8 @@ const nodes = {
   followupStatus: document.querySelector("#assistant-followup-status"),
   followup: document.querySelector("#assistant-followup"),
   followupButton: document.querySelector("#assistant-followup-btn"),
+  taskCenter: document.querySelector("#assistant-task-center"),
+  refreshTasksButton: document.querySelector("#assistant-refresh-tasks-btn"),
 };
 
 const pendingResearchTasks = new Map();
@@ -130,10 +133,97 @@ function renderConversation() {
     .join("");
 }
 
+function formatTaskStatus(status) {
+  if (status === "succeeded") {
+    return "已完成";
+  }
+  if (status === "failed") {
+    return "失败";
+  }
+  if (status === "running") {
+    return "生成中";
+  }
+  if (status === "queued") {
+    return "排队中";
+  }
+  if (status === "canceled") {
+    return "已取消";
+  }
+  return status || "未知";
+}
+
+function renderTaskCenter() {
+  if (!state.taskCenterItems.length) {
+    nodes.taskCenter.textContent = "还没有后台研究任务。";
+    nodes.taskCenter.className = "list empty-state";
+    return;
+  }
+  nodes.taskCenter.className = "list";
+  nodes.taskCenter.innerHTML = state.taskCenterItems
+    .map(
+      (item) => `
+        <div class="list-item compact-item">
+          <strong>${item.workflow_title || "研究任务"} · ${formatTaskStatus(item.status)}</strong>
+          <div class="muted-note">${item.query || "未记录问题"}</div>
+          <div class="muted-note">标的 ${item.target_symbol || "-"} · 市场 ${item.market_scope || "-"} · 结果来源 ${item.answer_source || "-"}</div>
+          <div class="muted-note">${item.summary || "结果生成后会在这里显示摘要。"} </div>
+          <div class="actions" style="margin-top:10px;">
+            <button class="btn ghost assistant-open-task-btn" type="button" data-task-id="${item.research_task_id}" ${item.status === "succeeded" ? "" : "disabled"}>打开结果</button>
+          </div>
+        </div>
+      `,
+    )
+    .join("");
+  nodes.taskCenter.querySelectorAll(".assistant-open-task-btn").forEach((node) => {
+    node.addEventListener("click", async () => {
+      const taskId = node.dataset.taskId;
+      if (!taskId) {
+        return;
+      }
+      try {
+        const payload = await api(`/api/v1/assistant/research-tasks/${taskId}`);
+        hydrateResearchResult(payload.data);
+        setStatus("已重新打开后台研究结果。");
+      } catch (error) {
+        setStatus(error.message);
+      }
+    });
+  });
+}
+
 function appendConversation(role, title, content) {
   state.history.push({ role, title, content });
   renderConversation();
   syncFollowupButtonState();
+}
+
+function hydrateResearchResult(payload) {
+  if (payload.query) {
+    nodes.query.value = payload.query;
+  }
+  if (payload.market_scope) {
+    nodes.market.value = payload.market_scope;
+  }
+  if (payload.target_symbol) {
+    nodes.target.value = payload.target_symbol;
+  }
+  if (payload.workflow_id) {
+    state.selectedWorkflowId = payload.workflow_id;
+    updateSelectedWorkflowDisplay();
+    renderWorkflows(state.workflows);
+  }
+  state.history = [
+    { role: "user", title: "研究任务", content: payload.query || "已加载历史研究任务" },
+    { role: "assistant", title: "研究结果", content: `${payload.workflow_title || "研究结果"}\n${payload.executive_summary || payload.summary || ""}`.trim() },
+  ];
+  renderConversation();
+  renderResearch(payload);
+}
+
+async function loadTaskCenter() {
+  const payload = await api("/api/v1/assistant/research-tasks");
+  state.taskCenterItems = payload.data.items || [];
+  renderTaskCenter();
 }
 
 function renderResearch(payload) {
@@ -299,6 +389,7 @@ subscribeBackgroundTasks((task) => {
   if (task.status === "succeeded" && task.data) {
     appendConversation("assistant", "研究结果", `${task.data.workflow_title}\n${task.data.executive_summary}`);
     renderResearch(task.data);
+    loadTaskCenter().catch(() => {});
     setInlineStatus(
       meta.isFollowUp ? nodes.followupStatus : nodes.inlineStatus,
       meta.isFollowUp ? "继续深化研究已完成。" : "研究任务已完成。",
@@ -316,6 +407,7 @@ subscribeBackgroundTasks((task) => {
     );
     setStatus(task.data?.error?.message || task.error_message || "后台研究任务失败。");
     pendingResearchTasks.delete(task.task_id);
+    loadTaskCenter().catch(() => {});
   }
 });
 
@@ -324,4 +416,9 @@ syncRunButtonState();
 syncFollowupButtonState();
 clearInlineStatus(nodes.inlineStatus, "等待你发起研究任务。");
 clearInlineStatus(nodes.followupStatus, "继续细化也会转入后台处理，完成后会自动提醒你。");
-loadAssistant().catch((error) => setStatus(error.message));
+nodes.refreshTasksButton?.addEventListener("click", () => {
+  loadTaskCenter()
+    .then(() => setStatus("后台研究任务列表已刷新。"))
+    .catch((error) => setStatus(error.message));
+});
+Promise.all([loadAssistant(), loadTaskCenter()]).catch((error) => setStatus(error.message));

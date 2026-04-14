@@ -249,8 +249,27 @@ class StaticAssetTests(unittest.TestCase):
         self.assertIn('id="mentor-llm-profile"', mentor_html)
         self.assertIn("fetchLlmProfiles", mentor_js)
         self.assertIn('id="assistant-llm-profile"', assistant_html)
+        self.assertIn('id="assistant-task-center"', assistant_html)
+        self.assertIn('id="assistant-refresh-tasks-btn"', assistant_html)
         self.assertIn("fetchLlmProfiles", assistant_js)
+        self.assertIn("/api/v1/assistant/research-tasks", assistant_js)
+        self.assertIn("打开结果", assistant_js)
         self.assertIn("/api/v1/platform/llm-profiles", shared_js)
+
+    def test_replay_assets_include_validation_summary_rendering(self) -> None:
+        replay_js = (
+            WORKSPACE_ROOT
+            / "apps"
+            / "api"
+            / "src"
+            / "quant_platform_api"
+            / "static"
+            / "replay.js"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("validation_summary", replay_js)
+        self.assertIn("buildManualParseValidationLines", replay_js)
+        self.assertIn("验收摘要：", replay_js)
 
     def test_workspace_assets_include_focus_and_data_hub_sections(self) -> None:
         workspace_html = (
