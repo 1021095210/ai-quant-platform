@@ -498,6 +498,28 @@ def _llm_endpoint(base_url: str) -> str:
     return endpoint
 
 
+def _normalize_market_alias(market: str | None) -> str:
+    normalized = (market or "").strip()
+    if not normalized:
+        return "cn_equity"
+    alias_map = {
+        "A股": "cn_equity",
+        "a股": "cn_equity",
+        "cn_equity": "cn_equity",
+        "cn_a_share": "cn_equity",
+        "中国股票": "cn_equity",
+        "美股": "us_equity",
+        "us_equity": "us_equity",
+        "加密货币": "crypto",
+        "加密": "crypto",
+        "crypto": "crypto",
+        "伦敦金": "london_gold",
+        "黄金": "london_gold",
+        "london_gold": "london_gold",
+    }
+    return alias_map.get(normalized, normalized)
+
+
 def _module_default_llm_model(settings: Settings, module: str) -> str:
     if module == "strategy":
         return (
@@ -3925,6 +3947,7 @@ class TradeUploadService:
         normalized_text = text.strip()
         if not normalized_text:
             raise TaskExecutionError("INVALID_ARGUMENT", "请先输入需要识别的长文字内容。")
+        market = _normalize_market_alias(market)
 
         grouped_candidates = self._extract_grouped_trade_candidates(
             normalized_text,
@@ -5465,6 +5488,14 @@ class TradeUploadService:
 
 
 class FinancialAssistantService(MentorService):
+    def __init__(
+        self,
+        settings: Settings | None = None,
+        market_data_service: Any | None = None,
+    ) -> None:
+        super().__init__(settings)
+        self._market_data_service = market_data_service
+
     def list_workflows(self) -> list[dict[str, Any]]:
         return [
             {
@@ -5541,6 +5572,7 @@ class FinancialAssistantService(MentorService):
             else request.workflow_id
         )
         normalized_request = request.model_copy(update={"target_symbol": normalized_target_symbol})
+        evidence_bundle = self._build_assistant_evidence_bundle(normalized_request)
         fallback = self._build_assistant_fallback(workflow=workflow, request=normalized_request)
         response = {
             "assistant_name": "金融助手",
@@ -5554,6 +5586,7 @@ class FinancialAssistantService(MentorService):
             "current_module": request.current_module,
             "workflow_steps": self._workflow_steps_for(workflow["workflow_id"]),
             "desk_lineup": self.list_desks(),
+            "evidence_bundle": evidence_bundle,
             **fallback,
             "answer_source": "fallback",
             "answer_mode_label": "平台研究模板",
@@ -5701,13 +5734,15 @@ class FinancialAssistantService(MentorService):
 
         system_prompt = (
             "你是一名机构级金融研究助手，模拟宏观、基本面、技术、情绪、多头、空头、风控与组合经理的协作。"
+            "请只基于用户问题、平台给出的证据包和明确可见的市场制度边界输出，不要编造新闻、财务或价格事实。"
+            "如果证据不足，就明确说证据不足，不要假装实时掌握外部信息。"
             "请用中文输出结构化研究结果，不要写成泛泛聊天。"
             "输出必须是 JSON，对象字段固定为：executive_summary、desk_briefs、debate、risk_checklist、deliverables、next_actions、related_modules。"
             "desk_briefs 是 3 到 4 个对象数组，每个对象含 desk、title、summary。"
             "debate 是 2 个对象数组，每个对象含 side、view。"
             "risk_checklist、deliverables、next_actions 都是中文字符串数组。"
             "related_modules 是对象数组，每个对象含 label、path、reason，路径仅限 /strategy /backtests /rules /indicators /replay /mentor /workspace。"
-            "请优先给简洁、可执行、少废话的结果。"
+            "请优先给简洁、可执行、少废话但有依据的结果。"
         )
         prompt_payload = {
             "workflow": workflow,
@@ -5717,6 +5752,7 @@ class FinancialAssistantService(MentorService):
             "research_depth": request.research_depth,
             "current_module": request.current_module,
             "conversation_history": request.conversation_history,
+            "evidence_bundle": fallback.get("evidence_bundle"),
             "fallback": {
                 "executive_summary": fallback["executive_summary"],
                 "deliverables": fallback["deliverables"],
@@ -5726,8 +5762,8 @@ class FinancialAssistantService(MentorService):
         request_payload = {
             "model": runtime["model"],
             "temperature": 0.35,
-            "stream": False,
-            "max_tokens": 1200,
+            "stream": True,
+            "max_tokens": 1600,
             "response_format": {"type": "json_object"},
             "messages": [
                 {"role": "system", "content": system_prompt},
@@ -5735,21 +5771,30 @@ class FinancialAssistantService(MentorService):
             ],
         }
         content = ""
-        for attempt in range(1):
+        for attempt in range(3):
             try:
-                with httpx.Client(timeout=httpx.Timeout(8.0, connect=4.0, read=8.0, write=8.0)) as client:
-                    response = client.post(
+                with httpx.Client(timeout=45) as client:
+                    with client.stream(
+                        "POST",
                         endpoint,
                         headers={
                             "Authorization": f"Bearer {runtime['api_key']}",
                             "Content-Type": "application/json",
                         },
                         json=request_payload,
-                    )
-                    response.raise_for_status()
-                    content = self._extract_completion_content(response)
+                    ) as response:
+                        response.raise_for_status()
+                        content = self._extract_stream_content(response)
                 break
             except httpx.HTTPStatusError as exc:
+                if exc.response.status_code in {429, 500, 502, 503, 504} and attempt < 2:
+                    sleep(1.2 * (attempt + 1))
+                    continue
+                raise
+            except (httpx.ReadTimeout, httpx.ConnectTimeout, httpx.WriteTimeout):
+                if attempt < 2:
+                    sleep(1.2 * (attempt + 1))
+                    continue
                 raise
 
         parsed = self._extract_json_object(content)
@@ -5764,6 +5809,82 @@ class FinancialAssistantService(MentorService):
             "llm_profile": runtime["profile_id"],
             "llm_profile_label": runtime["label"],
         }
+
+    def _build_assistant_evidence_bundle(
+        self,
+        request: AssistantResearchRequest,
+    ) -> dict[str, Any]:
+        market_scope = _normalize_market_alias(request.market_scope)
+        target_symbol = request.target_symbol or ""
+        bundle = {
+            "status": "unavailable",
+            "target_symbol": target_symbol,
+            "market_scope": market_scope,
+            "price_snapshot": None,
+            "valuation_snapshot": None,
+            "financial_quality_snapshot": None,
+            "warnings": [],
+        }
+        if not target_symbol or market_scope != "cn_equity" or self._market_data_service is None:
+            bundle["warnings"].append("当前没有可用的内部实时证据包，研究结果应更保守。")
+            return bundle
+        try:
+            end_date = utcnow().date()
+            start_date = end_date - timedelta(days=120)
+            bars, metadata = self._market_data_service.load_daily_bars(
+                ts_code=target_symbol,
+                start_date=start_date,
+                end_date=end_date,
+                asset_type="stock",
+                adjustment_mode="qfq",
+            )
+            if bars:
+                last_bar = bars[-1]
+                close = float(last_bar.close)
+                prev_close = float(bars[-2].close) if len(bars) >= 2 else close
+                close_20 = float(bars[-21].close) if len(bars) >= 21 else float(bars[0].close)
+                close_60 = float(bars[-61].close) if len(bars) >= 61 else float(bars[0].close)
+                bundle["price_snapshot"] = {
+                    "trade_date": last_bar.trade_date,
+                    "close": close,
+                    "day_change_pct": round(((close / prev_close) - 1) * 100, 2) if prev_close else 0.0,
+                    "return_20d_pct": round(((close / close_20) - 1) * 100, 2) if close_20 else 0.0,
+                    "return_60d_pct": round(((close / close_60) - 1) * 100, 2) if close_60 else 0.0,
+                    "provider": metadata.get("provider"),
+                    "bar_count": len(bars),
+                }
+                snapshot, basic_meta = self._market_data_service.load_daily_basic_snapshot(
+                    ts_code=target_symbol,
+                    trade_date=last_bar.trade_date,
+                )
+                if snapshot is not None:
+                    bundle["valuation_snapshot"] = {
+                        "trade_date": last_bar.trade_date.isoformat() if hasattr(last_bar.trade_date, "isoformat") else str(last_bar.trade_date),
+                        "pe_ttm": getattr(snapshot, "pe_ttm", None),
+                        "pb": getattr(snapshot, "pb", None),
+                        "total_mv": getattr(snapshot, "total_mv", None),
+                        "circ_mv": getattr(snapshot, "circ_mv", None),
+                        "provider": basic_meta.get("provider"),
+                    }
+                quality, quality_meta = self._market_data_service.load_financial_quality_snapshot(
+                    ts_code=target_symbol,
+                    trade_date=last_bar.trade_date,
+                )
+                if quality is not None:
+                    bundle["financial_quality_snapshot"] = {
+                        "trade_date": last_bar.trade_date.isoformat() if hasattr(last_bar.trade_date, "isoformat") else str(last_bar.trade_date),
+                        "roe": getattr(quality, "roe", None),
+                        "roa": getattr(quality, "roa", None),
+                        "grossprofit_margin": getattr(quality, "grossprofit_margin", None),
+                        "op_yoy": getattr(quality, "op_yoy", None),
+                        "provider": quality_meta.get("provider"),
+                    }
+                bundle["status"] = "ready"
+            else:
+                bundle["warnings"].append("内部行情链路未返回目标标的的近端日线数据。")
+        except Exception as exc:
+            bundle["warnings"].append(f"内部证据包加载失败：{exc}")
+        return bundle
 
     def _normalize_assistant_desks(self, value: Any) -> list[dict[str, str]]:
         if not isinstance(value, list):

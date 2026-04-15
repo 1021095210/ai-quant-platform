@@ -227,6 +227,11 @@ async function loadTaskCenter() {
 }
 
 function renderResearch(payload) {
+  const evidence = payload.evidence_bundle || {};
+  const priceSnapshot = evidence.price_snapshot || null;
+  const valuationSnapshot = evidence.valuation_snapshot || null;
+  const qualitySnapshot = evidence.financial_quality_snapshot || null;
+  const evidenceWarnings = Array.isArray(evidence.warnings) ? evidence.warnings : [];
   nodes.summary.innerHTML = `
     <div class="list-item mentor-answer-card">
       <strong>${payload.workflow_title}</strong>
@@ -248,6 +253,28 @@ function renderResearch(payload) {
           )
           .join("")}
       </div>
+    </div>
+    <div class="list-item mentor-answer-card">
+      <strong>平台证据包</strong>
+      <div class="muted-note">状态：${evidence.status || "unavailable"}${payload.target_symbol ? ` · 标的 ${payload.target_symbol}` : ""}</div>
+      <div class="assistant-desk-results">
+        <div class="assistant-desk-result">
+          <span>价格快照</span>
+          <strong>${priceSnapshot ? `${priceSnapshot.trade_date} 收盘 ${priceSnapshot.close}` : "暂无"}</strong>
+          <div class="muted-note">${priceSnapshot ? `日涨跌 ${priceSnapshot.day_change_pct}% · 20日 ${priceSnapshot.return_20d_pct}% · 60日 ${priceSnapshot.return_60d_pct}% · 来源 ${priceSnapshot.provider || "-"}` : "当前没有可用的内部行情证据。"} </div>
+        </div>
+        <div class="assistant-desk-result">
+          <span>估值快照</span>
+          <strong>${valuationSnapshot ? `PE(TTM) ${valuationSnapshot.pe_ttm ?? "-"} · PB ${valuationSnapshot.pb ?? "-"}` : "暂无"}</strong>
+          <div class="muted-note">${valuationSnapshot ? `总市值 ${valuationSnapshot.total_mv ?? "-"} · 流通市值 ${valuationSnapshot.circ_mv ?? "-"} · 来源 ${valuationSnapshot.provider || "-"}` : "当前没有可用的估值快照。"} </div>
+        </div>
+        <div class="assistant-desk-result">
+          <span>财务质量</span>
+          <strong>${qualitySnapshot ? `ROE ${qualitySnapshot.roe ?? "-"} · 毛利率 ${qualitySnapshot.grossprofit_margin ?? "-"}` : "暂无"}</strong>
+          <div class="muted-note">${qualitySnapshot ? `ROA ${qualitySnapshot.roa ?? "-"} · 营业利润同比 ${qualitySnapshot.op_yoy ?? "-"} · 来源 ${qualitySnapshot.provider || "-"}` : "当前没有可用的财务质量快照。"} </div>
+        </div>
+      </div>
+      ${evidenceWarnings.length ? `<div class="muted-note" style="margin-top:10px;">${evidenceWarnings.map((item) => `- ${item}`).join("<br>")}</div>` : ""}
     </div>
   `;
 

@@ -1768,6 +1768,68 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertEqual(200, response.status_code)
         self.assertEqual("688655.SH", response.json()["data"]["target_symbol"])
 
+    def test_assistant_adds_internal_evidence_bundle_when_market_data_available(self) -> None:
+        class StubBar:
+            def __init__(self, **kwargs):
+                self.__dict__.update(kwargs)
+
+        class StubSnapshot:
+            def __init__(self, **kwargs):
+                self.__dict__.update(kwargs)
+
+        class StubMarketDataService:
+            def load_daily_bars(self, **kwargs):
+                return (
+                    [
+                        StubBar(
+                            ts_code="600619.SH",
+                            trade_date=datetime(2026, 4, 10).date(),
+                            open=10.0,
+                            high=10.5,
+                            low=9.8,
+                            close=10.2,
+                            volume=1000,
+                            amount=10000,
+                            data_source="stub",
+                        ),
+                        StubBar(
+                            ts_code="600619.SH",
+                            trade_date=datetime(2026, 4, 11).date(),
+                            open=10.2,
+                            high=10.6,
+                            low=10.0,
+                            close=10.4,
+                            volume=1200,
+                            amount=11000,
+                            data_source="stub",
+                        ),
+                    ],
+                    {"provider": "stub_feed"},
+                )
+
+            def load_daily_basic_snapshot(self, **kwargs):
+                return StubSnapshot(pe_ttm=18.5, pb=2.1, total_mv=1000000000, circ_mv=600000000), {"provider": "stub_feed"}
+
+            def load_financial_quality_snapshot(self, **kwargs):
+                return StubSnapshot(roe=12.3, roa=4.2, grossprofit_margin=27.8, op_yoy=15.6), {"provider": "stub_feed"}
+
+        service = FinancialAssistantService(Settings(), market_data_service=StubMarketDataService())
+        data = service.analyze(
+            AssistantResearchRequest(
+                query="请深度研究600619.SH这个个股。",
+                workflow_id="company_deep_dive",
+                target_symbol="600619.SH",
+                market_scope="cn_equity",
+                research_depth="standard",
+                current_module="assistant",
+            )
+        )
+
+        self.assertEqual("ready", data["evidence_bundle"]["status"])
+        self.assertEqual("stub_feed", data["evidence_bundle"]["price_snapshot"]["provider"])
+        self.assertEqual(18.5, data["evidence_bundle"]["valuation_snapshot"]["pe_ttm"])
+        self.assertEqual(12.3, data["evidence_bundle"]["financial_quality_snapshot"]["roe"])
+
     @patch("quant_platform_api.services.httpx.Client")
     def test_mentor_can_use_llm_answer_when_configured(self, client_mock) -> None:
         stream_response = Mock()
@@ -4927,6 +4989,25 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertIn("workflow_title", first)
         self.assertIn("summary", first)
         self.assertEqual("600619.SH", first["target_symbol"])
+
+    def test_manual_text_parse_accepts_cn_market_alias(self) -> None:
+        client = self._build_client()
+        self._login(client)
+
+        response = client.post(
+            "/api/v1/trades/uploads/manual/parse-text",
+            json={
+                "text": "2025-08-01 (Friday)\n（2只）：603579.SH, 002675.SZ\n\n买入方式：当日开盘价买入\n卖出方式：价格低于买入后任何一天的开盘价-0.5倍atr时卖出",
+                "market": "A股",
+                "adjustment_mode": "qfq",
+                "llm_profile": "module_default",
+            },
+        )
+
+        self.assertEqual(200, response.status_code)
+        data = response.json()["data"]
+        self.assertEqual("cn_equity", data["market"])
+        self.assertEqual(2, data["record_count"])
 
     def test_mentor_task_completes_and_returns_answer(self) -> None:
         client = self._build_client(
