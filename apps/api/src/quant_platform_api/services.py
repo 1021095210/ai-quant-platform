@@ -5488,14 +5488,14 @@ class TradeUploadService:
                 "multiplier": float(atr_match.group(1)),
             }
         atr_daily_open_match = re.search(
-            r"(?:现价|最低价|价格)(?:低于|跌破)(买入后任何一(?:天|日)|第二日或之后任何一(?:天|日))(?:的)?开盘价-([0-9]+(?:\.[0-9]+)?)倍atr(?:的值)?(?:则)?(?:时卖出|卖出)?",
+            r"(?:现价|最低价|价格)(?:低于|跌破)(买入后任何一(?:天|日)|第二日或之后任何一(?:天|日)|之后任何一(?:天|日))(?:的)?开盘价-([0-9]+(?:\.[0-9]+)?)倍atr(?:的值)?(?:则)?(?:时卖出|卖出)?",
             text,
             flags=re.I,
         )
         if atr_daily_open_match is not None:
             rule_window = atr_daily_open_match.group(1)
             multiplier = float(atr_daily_open_match.group(2))
-            starts_from_second_day = "第二日" in rule_window
+            starts_from_second_day = "第二日" in rule_window or rule_window.startswith("之后")
             return {
                 "type": "atr_daily_open_break",
                 "label": (

@@ -5184,6 +5184,28 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertIn("第二日或之后任一天开盘价", data["exit_rule"])
         self.assertIn("第二日或之后任一天开盘价减 ATR 阈值", data["records"][0]["notes"])
 
+    def test_manual_text_parse_endpoint_supports_later_day_open_atr_exit_rule(self) -> None:
+        client = self._build_client()
+        self._login(client)
+
+        response = client.post(
+            "/api/v1/trades/uploads/manual/parse-text",
+            json={
+                "text": (
+                    "2025-07-25 买入：603590.SH；"
+                    "买入方式：当日开盘价买入；"
+                    "卖出方式：现价低于之后任何一日开盘价-0.5倍atr时卖出"
+                ),
+                "market": "cn_equity",
+                "adjustment_mode": "qfq",
+            },
+        )
+
+        self.assertEqual(200, response.status_code)
+        data = response.json()["data"]
+        self.assertIn("第二日或之后任一天开盘价", data["exit_rule"])
+        self.assertIn("第二日或之后任一天开盘价减 ATR 阈值", data["records"][0]["notes"])
+
     def test_manual_text_parse_endpoint_supports_grouped_global_rules_without_summary_prefix(self) -> None:
         client = self._build_client()
         self._login(client)
