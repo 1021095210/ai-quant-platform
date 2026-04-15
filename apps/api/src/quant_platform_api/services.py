@@ -4045,6 +4045,101 @@ class TradeUploadService:
         )
         records: list[TradeRecordItem] = []
         group_summaries: list[dict[str, Any]] = []
+        chunked_groups = self._chunk_grouped_trade_candidates(grouped_candidates)
+        chunk_summaries: list[dict[str, Any]] = []
+        for chunk_index, candidate_chunk in enumerate(chunked_groups, start=1):
+            chunk_symbols = sum(len(item["symbols"]) for item in candidate_chunk)
+            chunk_records, chunk_group_summaries = self._build_grouped_text_trade_records_chunk(
+                grouped_candidates=candidate_chunk,
+                market=market,
+                adjustment_mode=adjustment_mode,
+                llm_parse=llm_parse,
+                global_entry_rule=global_entry_rule,
+                global_exit_rule=global_exit_rule,
+                records_so_far=len(records),
+                bar_cache=bar_cache,
+                cache_start_date=cache_start_date,
+                cache_end_date=cache_end_date,
+                sync_market_data=not batch_placeholder_mode,
+                allow_unpriced_placeholder=batch_placeholder_mode,
+            )
+            records.extend(chunk_records)
+            group_summaries.extend(chunk_group_summaries)
+            chunk_summaries.append(
+                {
+                    "chunk_index": chunk_index,
+                    "group_count": len(candidate_chunk),
+                    "record_count": len(chunk_records),
+                    "symbol_count": chunk_symbols,
+                    "trade_dates": [item["trade_date"].isoformat() for item in candidate_chunk],
+                }
+            )
+
+        if not records:
+            raise TaskExecutionError("INVALID_ARGUMENT", "未识别到可生成成交记录的日期和标的代码。")
+
+        trade_dates = [item["trade_date"].isoformat() for item in grouped_candidates]
+        chunk_summary = {
+            "chunk_count": len(chunk_summaries),
+            "chunks": chunk_summaries,
+            "chunked": len(chunk_summaries) > 1,
+            "summary": (
+                f"本次解析按 {len(chunk_summaries)} 个分块执行，"
+                f"共覆盖 {len(grouped_candidates)} 个日期块、{len(records)} 笔记录。"
+            ),
+        }
+        summary_text = (
+            f"已识别 {len(grouped_candidates)} 个交易日期、{len(records)} 笔交易，"
+            + (
+                f"后台按 {len(chunk_summaries)} 个分块依次解析。"
+                if len(chunk_summaries) > 1
+                else "识别结果已按日期块分别整理。"
+            )
+        )
+        return {
+            "market": market,
+            "trade_date": trade_dates[0],
+            "trade_dates": trade_dates,
+            "group_count": len(grouped_candidates),
+            "entry_rule": global_entry_rule["label"] if global_entry_rule else "按各日期块独立识别",
+            "exit_rule": global_exit_rule["label"] if global_exit_rule else "按各日期块独立识别",
+            "record_count": len(records),
+            "parse_mode": "hybrid_llm" if llm_parse else "deterministic",
+            "ai_review": self._build_ai_review_summary(llm_parse),
+            "group_summaries": group_summaries,
+            "chunk_summary": chunk_summary,
+            "input_truth_summary": _build_trade_input_truth_summary(
+                records,
+                source_context="text_parse",
+            ),
+            "validation_summary": _build_trade_parse_validation_summary(
+                records,
+                grouped_candidates=grouped_candidates,
+                source_context="text_parse",
+                chunk_summary=chunk_summary,
+            ),
+            "records": [item.model_dump(mode="json") for item in records],
+            "summary": summary_text,
+        }
+
+    def _build_grouped_text_trade_records_chunk(
+        self,
+        *,
+        grouped_candidates: list[dict[str, Any]],
+        market: str,
+        adjustment_mode: str,
+        llm_parse: dict[str, Any] | None,
+        global_entry_rule: dict[str, Any] | None,
+        global_exit_rule: dict[str, Any] | None,
+        records_so_far: int,
+        bar_cache: dict[tuple[str, str, date, date], tuple[list[Any], dict[str, Any]]] | None,
+        cache_start_date: date | None,
+        cache_end_date: date | None,
+        sync_market_data: bool,
+        allow_unpriced_placeholder: bool,
+    ) -> tuple[list[TradeRecordItem], list[dict[str, Any]]]:
+        records: list[TradeRecordItem] = []
+        group_summaries: list[dict[str, Any]] = []
         for group in grouped_candidates:
             trade_date = group["trade_date"]
             symbols = group["symbols"]
@@ -4075,13 +4170,13 @@ class TradeUploadService:
                     entry_rule=block_entry_rule,
                     exit_rule=block_exit_rule,
                     explicit_exit_date=explicit_exit_date,
-                    index=len(records) + 1,
+                    index=records_so_far + len(records) + 1,
                     llm_used=bool(llm_parse),
                     bar_cache=bar_cache,
                     cache_start_date=cache_start_date,
                     cache_end_date=cache_end_date,
-                    sync_market_data=not batch_placeholder_mode,
-                    allow_unpriced_placeholder=batch_placeholder_mode,
+                    sync_market_data=sync_market_data,
+                    allow_unpriced_placeholder=allow_unpriced_placeholder,
                 )
                 records.append(record)
                 group_records.append(record)
@@ -4094,37 +4189,30 @@ class TradeUploadService:
                     "exit_rule": block_exit_rule["label"] if block_exit_rule else "未提供卖出规则",
                 }
             )
+        return records, group_summaries
 
-        if not records:
-            raise TaskExecutionError("INVALID_ARGUMENT", "未识别到可生成成交记录的日期和标的代码。")
-
-        trade_dates = [item["trade_date"].isoformat() for item in grouped_candidates]
-        return {
-            "market": market,
-            "trade_date": trade_dates[0],
-            "trade_dates": trade_dates,
-            "group_count": len(grouped_candidates),
-            "entry_rule": global_entry_rule["label"] if global_entry_rule else "按各日期块独立识别",
-            "exit_rule": global_exit_rule["label"] if global_exit_rule else "按各日期块独立识别",
-            "record_count": len(records),
-            "parse_mode": "hybrid_llm" if llm_parse else "deterministic",
-            "ai_review": self._build_ai_review_summary(llm_parse),
-            "group_summaries": group_summaries,
-            "input_truth_summary": _build_trade_input_truth_summary(
-                records,
-                source_context="text_parse",
-            ),
-            "validation_summary": _build_trade_parse_validation_summary(
-                records,
-                grouped_candidates=grouped_candidates,
-                source_context="text_parse",
-            ),
-            "records": [item.model_dump(mode="json") for item in records],
-            "summary": (
-                f"已识别 {len(grouped_candidates)} 个交易日期、{len(records)} 笔交易，"
-                "识别结果已按日期块分别整理。"
-            ),
-        }
+    def _chunk_grouped_trade_candidates(
+        self,
+        grouped_candidates: list[dict[str, Any]],
+    ) -> list[list[dict[str, Any]]]:
+        if len(grouped_candidates) <= 4:
+            return [grouped_candidates]
+        chunks: list[list[dict[str, Any]]] = []
+        current_chunk: list[dict[str, Any]] = []
+        current_symbol_count = 0
+        for item in grouped_candidates:
+            item_symbol_count = len(item.get("symbols") or [])
+            if current_chunk and (
+                len(current_chunk) >= 4 or current_symbol_count + item_symbol_count > 24
+            ):
+                chunks.append(current_chunk)
+                current_chunk = []
+                current_symbol_count = 0
+            current_chunk.append(item)
+            current_symbol_count += item_symbol_count
+        if current_chunk:
+            chunks.append(current_chunk)
+        return chunks
 
     def recognize_trade_screenshot(
         self,
@@ -7358,6 +7446,7 @@ def _build_trade_parse_validation_summary(
     *,
     grouped_candidates: list[dict[str, Any]] | None = None,
     source_context: str = "text_parse",
+    chunk_summary: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     grouped_candidates = grouped_candidates or []
     truth_summary = _build_trade_input_truth_summary(records, source_context=source_context)
@@ -7387,6 +7476,7 @@ def _build_trade_parse_validation_summary(
         "sample_mode": "grouped" if len(grouped_candidates) > 1 else "single",
         "requested_group_count": len(grouped_candidates) or 1,
         "parsed_group_count": len(grouped_candidates) or 1,
+        "chunk_count": int((chunk_summary or {}).get("chunk_count") or 1),
         "trade_dates": trade_dates,
         "record_count": len(records),
         "needs_confirmation_count": truth_summary["needs_confirmation_count"],
@@ -7398,6 +7488,11 @@ def _build_trade_parse_validation_summary(
         "summary": (
             f"样本验收摘要：{len(records)} 笔记录，覆盖 {len(trade_dates)} 个交易日，"
             f"需人工确认 {truth_summary['needs_confirmation_count']} 笔。"
+            + (
+                f" 后台按 {int((chunk_summary or {}).get('chunk_count') or 1)} 个分块完成解析。"
+                if int((chunk_summary or {}).get("chunk_count") or 1) > 1
+                else ""
+            )
         ),
     }
 

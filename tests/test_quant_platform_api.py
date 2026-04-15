@@ -5110,9 +5110,42 @@ class QuantPlatformApiTests(unittest.TestCase):
 
         self.assertEqual(11, result["group_count"])
         self.assertEqual(66, result["record_count"])
+        self.assertEqual(3, result["chunk_summary"]["chunk_count"])
         self.assertTrue(all(item["needs_confirmation"] for item in result["records"]))
         self.assertTrue(all(item["entry_price"] is None for item in result["records"]))
         self.assertTrue(any("market_data_unavailable" in item["conflict_flags"] for item in result["records"]))
+        self.assertEqual(3, result["validation_summary"]["chunk_count"])
+
+    def test_manual_text_parse_task_list_returns_recent_items(self) -> None:
+        client = self._build_client()
+        self._login(client)
+
+        created = client.post(
+            "/api/v1/trades/uploads/manual/parse-text-tasks",
+            json={
+                "text": (
+                    "2025-08-14\n"
+                    "（2 只）：603590.SH, 002225.SZ\n\n"
+                    "2025-08-22\n"
+                    "（2 只）：002382.SZ, 002566.SZ\n\n"
+                    "买入方式：当日开盘价买入\n"
+                    "卖出方式：价格低于买入后任何一天的开盘价-0.5倍atr时卖出"
+                ),
+                "market": "cn_equity",
+                "adjustment_mode": "qfq",
+            },
+        )
+
+        self.assertEqual(202, created.status_code)
+        listed = client.get("/api/v1/trades/uploads/manual/parse-text-tasks")
+        self.assertEqual(200, listed.status_code)
+        items = listed.json()["data"]["items"]
+        self.assertGreaterEqual(len(items), 1)
+        first = items[0]
+        self.assertIn("parse_task_id", first)
+        self.assertIn("status_url", first)
+        self.assertIn("chunk_count", first)
+        self.assertIn("validation_readiness", first)
 
     def test_screenshot_trade_upload_creates_structured_record(self) -> None:
         client = self._build_client()

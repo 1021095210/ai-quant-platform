@@ -1645,6 +1645,43 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             status_code=status.HTTP_202_ACCEPTED,
         )
 
+    @app.get(f"{app_settings.api_prefix}/trades/uploads/manual/parse-text-tasks")
+    def list_manual_trade_text_tasks(request: Request) -> JSONResponse:
+        current_user = _require_current_user(request, services.auth_service)
+        records = services.trade_text_parse_service.list(
+            kind="trade_text_parse",
+            user_id=current_user.user_id,
+            workspace_id=current_user.workspace_id,
+            limit=20,
+        )
+        items = []
+        for record in records:
+            payload = record.payload or {}
+            result = record.result or {}
+            validation_summary = result.get("validation_summary") or {}
+            chunk_summary = result.get("chunk_summary") or {}
+            items.append(
+                {
+                    "parse_task_id": record.id,
+                    "task_id": record.id,
+                    "status": record.status.value,
+                    "state": record.status.value,
+                    "market": result.get("market") or payload.get("market", ""),
+                    "record_count": result.get("record_count", 0),
+                    "group_count": result.get("group_count", 0),
+                    "chunk_count": chunk_summary.get("chunk_count")
+                    or validation_summary.get("chunk_count")
+                    or 1,
+                    "summary": result.get("summary", ""),
+                    "validation_readiness": validation_summary.get("validation_readiness", ""),
+                    "sample_mode": validation_summary.get("sample_mode", ""),
+                    "status_url": f"{app_settings.api_prefix}/trades/uploads/manual/parse-text-tasks/{record.id}",
+                    "created_at": record.created_at.isoformat(),
+                    "ended_at": record.finished_at.isoformat() if record.finished_at else None,
+                }
+            )
+        return _success_response(request, data={"items": items})
+
     @app.get(f"{app_settings.api_prefix}/trades/uploads/manual/parse-text-tasks/{{parse_task_id}}")
     def get_manual_trade_text_task(
         request: Request,
