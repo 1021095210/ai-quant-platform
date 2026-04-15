@@ -711,6 +711,39 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         return _success_response(request, data=_serialize_task(record, "generation_id"))
 
+    @app.get(f"{app_settings.api_prefix}/strategies/generations")
+    def list_strategy_generation_tasks(request: Request) -> JSONResponse:
+        current_user = _require_current_user(request, services.auth_service)
+        records = services.strategy_generation_service.list(
+            kind="strategy_generation",
+            user_id=current_user.user_id,
+            workspace_id=current_user.workspace_id,
+            limit=20,
+        )
+        items = []
+        for record in records:
+            payload = record.payload or {}
+            result = record.result or {}
+            decision = result.get("generation_decision") or {}
+            items.append(
+                {
+                    "generation_id": record.id,
+                    "task_id": record.id,
+                    "status": record.status.value,
+                    "state": record.status.value,
+                    "prompt": payload.get("prompt", ""),
+                    "market_scope": result.get("market_scope") or payload.get("market_scope", ""),
+                    "market": result.get("market") or payload.get("market", ""),
+                    "timeframe": result.get("timeframe") or payload.get("timeframe", ""),
+                    "decision_label": decision.get("label", ""),
+                    "decision_summary": decision.get("summary", ""),
+                    "status_url": f"{app_settings.api_prefix}/strategies/generations/{record.id}",
+                    "created_at": record.created_at.isoformat(),
+                    "ended_at": record.finished_at.isoformat() if record.finished_at else None,
+                }
+            )
+        return _success_response(request, data={"items": items})
+
     @app.get(f"{app_settings.api_prefix}/platform/capabilities")
     def get_platform_capabilities(request: Request) -> JSONResponse:
         return _success_response(
@@ -881,6 +914,36 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         )
         return _success_response(request, data=_serialize_task(record, "mentor_task_id"))
+
+    @app.get(f"{app_settings.api_prefix}/mentor/ask-tasks")
+    def list_mentor_tasks(request: Request) -> JSONResponse:
+        current_user = _require_current_user(request, services.auth_service)
+        records = services.mentor_answer_service.list(
+            kind="mentor_answer",
+            user_id=current_user.user_id,
+            workspace_id=current_user.workspace_id,
+            limit=20,
+        )
+        items = []
+        for record in records:
+            payload = record.payload or {}
+            result = record.result or {}
+            items.append(
+                {
+                    "mentor_task_id": record.id,
+                    "task_id": record.id,
+                    "status": record.status.value,
+                    "state": record.status.value,
+                    "question": payload.get("question", ""),
+                    "headline": result.get("headline", ""),
+                    "summary": result.get("answer", ""),
+                    "answer_source": result.get("answer_source", ""),
+                    "status_url": f"{app_settings.api_prefix}/mentor/ask-tasks/{record.id}",
+                    "created_at": record.created_at.isoformat(),
+                    "ended_at": record.finished_at.isoformat() if record.finished_at else None,
+                }
+            )
+        return _success_response(request, data={"items": items})
 
     @app.get(f"{app_settings.api_prefix}/assistant/workflows")
     def list_assistant_workflows(request: Request) -> JSONResponse:

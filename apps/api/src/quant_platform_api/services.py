@@ -5993,6 +5993,34 @@ class FinancialAssistantService(MentorService):
             related_modules.insert(0, {"label": "交易复盘", "path": "/replay", "reason": "如果已有真实交易，可继续复盘验证买卖节奏"})
         event_evidence = evidence_bundle.get("event_evidence") or {}
         retail_guidance = self._build_stock_analysis_guidance(evidence_bundle) if workflow_id == "stock_analysis" else None
+        if workflow_id == "stock_analysis" and retail_guidance:
+            desk_briefs = [
+                {
+                    "desk": "宏观与新闻台",
+                    "title": "外部驱动核对",
+                    "summary": retail_guidance["evidence_requirement"],
+                },
+                {
+                    "desk": "基本面研究员",
+                    "title": "证据缺口",
+                    "summary": f"当前先补 {retail_guidance['evidence_requirement']}，不要只凭价格波动判断是否值得持有或买入。",
+                },
+                {
+                    "desk": "技术与成交结构台",
+                    "title": "风险位与企稳条件",
+                    "summary": f"当前先盯 {retail_guidance['weakness_trigger']}；只有满足「{retail_guidance['stabilization_signal']}」才算止跌。",
+                },
+                {
+                    "desk": "风控与组合经理",
+                    "title": "执行边界",
+                    "summary": f"当前动作是「{retail_guidance['action_label']}」，关键价位看 {retail_guidance['key_price_zone']}，再确认条件是：{retail_guidance['confirmation_condition']}",
+                },
+            ]
+            risk_checklist = [
+                f"先核对弱势判定：{retail_guidance['weakness_trigger']}",
+                f"先核对企稳标准：{retail_guidance['stabilization_signal']}",
+                f"再核对证据缺口：{retail_guidance['evidence_requirement']}",
+            ]
         debate = self._assistant_link_event_evidence_to_debate(
             debate=debate,
             event_evidence=event_evidence,
@@ -6049,7 +6077,8 @@ class FinancialAssistantService(MentorService):
             "debate 是 2 个对象数组，每个对象含 side、view。"
             "risk_checklist、deliverables、next_actions 都是中文字符串数组。"
             "related_modules 是对象数组，每个对象含 label、path、reason，路径仅限 /strategy /backtests /rules /indicators /replay /mentor /workspace。"
-            "retail_guidance 是对象，字段固定为 action_label、summary、bullets、risk_level、observation_focus、confirmation_condition；只有个股研究工作流需要填充，其他工作流可返回 null。"
+            "retail_guidance 是对象，字段固定为 action_label、summary、bullets、risk_level、observation_focus、confirmation_condition、risk_trigger、observation_level、current_position_evidence、weakness_trigger、stabilization_signal、evidence_requirement、key_price_zone；只有个股研究工作流需要填充，其他工作流可返回 null。"
+            "retail_guidance 里的每个判断都要尽量给出具体价格位、百分比阈值或明确证据，不要写模糊词。"
             "请优先给简洁、可执行、少废话但有依据的结果。"
         )
         prompt_payload = {
@@ -6548,6 +6577,23 @@ class FinancialAssistantService(MentorService):
         return_20d = float(price_snapshot.get("return_20d_pct") or 0.0)
         day_change = float(price_snapshot.get("day_change_pct") or 0.0)
         close_price = float(price_snapshot.get("close") or 0.0)
+        risk_line = round(close_price * 0.97, 2) if close_price else 0.0
+        rebound_line = round(close_price * 1.02, 2) if close_price else 0.0
+        key_zone = f"{close_price:.2f} 一线" if close_price else "当前价格附近"
+        missing_labels = self._assistant_missing_evidence_labels(missing_sections)
+        current_position_evidence = self._build_stock_position_evidence(
+            return_20d=return_20d,
+            return_60d=float(price_snapshot.get("return_60d_pct") or 0.0),
+            day_change=day_change,
+            confidence_label=confidence_label,
+            missing_labels=missing_labels,
+            event_items=event_items,
+        )
+        evidence_requirement = self._build_stock_evidence_requirement(
+            missing_labels=missing_labels,
+            event_items=event_items,
+            confidence_label=confidence_label,
+        )
 
         action_label = "等待确认"
         summary = "当前更适合先等待证据进一步确认，再决定是否行动。"
@@ -6561,6 +6607,16 @@ class FinancialAssistantService(MentorService):
         confirmation_condition = "至少补齐一层关键证据后，再决定是否继续行动。"
         risk_trigger = "如果后续价格继续转弱且证据没有改善，应先控制风险。"
         observation_level = "优先看当前位置是否能继续稳住，而不是只看单日波动。"
+        weakness_trigger = (
+            f"若后续任一交易日收盘继续跌破 {risk_line:.2f}（较当前价再弱约 3%），可视为继续走弱。"
+            if close_price
+            else "若后续收盘继续创新低，可视为继续走弱。"
+        )
+        stabilization_signal = (
+            f"至少连续 2 个交易日收盘不再创新低，并重新站回 {rebound_line:.2f} 上方，再算初步止跌。"
+            if close_price
+            else "至少连续 2 个交易日不再创新低，再算初步止跌。"
+        )
 
         if not price_snapshot:
             return {
@@ -6572,6 +6628,11 @@ class FinancialAssistantService(MentorService):
                 "confirmation_condition": confirmation_condition,
                 "risk_trigger": risk_trigger,
                 "observation_level": observation_level,
+                "current_position_evidence": current_position_evidence,
+                "weakness_trigger": weakness_trigger,
+                "stabilization_signal": stabilization_signal,
+                "evidence_requirement": evidence_requirement,
+                "key_price_zone": key_zone,
             }
         if confidence_label == "中高" and return_20d > 0 and day_change > -3:
             action_label = "继续观察"
@@ -6583,9 +6644,27 @@ class FinancialAssistantService(MentorService):
             ]
             risk_level = "中等"
             observation_focus = "重点观察价格承接、近端事件兑现和基本面证据是否继续站得住。"
-            confirmation_condition = "若价格位置仍稳、事件继续兑现、且证据覆盖维持中高，再考虑进一步行动。"
+            confirmation_condition = (
+                f"若收盘价继续站稳 {close_price:.2f} 上方，且重新逼近 {rebound_line:.2f}，同时事件与财务证据没有转弱，再考虑进一步行动。"
+                if close_price
+                else "若价格位置继续稳定且证据没有转弱，再考虑进一步行动。"
+            )
             observation_level = f"优先观察收盘价能否继续站稳在 {close_price:.2f} 附近并延续近端强势。"
-            risk_trigger = "若后续连续转弱、事件兑现落空或证据覆盖下降，应把观察切回防守。"
+            risk_trigger = (
+                f"若后续收盘连续转弱并跌破 {risk_line:.2f}，或事件兑现落空、证据覆盖下降，应把观察切回防守。"
+                if close_price
+                else "若后续收盘连续转弱或事件兑现落空，应把观察切回防守。"
+            )
+            weakness_trigger = (
+                f"若收盘价回落到 {risk_line:.2f} 下方，且 20 日涨幅重新转负，可视为观察失败。"
+                if close_price
+                else "若收盘转弱且短期趋势转负，可视为观察失败。"
+            )
+            stabilization_signal = (
+                f"若连续 2 个交易日收盘站稳 {close_price:.2f} 上方，并向 {rebound_line:.2f} 发起突破，可视为继续走稳。"
+                if close_price
+                else "若连续 2 天站稳最近价格区间，可视为继续走稳。"
+            )
         if confidence_label in {"很低", "偏低"} or return_20d < -8 or ("event_news" in missing_sections and "financial_quality" in missing_sections):
             action_label = "控制风险"
             summary = "当前位置证据不足或价格承压，更适合先控制风险，再决定是否继续观察。"
@@ -6596,9 +6675,27 @@ class FinancialAssistantService(MentorService):
             ]
             risk_level = "较高"
             observation_focus = "先看风险位是否失守、趋势是否继续走弱，以及有没有新的高质量证据补上。"
-            confirmation_condition = "只有在风险位企稳、趋势止跌且关键证据补齐后，才考虑从控制风险切回观察。"
-            observation_level = f"先观察价格能否在 {close_price:.2f} 一线附近止跌，而不是急着判断已经反转。"
-            risk_trigger = "如果价格继续走弱且没有新的高质量事件或财务证据，应继续控制风险。"
+            confirmation_condition = (
+                f"只有在收盘价不再跌破 {risk_line:.2f}、重新站回 {close_price:.2f} 附近，且补到财务或事件证据后，才考虑从控制风险切回观察。"
+                if close_price
+                else "只有在价格不再创新低且补到关键证据后，才考虑从控制风险切回观察。"
+            )
+            observation_level = f"先观察价格能否在 {key_zone} 附近止跌，而不是急着判断已经反转。"
+            risk_trigger = (
+                f"如果后续收盘继续跌破 {risk_line:.2f}，且没有新的高质量事件或财务证据，应继续控制风险。"
+                if close_price
+                else "如果后续收盘继续创新低且没有新的高质量证据，应继续控制风险。"
+            )
+            weakness_trigger = (
+                f"后续任一交易日收盘跌破 {risk_line:.2f}，或 20 日涨幅继续低于 -8%，都算继续走弱。"
+                if close_price
+                else "后续任一交易日收盘创新低，都算继续走弱。"
+            )
+            stabilization_signal = (
+                f"至少连续 2 个交易日不再跌破 {risk_line:.2f}，并重新站回 {close_price:.2f} 上方，才算初步企稳。"
+                if close_price
+                else "至少连续 2 个交易日不再创新低，才算初步企稳。"
+            )
         if event_items and action_label != "控制风险":
             latest = event_items[0]
             bullets[0] = f"先跟踪近端线索「{latest.get('title')}」是否得到正式公告或后续数据确认。"
@@ -6613,7 +6710,69 @@ class FinancialAssistantService(MentorService):
             "confirmation_condition": confirmation_condition,
             "risk_trigger": risk_trigger,
             "observation_level": observation_level,
+            "current_position_evidence": current_position_evidence,
+            "weakness_trigger": weakness_trigger,
+            "stabilization_signal": stabilization_signal,
+            "evidence_requirement": evidence_requirement,
+            "key_price_zone": key_zone,
         }
+
+    def _assistant_missing_evidence_labels(self, missing_sections: list[str]) -> list[str]:
+        mapping = {
+            "price": "价格趋势证据",
+            "valuation": "估值证据",
+            "financial_quality": "财务质量证据",
+            "event_news": "近端事件/公告证据",
+        }
+        return [mapping.get(item, item) for item in missing_sections if mapping.get(item, item)]
+
+    def _build_stock_position_evidence(
+        self,
+        *,
+        return_20d: float,
+        return_60d: float,
+        day_change: float,
+        confidence_label: str,
+        missing_labels: list[str],
+        event_items: list[dict[str, Any]],
+    ) -> list[str]:
+        evidence: list[str] = []
+        if return_20d:
+            direction = "偏强" if return_20d > 0 else "偏弱"
+            evidence.append(f"近 20 日涨跌幅 {return_20d:.2f}% ，短线位置{direction}。")
+        if return_60d:
+            direction = "偏强" if return_60d > 0 else "偏弱"
+            evidence.append(f"近 60 日涨跌幅 {return_60d:.2f}% ，中期趋势{direction}。")
+        if day_change:
+            direction = "承压" if day_change < 0 else "转强"
+            evidence.append(f"最新单日涨跌幅 {day_change:.2f}% ，当天价格表现{direction}。")
+        evidence.append(f"当前研究置信度 {confidence_label}。")
+        if missing_labels:
+            evidence.append(f"当前还缺 {('、'.join(missing_labels))}，结论需保守。")
+        if event_items:
+            latest = event_items[0]
+            evidence.append(f"近端事件线索为「{latest.get('title')}」；只有继续兑现才算真正加分。")
+        return evidence[:5]
+
+    def _build_stock_evidence_requirement(
+        self,
+        *,
+        missing_labels: list[str],
+        event_items: list[dict[str, Any]],
+        confidence_label: str,
+    ) -> str:
+        required_parts: list[str] = []
+        if "近端事件/公告证据" in missing_labels or not event_items:
+            required_parts.append("补到 30 天内白名单来源的公告或新闻线索")
+        if "财务质量证据" in missing_labels:
+            required_parts.append("补到 ROE、毛利率、利润同比等财务质量证据")
+        if "估值证据" in missing_labels:
+            required_parts.append("补到 PE、PB 或市值位置等估值证据")
+        if not required_parts and confidence_label in {"中高", "中等"}:
+            return "至少继续确认近端事件是否兑现、财务质量是否没有转弱，再决定是否行动。"
+        if not required_parts:
+            return "至少补到一层正式来源的事件或财务证据，再决定是否行动。"
+        return "；".join(required_parts) + "。"
 
     def _assistant_link_event_evidence_to_debate(
         self,
@@ -6724,6 +6883,15 @@ class FinancialAssistantService(MentorService):
         confirmation_condition = str(value.get("confirmation_condition", "")).strip()
         risk_trigger = str(value.get("risk_trigger", "")).strip()
         observation_level = str(value.get("observation_level", "")).strip()
+        weakness_trigger = str(value.get("weakness_trigger", "")).strip()
+        stabilization_signal = str(value.get("stabilization_signal", "")).strip()
+        evidence_requirement = str(value.get("evidence_requirement", "")).strip()
+        key_price_zone = str(value.get("key_price_zone", "")).strip()
+        current_position_evidence = [
+            str(item).strip()
+            for item in value.get("current_position_evidence", [])
+            if str(item).strip()
+        ][:5]
         if not action_label and not summary and not bullets:
             return None
         return {
@@ -6735,6 +6903,11 @@ class FinancialAssistantService(MentorService):
             "confirmation_condition": confirmation_condition or "等关键证据补齐后再决定下一步。",
             "risk_trigger": risk_trigger or "如果价格继续走弱且证据没有改善，应先控制风险。",
             "observation_level": observation_level or "优先看当前位置能否稳住，而不是只看单日波动。",
+            "weakness_trigger": weakness_trigger or "若后续收盘继续转弱，应把当前判断切回防守。",
+            "stabilization_signal": stabilization_signal or "至少连续两天不再转弱，才算初步止跌。",
+            "evidence_requirement": evidence_requirement or "至少补到一层正式来源的事件或财务证据，再决定是否行动。",
+            "key_price_zone": key_price_zone or "当前价格附近",
+            "current_position_evidence": current_position_evidence,
         }
 
     def _extract_responses_content(self, response: httpx.Response) -> str:

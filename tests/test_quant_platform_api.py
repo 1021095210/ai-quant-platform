@@ -1796,6 +1796,11 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertIn("confirmation_condition", data["retail_guidance"])
         self.assertIn("risk_trigger", data["retail_guidance"])
         self.assertIn("observation_level", data["retail_guidance"])
+        self.assertTrue(data["retail_guidance"]["current_position_evidence"])
+        self.assertIn("weakness_trigger", data["retail_guidance"])
+        self.assertIn("stabilization_signal", data["retail_guidance"])
+        self.assertIn("evidence_requirement", data["retail_guidance"])
+        self.assertIn("key_price_zone", data["retail_guidance"])
 
     def test_assistant_infers_stock_analysis_for_generic_single_stock_question(self) -> None:
         client = self._build_client()
@@ -1960,6 +1965,11 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertTrue(data["retail_guidance"]["confirmation_condition"])
         self.assertTrue(data["retail_guidance"]["risk_trigger"])
         self.assertTrue(data["retail_guidance"]["observation_level"])
+        self.assertTrue(data["retail_guidance"]["current_position_evidence"])
+        self.assertIn("收盘", data["retail_guidance"]["weakness_trigger"])
+        self.assertIn("连续 2 个交易日", data["retail_guidance"]["stabilization_signal"])
+        self.assertTrue(data["retail_guidance"]["evidence_requirement"])
+        self.assertTrue(data["retail_guidance"]["key_price_zone"])
         self.assertTrue(any(section["title"] == "个股位置与应对" for section in data["report_sections"]))
 
     @patch("quant_platform_api.services.httpx.Client")
@@ -5592,6 +5602,70 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertIn("summary", first)
         self.assertEqual("600619.SH", first["target_symbol"])
         self.assertIn("confidence_label", first)
+
+    def test_mentor_task_list_endpoint_lists_recent_results(self) -> None:
+        client = self._build_client(
+            llm_base_url="https://llm.example.test/v1",
+            llm_api_key="sk-test",
+            llm_model_mentor="gpt-5-mini",
+        )
+        self._login(client)
+
+        created = client.post(
+            "/api/v1/mentor/ask-tasks",
+            json={
+                "question": "请解释 MACD 和均线分别适合看什么？",
+                "topic_id": "indicator_basics",
+                "llm_profile": "module_default",
+                "conversation_history": [],
+            },
+        )
+
+        self.assertEqual(202, created.status_code)
+        listed = client.get("/api/v1/mentor/ask-tasks")
+
+        self.assertEqual(200, listed.status_code)
+        items = listed.json()["data"]["items"]
+        self.assertTrue(items)
+        first = items[0]
+        self.assertIn("mentor_task_id", first)
+        self.assertIn("status_url", first)
+        self.assertIn("question", first)
+        self.assertIn("headline", first)
+        self.assertIn("summary", first)
+
+    def test_strategy_generation_list_endpoint_lists_recent_results(self) -> None:
+        client = self._build_client(
+            llm_base_url="https://llm.example.test/v1",
+            llm_api_key="sk-test",
+            llm_model_strategy="gpt-5-mini",
+            llm_model_mentor="gpt-5-mini",
+        )
+        self._login(client)
+
+        created = client.post(
+            "/api/v1/strategies/generations",
+            json={
+                "prompt": "当 5 日均线上穿 20 日均线且成交量放大时做多",
+                "market": "600519.SH",
+                "timeframe": "1d",
+                "asset_type": "stock",
+                "preferences": {"side": "long"},
+            },
+        )
+
+        self.assertEqual(202, created.status_code)
+        listed = client.get("/api/v1/strategies/generations")
+
+        self.assertEqual(200, listed.status_code)
+        items = listed.json()["data"]["items"]
+        self.assertTrue(items)
+        first = items[0]
+        self.assertIn("generation_id", first)
+        self.assertIn("status_url", first)
+        self.assertIn("prompt", first)
+        self.assertIn("decision_label", first)
+        self.assertIn("decision_summary", first)
 
     def test_manual_text_parse_accepts_cn_market_alias(self) -> None:
         client = self._build_client()

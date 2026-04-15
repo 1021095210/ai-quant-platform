@@ -155,10 +155,10 @@ function formatTaskStatus(status) {
 function renderTaskCenter() {
   if (!state.taskCenterItems.length) {
     nodes.taskCenter.textContent = "还没有后台研究任务。";
-    nodes.taskCenter.className = "list empty-state";
+    nodes.taskCenter.className = "list empty-state bounded-scroll bounded-scroll-lg";
     return;
   }
-  nodes.taskCenter.className = "list";
+  nodes.taskCenter.className = "list bounded-scroll bounded-scroll-lg";
   nodes.taskCenter.innerHTML = state.taskCenterItems
     .map(
       (item) => `
@@ -189,6 +189,73 @@ function renderTaskCenter() {
       }
     });
   });
+}
+
+function renderRetailGuidance(retailGuidance) {
+  if (!retailGuidance) {
+    return "";
+  }
+  const evidenceItems = Array.isArray(retailGuidance.current_position_evidence)
+    ? retailGuidance.current_position_evidence.filter(Boolean)
+    : [];
+  return `
+    <div class="list-item mentor-answer-card">
+      <strong>普通用户研判</strong>
+      <div class="muted-note">当前更适合：${retailGuidance.action_label || "等待确认"}</div>
+      <div class="muted-note">${retailGuidance.summary || ""}</div>
+      <div class="assistant-desk-results" style="margin-top:12px;">
+        <div class="assistant-desk-result">
+          <span>当前动作</span>
+          <strong>${retailGuidance.action_label || "等待确认"}</strong>
+          <div class="muted-note">${retailGuidance.summary || "先等待更多证据确认。"}</div>
+        </div>
+        <div class="assistant-desk-result">
+          <span>风险等级</span>
+          <strong>${retailGuidance.risk_level || "中等"}</strong>
+          <div class="muted-note">${retailGuidance.risk_trigger || "如果价格继续走弱且证据没有改善，应先控制风险。"}</div>
+        </div>
+        <div class="assistant-desk-result">
+          <span>关键价格位</span>
+          <strong>${retailGuidance.key_price_zone || "当前价格附近"}</strong>
+          <div class="muted-note">${retailGuidance.observation_level || retailGuidance.observation_focus || "先继续观察关键价格变化。"}</div>
+        </div>
+        <div class="assistant-desk-result">
+          <span>再确认条件</span>
+          <strong>满足后再行动</strong>
+          <div class="muted-note">${retailGuidance.confirmation_condition || "等关键证据补齐后再决定下一步。"}</div>
+        </div>
+        <div class="assistant-desk-result">
+          <span>为什么这么判断</span>
+          <strong>当前位置证据</strong>
+          ${
+            evidenceItems.length
+              ? `<ul class="mentor-step-list">${evidenceItems.map((item) => `<li>${item}</li>`).join("")}</ul>`
+              : `<div class="muted-note">当前没有足够证据支持更激进的判断。</div>`
+          }
+        </div>
+        <div class="assistant-desk-result">
+          <span>继续走弱的判定</span>
+          <strong>触发后先防守</strong>
+          <div class="muted-note">${retailGuidance.weakness_trigger || "若后续收盘继续转弱，应把当前判断切回防守。"}</div>
+        </div>
+        <div class="assistant-desk-result">
+          <span>止跌/企稳标准</span>
+          <strong>满足后才算稳住</strong>
+          <div class="muted-note">${retailGuidance.stabilization_signal || "至少连续两天不再转弱，才算初步止跌。"}</div>
+        </div>
+        <div class="assistant-desk-result">
+          <span>还缺什么证据</span>
+          <strong>补齐后再提高判断强度</strong>
+          <div class="muted-note">${retailGuidance.evidence_requirement || "至少补到一层正式来源的事件或财务证据，再决定是否行动。"}</div>
+        </div>
+      </div>
+      ${
+        Array.isArray(retailGuidance.bullets) && retailGuidance.bullets.length
+          ? `<ul class="mentor-step-list">${retailGuidance.bullets.map((item) => `<li>${item}</li>`).join("")}</ul>`
+          : ""
+      }
+    </div>
+  `;
 }
 
 function appendConversation(role, title, content) {
@@ -244,41 +311,7 @@ function renderResearch(payload) {
       ${payload.evidence_gap_note ? `<div class="muted-note" style="margin-top:8px;">证据边界：${payload.evidence_gap_note}</div>` : ""}
     </div>
     ${
-      retailGuidance
-        ? `
-    <div class="list-item mentor-answer-card">
-      <strong>普通用户研判</strong>
-      <div class="muted-note">当前更适合：${retailGuidance.action_label || "等待确认"}</div>
-      <div class="muted-note">${retailGuidance.summary || ""}</div>
-      <div class="assistant-desk-results" style="margin-top:12px;">
-        <div class="assistant-desk-result">
-          <span>当前动作</span>
-          <strong>${retailGuidance.action_label || "等待确认"}</strong>
-          <div class="muted-note">${retailGuidance.summary || "先等待更多证据确认。"}</div>
-        </div>
-        <div class="assistant-desk-result">
-          <span>风险等级</span>
-          <strong>${retailGuidance.risk_level || "中等"}</strong>
-          <div class="muted-note">${retailGuidance.risk_trigger || "如果价格继续走弱且证据没有改善，应先控制风险。"}</div>
-        </div>
-        <div class="assistant-desk-result">
-          <span>观察位</span>
-          <strong>先盯关键变化</strong>
-          <div class="muted-note">${retailGuidance.observation_level || retailGuidance.observation_focus || "先继续观察价格、证据和事件是否能互相印证。"}</div>
-        </div>
-        <div class="assistant-desk-result">
-          <span>再确认条件</span>
-          <strong>满足后再行动</strong>
-          <div class="muted-note">${retailGuidance.confirmation_condition || "等关键证据补齐后再决定下一步。"}</div>
-        </div>
-      </div>
-      ${
-        Array.isArray(retailGuidance.bullets) && retailGuidance.bullets.length
-          ? `<ul class="mentor-step-list">${retailGuidance.bullets.map((item) => `<li>${item}</li>`).join("")}</ul>`
-          : ""
-      }
-    </div>`
-        : ""
+      retailGuidance ? renderRetailGuidance(retailGuidance) : ""
     }
     <div class="list-item mentor-answer-card">
       <strong>长报告</strong>

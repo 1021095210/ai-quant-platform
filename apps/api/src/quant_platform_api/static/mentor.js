@@ -14,6 +14,7 @@ activateNav("/mentor");
 
 const state = {
   history: [],
+  taskCenterItems: [],
 };
 
 const nodes = {
@@ -29,6 +30,8 @@ const nodes = {
   inlineStatus: document.querySelector("#mentor-inline-status"),
   followup: document.querySelector("#mentor-followup"),
   followupButton: document.querySelector("#mentor-followup-btn"),
+  taskCenter: document.querySelector("#mentor-task-center"),
+  refreshTasksButton: document.querySelector("#mentor-refresh-tasks-btn"),
 };
 
 const pendingMentorTasks = new Map();
@@ -156,6 +159,80 @@ function appendConversationTurn(role, content, title = "") {
   syncFollowupButtonState();
 }
 
+function formatTaskStatus(status) {
+  if (status === "succeeded") {
+    return "已完成";
+  }
+  if (status === "failed") {
+    return "失败";
+  }
+  if (status === "running") {
+    return "生成中";
+  }
+  if (status === "queued") {
+    return "排队中";
+  }
+  if (status === "canceled") {
+    return "已取消";
+  }
+  return status || "未知";
+}
+
+function hydrateMentorResult(payload) {
+  nodes.question.value = payload.question || "";
+  state.history = [
+    { role: "user", title: "历史提问", content: payload.question || "已加载历史导师任务" },
+    { role: "assistant", title: payload.headline || "导师回复", content: payload.answer || "" },
+  ];
+  renderConversation();
+  renderAnswer(payload);
+}
+
+function renderTaskCenter() {
+  if (!state.taskCenterItems.length) {
+    nodes.taskCenter.textContent = "还没有后台导师任务。";
+    nodes.taskCenter.className = "list empty-state bounded-scroll bounded-scroll-lg";
+    return;
+  }
+  nodes.taskCenter.className = "list bounded-scroll bounded-scroll-lg";
+  nodes.taskCenter.innerHTML = state.taskCenterItems
+    .map(
+      (item) => `
+        <div class="list-item compact-item">
+          <strong>导师任务 · ${formatTaskStatus(item.status)}</strong>
+          <div class="muted-note">${item.question || "未记录问题"}</div>
+          <div class="muted-note">${item.headline || "结果生成后会在这里显示标题。"}</div>
+          <div class="muted-note">${item.summary || "结果生成后会在这里显示摘要。"}</div>
+          <div class="actions" style="margin-top:10px;">
+            <button class="btn ghost mentor-open-task-btn" type="button" data-task-id="${item.mentor_task_id}" ${item.status === "succeeded" ? "" : "disabled"}>打开结果</button>
+          </div>
+        </div>
+      `,
+    )
+    .join("");
+  nodes.taskCenter.querySelectorAll(".mentor-open-task-btn").forEach((node) => {
+    node.addEventListener("click", async () => {
+      const taskId = node.dataset.taskId;
+      if (!taskId) {
+        return;
+      }
+      try {
+        const payload = await api(`/api/v1/mentor/ask-tasks/${taskId}`);
+        hydrateMentorResult(payload.data);
+        setStatus("已重新打开后台导师结果。");
+      } catch (error) {
+        setStatus(error.message);
+      }
+    });
+  });
+}
+
+async function loadTaskCenter() {
+  const payload = await api("/api/v1/mentor/ask-tasks");
+  state.taskCenterItems = payload.data.items || [];
+  renderTaskCenter();
+}
+
 async function loadTopics() {
   const [payload, llmProfiles] = await Promise.all([
     api("/api/v1/mentor/topics"),
@@ -198,6 +275,7 @@ async function askMentor(question, options = {}) {
     "running",
   );
   setStatus(isFollowUp ? "金融导师正在后台补充解释..." : "金融导师正在后台整理建议...");
+  loadTaskCenter().catch(() => {});
 }
 
 nodes.question.addEventListener("input", syncAskButtonState);
@@ -240,6 +318,7 @@ subscribeBackgroundTasks((task) => {
   if (task.status === "succeeded" && task.data) {
     appendConversationTurn("assistant", `${task.data.headline}\n${task.data.answer}`, "导师回复");
     renderAnswer(task.data);
+    loadTaskCenter().catch(() => {});
     if (!meta.isFollowUp) {
       nodes.followup.focus();
     }
@@ -259,4 +338,7 @@ renderConversation();
 syncAskButtonState();
 syncFollowupButtonState();
 clearInlineStatus(nodes.inlineStatus, "等待你输入问题。较长回答会转入后台生成。");
-loadTopics().catch((error) => setStatus(error.message));
+nodes.refreshTasksButton.addEventListener("click", () => {
+  loadTaskCenter().catch((error) => setStatus(error.message));
+});
+Promise.all([loadTopics(), loadTaskCenter()]).catch((error) => setStatus(error.message));

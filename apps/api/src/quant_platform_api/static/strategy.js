@@ -27,6 +27,7 @@ const state = {
   generationPipeline: [],
   fieldMapping: [],
   clarificationRound: null,
+  taskCenterItems: [],
 };
 
 const nodes = {
@@ -64,6 +65,8 @@ const nodes = {
   hardValidationView: document.querySelector("#strategy-hard-validation-view"),
   generationPipelineView: document.querySelector("#strategy-generation-pipeline-view"),
   fieldMappingView: document.querySelector("#strategy-field-mapping-view"),
+  taskCenter: document.querySelector("#strategy-task-center"),
+  refreshTasksButton: document.querySelector("#strategy-refresh-tasks-btn"),
 };
 
 let pendingGenerationTaskId = null;
@@ -565,6 +568,70 @@ function syncStrategyCapabilityState(summary = summarizeSelectedCapability()) {
   renderCapabilityMatrix();
 }
 
+function formatTaskStatus(status) {
+  if (status === "succeeded") {
+    return "已完成";
+  }
+  if (status === "failed") {
+    return "失败";
+  }
+  if (status === "running") {
+    return "生成中";
+  }
+  if (status === "queued") {
+    return "排队中";
+  }
+  if (status === "canceled") {
+    return "已取消";
+  }
+  return status || "未知";
+}
+
+function renderTaskCenter() {
+  if (!state.taskCenterItems.length) {
+    nodes.taskCenter.textContent = "还没有后台策略生成任务。";
+    nodes.taskCenter.className = "list empty-state bounded-scroll bounded-scroll-lg";
+    return;
+  }
+  nodes.taskCenter.className = "list bounded-scroll bounded-scroll-lg";
+  nodes.taskCenter.innerHTML = state.taskCenterItems
+    .map(
+      (item) => `
+        <div class="list-item compact-item">
+          <strong>策略生成 · ${formatTaskStatus(item.status)}</strong>
+          <div class="muted-note">${item.prompt || "未记录策略描述"}</div>
+          <div class="muted-note">${item.market || "-"} · ${item.timeframe || "-"} · ${item.market_scope || "-"}</div>
+          <div class="muted-note">${item.decision_label || "等待生成"}${item.decision_summary ? ` · ${item.decision_summary}` : ""}</div>
+          <div class="actions" style="margin-top:10px;">
+            <button class="btn ghost strategy-open-task-btn" type="button" data-task-id="${item.generation_id}" ${item.status === "succeeded" ? "" : "disabled"}>打开结果</button>
+          </div>
+        </div>
+      `,
+    )
+    .join("");
+  nodes.taskCenter.querySelectorAll(".strategy-open-task-btn").forEach((node) => {
+    node.addEventListener("click", async () => {
+      const taskId = node.dataset.taskId;
+      if (!taskId) {
+        return;
+      }
+      try {
+        const payload = await api(`/api/v1/strategies/generations/${taskId}`);
+        applyGeneratedStrategy(payload.data);
+        setStatus("已重新打开后台策略生成结果。");
+      } catch (error) {
+        setStatus(error.message);
+      }
+    });
+  });
+}
+
+async function loadTaskCenter() {
+  const payload = await api("/api/v1/strategies/generations");
+  state.taskCenterItems = payload.data.items || [];
+  renderTaskCenter();
+}
+
 async function generateStrategy() {
   const clarificationAnswers = Object.fromEntries(
     Object.entries(state.clarificationAnswers).filter(([, value]) => String(value || "").trim()),
@@ -596,6 +663,7 @@ async function generateStrategy() {
   });
   setInlineStatus(nodes.inlineStatus, "策略生成已转入后台。", "running");
   setStatus("正在后台生成 Python 策略...");
+  loadTaskCenter().catch(() => {});
 }
 
 function applyGeneratedStrategy(data) {
@@ -764,19 +832,25 @@ renderQuestions([]);
 renderUnsupportedItems([]);
 syncStrategyActionState();
 loadKnowledgePreview().catch((error) => setStatus(error.message));
+nodes.refreshTasksButton.addEventListener("click", () => {
+  loadTaskCenter().catch((error) => setStatus(error.message));
+});
 subscribeBackgroundTasks((task) => {
   if (task.module !== "strategy" || task.task_id !== pendingGenerationTaskId) {
     return;
   }
   if (task.status === "succeeded" && task.data) {
     applyGeneratedStrategy(task.data);
+    loadTaskCenter().catch(() => {});
     pendingGenerationTaskId = null;
     return;
   }
   if (["failed", "canceled"].includes(task.status)) {
     setInlineStatus(nodes.inlineStatus, task.data?.error?.message || task.error_message || "策略生成失败。", "error");
     setStatus(task.data?.error?.message || task.error_message || "策略生成失败。");
+    loadTaskCenter().catch(() => {});
     pendingGenerationTaskId = null;
   }
 });
 clearInlineStatus(nodes.inlineStatus, "等待你描述策略想法。生成任务会在后台完成，并在完成后提醒你。");
+loadTaskCenter().catch((error) => setStatus(error.message));
