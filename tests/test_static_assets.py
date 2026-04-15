@@ -288,6 +288,15 @@ class StaticAssetTests(unittest.TestCase):
         self.assertIn("linear-gradient(180deg, rgba(17, 30, 48, 0.96)", app_css)
 
     def test_replay_assets_include_validation_summary_rendering(self) -> None:
+        replay_html = (
+            WORKSPACE_ROOT
+            / "apps"
+            / "api"
+            / "src"
+            / "quant_platform_api"
+            / "static"
+            / "replay.html"
+        ).read_text(encoding="utf-8")
         replay_js = (
             WORKSPACE_ROOT
             / "apps"
@@ -298,8 +307,11 @@ class StaticAssetTests(unittest.TestCase):
             / "replay.js"
         ).read_text(encoding="utf-8")
 
+        self.assertIn('id="trade-parse-task-center"', replay_html)
         self.assertIn("validation_summary", replay_js)
         self.assertIn("buildManualParseValidationLines", replay_js)
+        self.assertIn("/api/v1/trades/uploads/manual/parse-text-tasks", replay_js)
+        self.assertIn("renderParseTaskCenter", replay_js)
         self.assertIn("验收摘要：", replay_js)
 
     def test_workspace_assets_include_focus_and_data_hub_sections(self) -> None:

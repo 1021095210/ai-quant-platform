@@ -23,6 +23,7 @@ const state = {
   selectedObjective: "sharpe_max",
   pendingParseTaskId: null,
   pendingReplayTaskId: null,
+  parseTaskCenterItems: [],
 };
 
 const SOURCE_MODE_META = {
@@ -84,6 +85,8 @@ const nodes = {
   manualSmartText: document.querySelector("#trade-manual-smart-text"),
   manualInlineStatus: document.querySelector("#trade-manual-inline-status"),
   manualParseSummary: document.querySelector("#trade-manual-parse-summary"),
+  parseTaskCenter: document.querySelector("#trade-parse-task-center"),
+  refreshParseTasksButton: document.querySelector("#trade-parse-refresh-tasks-btn"),
   manualList: document.querySelector("#manual-trade-list"),
   uploadId: document.querySelector("#current-upload-id"),
   recordsBody: document.querySelector("#replay-records-body"),
@@ -128,6 +131,7 @@ syncReplayActionState();
 fetchLlmProfiles()
   .then((payload) => populateLlmProfileSelect(nodes.manualLlmProfile, payload, "trade_text_parse"))
   .catch((error) => setStatus(error.message));
+loadParseTaskCenter().catch((error) => setStatus(error.message));
 clearInlineStatus(nodes.manualInlineStatus, "等待你粘贴长文字内容。大批量文本会转入后台解析，并在完成后提醒你。");
 clearInlineStatus(nodes.replayInlineStatus, "等待你运行复盘。复盘任务会在后台执行，完成后自动提醒你。");
 
@@ -335,6 +339,7 @@ async function parseManualText() {
     success_message: "长文字识别已完成。",
     failure_message: "长文字识别失败。",
   });
+  loadParseTaskCenter().catch(() => {});
   setInlineStatus(nodes.manualInlineStatus, "长文字识别已转入后台解析。", "running");
   setStatus("正在后台识别长文字中的股票代码、日期和买卖规则...");
 }
@@ -364,6 +369,7 @@ function renderManualParseSummary(result) {
   const aiReview = result.ai_review || {};
   const truthSummary = result.input_truth_summary || {};
   const validationSummary = result.validation_summary || {};
+  const chunkSummary = result.chunk_summary || {};
   const warningLines = (aiReview.warnings || []).map((item) => `- ${item}`);
   const validationLines = buildManualParseValidationLines(validationSummary);
   if (!groups.length) {
@@ -384,6 +390,7 @@ function renderManualParseSummary(result) {
     aiReview.mode_label ? `解析方式：${aiReview.mode_label}` : "",
     aiReview.profile_label ? `使用模型：${aiReview.profile_label}` : "",
     `共识别 ${result.group_count || groups.length} 个日期块，加入 ${result.record_count || 0} 笔记录。`,
+    chunkSummary.chunk_count > 1 ? `后台分块：共 ${chunkSummary.chunk_count} 块，便于长任务稳定完成。` : "",
     truthSummary.record_count ? `输入真值摘要：共 ${truthSummary.record_count} 笔，需人工确认 ${truthSummary.needs_confirmation_count || 0} 笔。` : "",
     ...validationLines,
     "",
@@ -414,6 +421,9 @@ function buildManualParseValidationLines(summary) {
       `日期块请求 / 识别：${summary.requested_group_count ?? "-"} / ${summary.parsed_group_count ?? "-"}`
     );
   }
+  if (summary.chunk_count != null) {
+    lines.push(`后台分块数：${summary.chunk_count}`);
+  }
   if (tradeDates.length) {
     lines.push(`识别日期：${tradeDates.join("、")}`);
   }
@@ -437,6 +447,70 @@ function buildManualParseValidationLines(summary) {
     lines.push(summary.summary);
   }
   return lines;
+}
+
+function formatTaskStatus(status) {
+  if (status === "succeeded") {
+    return "已完成";
+  }
+  if (status === "failed") {
+    return "失败";
+  }
+  if (status === "running") {
+    return "解析中";
+  }
+  if (status === "queued") {
+    return "排队中";
+  }
+  if (status === "canceled") {
+    return "已取消";
+  }
+  return status || "未知";
+}
+
+function renderParseTaskCenter() {
+  if (!state.parseTaskCenterItems.length) {
+    nodes.parseTaskCenter.textContent = "还没有后台解析任务。";
+    nodes.parseTaskCenter.className = "list empty-state";
+    return;
+  }
+  nodes.parseTaskCenter.className = "list";
+  nodes.parseTaskCenter.innerHTML = state.parseTaskCenterItems
+    .map(
+      (item) => `
+        <div class="list-item compact-item">
+          <strong>长文字识别 · ${formatTaskStatus(item.status)}</strong>
+          <div class="muted-note">市场 ${item.market || "-"} · 日期块 ${item.group_count || 0} · 记录 ${item.record_count || 0} · 分块 ${item.chunk_count || 1}</div>
+          <div class="muted-note">${item.summary || "任务完成后会在这里显示结果摘要。"} </div>
+          <div class="muted-note">验收状态：${item.validation_readiness || "-"}</div>
+          <div class="actions" style="margin-top:10px;">
+            <button class="btn ghost replay-open-parse-task-btn" type="button" data-task-id="${item.parse_task_id}" ${item.status === "succeeded" ? "" : "disabled"}>打开结果</button>
+          </div>
+        </div>
+      `,
+    )
+    .join("");
+  nodes.parseTaskCenter.querySelectorAll(".replay-open-parse-task-btn").forEach((node) => {
+    node.addEventListener("click", async () => {
+      const taskId = node.dataset.taskId;
+      if (!taskId) {
+        return;
+      }
+      try {
+        const payload = await api(`/api/v1/trades/uploads/manual/parse-text-tasks/${taskId}`);
+        applyManualParseResult(payload.data);
+        setStatus("已重新打开长文字识别结果。");
+      } catch (error) {
+        setStatus(error.message);
+      }
+    });
+  });
+}
+
+async function loadParseTaskCenter() {
+  const payload = await api("/api/v1/trades/uploads/manual/parse-text-tasks");
+  state.parseTaskCenterItems = payload.data.items || [];
+  renderParseTaskCenter();
 }
 
 function renderRecords(items) {
@@ -1750,6 +1824,10 @@ nodes.screenshotFile.addEventListener("change", () => {
   syncReplayActionState();
 });
 
+nodes.refreshParseTasksButton.addEventListener("click", () => {
+  loadParseTaskCenter().catch((error) => setStatus(error.message));
+});
+
 document.querySelector("#run-replay-btn").addEventListener(
   "click",
   handle(async () => {
@@ -1766,6 +1844,7 @@ subscribeBackgroundTasks((task) => {
     if (task.status === "succeeded" && task.data) {
       applyManualParseResult(task.data);
       state.pendingParseTaskId = null;
+      loadParseTaskCenter().catch(() => {});
       return;
     }
     if (["failed", "canceled"].includes(task.status)) {
@@ -1776,6 +1855,7 @@ subscribeBackgroundTasks((task) => {
       );
       setStatus(task.data?.error?.message || task.error_message || "长文字识别失败。");
       state.pendingParseTaskId = null;
+      loadParseTaskCenter().catch(() => {});
     }
     return;
   }
