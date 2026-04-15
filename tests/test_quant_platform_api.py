@@ -5349,6 +5349,31 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertIn("买入规则：当日收盘价买入", data["records"][-1]["notes"])
         self.assertIn("卖出规则：下跌 3% 止损卖出", data["records"][-1]["notes"])
 
+    def test_manual_text_parse_endpoint_returns_rule_understanding_and_missing_exit_hint(self) -> None:
+        client = self._build_client()
+        self._login(client)
+
+        response = client.post(
+            "/api/v1/trades/uploads/manual/parse-text",
+            json={
+                "text": (
+                    "2025-07-25\n"
+                    "（2 只）：603590.SH, 002225.SZ\n\n"
+                    "买入方式：当日开盘价买入"
+                ),
+                "market": "cn_equity",
+                "adjustment_mode": "qfq",
+            },
+        )
+
+        self.assertEqual(200, response.status_code)
+        data = response.json()["data"]
+        self.assertEqual("当日开盘价买入", data["rule_understanding"]["original_rule_text"]["entry"])
+        self.assertEqual("", data["rule_understanding"]["original_rule_text"]["exit"])
+        self.assertIn("卖出方式", data["rule_understanding"]["needs_input"])
+        self.assertEqual("当日开盘价买入", data["rule_understanding"]["platform_structured_rule"]["entry"])
+        self.assertEqual("", data["rule_understanding"]["platform_structured_rule"]["exit"])
+
     @patch("quant_platform_api.services.httpx.Client")
     def test_manual_text_parse_endpoint_can_use_llm_for_complex_group_rules(self, client_mock) -> None:
         stream_response = Mock()
@@ -5463,6 +5488,11 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertTrue(
             all("第二日或之后任一天开盘价" in item["notes"] for item in result["records"])
         )
+        self.assertEqual("当日开盘价买入", result["rule_understanding"]["original_rule_text"]["entry"])
+        self.assertEqual("后面哪天盘中跌到开盘减半个atr就卖", result["rule_understanding"]["original_rule_text"]["exit"])
+        self.assertIn("现价低于第二日或之后任何一日开盘价-0.5倍atr时卖出", result["rule_understanding"]["llm_understood_rule"]["exit"])
+        self.assertIn("当价格低于第二日或之后任一天开盘价减去 0.5 倍 ATR 时卖出", result["rule_understanding"]["platform_structured_rule"]["exit"])
+        self.assertFalse(result["rule_understanding"]["needs_input"])
         client_mock.assert_called()
 
     def test_assistant_endpoint_infers_cn_symbol_from_query_and_uses_company_deep_dive(self) -> None:

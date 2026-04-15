@@ -88,6 +88,7 @@ const nodes = {
   manualSmartText: document.querySelector("#trade-manual-smart-text"),
   manualInlineStatus: document.querySelector("#trade-manual-inline-status"),
   manualParseSummary: document.querySelector("#trade-manual-parse-summary"),
+  manualRuleUnderstanding: document.querySelector("#trade-manual-rule-understanding"),
   parseTaskCenter: document.querySelector("#trade-parse-task-center"),
   refreshParseTasksButton: document.querySelector("#trade-parse-refresh-tasks-btn"),
   parseTaskFilterKind: document.querySelector("#trade-parse-filter-kind"),
@@ -139,6 +140,15 @@ fetchLlmProfiles()
 loadParseTaskCenter().catch((error) => setStatus(error.message));
 clearInlineStatus(nodes.manualInlineStatus, "等待你粘贴长文字内容。大批量文本会转入后台解析，并在完成后提醒你。");
 clearInlineStatus(nodes.replayInlineStatus, "等待你运行复盘。复盘任务会在后台执行，完成后自动提醒你。");
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
 
 async function uploadTrades() {
   syncReplayActionState({ uploadBusy: true });
@@ -386,6 +396,7 @@ function applyManualParseResult(result) {
   })));
   renderManualTrades();
   renderManualParseSummary(result);
+  renderManualRuleUnderstanding(result);
   syncReplayActionState();
   setInlineStatus(nodes.manualInlineStatus, result.summary || "长文字智能识别完成，已加入手动记录。", "success");
   setStatus(result.summary || "长文字智能识别完成，已加入手动记录。");
@@ -431,6 +442,40 @@ function renderManualParseSummary(result) {
     ...(warningLines.length ? ["", "需要你重点确认：", ...warningLines] : []),
   ];
   nodes.manualParseSummary.textContent = lines.join("\n");
+}
+
+function renderManualRuleUnderstanding(result) {
+  const panel = nodes.manualRuleUnderstanding;
+  if (!panel) {
+    return;
+  }
+  const understanding = result.rule_understanding || {};
+  const original = understanding.original_rule_text || {};
+  const llm = understanding.llm_understood_rule || {};
+  const structured = understanding.platform_structured_rule || {};
+  const understoodParts = understanding.understood_parts || [];
+  const needsInput = understanding.needs_input || [];
+  const message =
+    understanding.confirmation_message ||
+    "规则理解确认区会展示：原始规则文本、LLM 理解后的规则、平台最终结构化规则，以及仍需你补充的部分。";
+
+  panel.innerHTML = `
+    <div><strong>规则理解确认</strong></div>
+    <div class="muted-note" style="margin-top:6px;">${escapeHtml(message)}</div>
+    <div style="margin-top:10px;"><strong>原始规则文本</strong></div>
+    <div>买入：${escapeHtml(original.entry || "未直接写出买入方式")}</div>
+    <div>卖出：${escapeHtml(original.exit || "未直接写出卖出方式")}</div>
+    <div style="margin-top:10px;"><strong>LLM 理解后的规则</strong></div>
+    <div>买入：${escapeHtml(llm.entry || "当前没有 LLM 补充买入规则")}</div>
+    <div>卖出：${escapeHtml(llm.exit || "当前没有 LLM 补充卖出规则")}</div>
+    <div style="margin-top:10px;"><strong>平台最终结构化规则</strong></div>
+    <div>买入：${escapeHtml(structured.entry || "未结构化")}</div>
+    <div>卖出：${escapeHtml(structured.exit || "未结构化")}</div>
+    <div style="margin-top:10px;"><strong>已理解到的部分</strong></div>
+    <div>${escapeHtml(understoodParts.length ? understoodParts.join("；") : "当前只完成了基础日期和代码识别。")}</div>
+    <div style="margin-top:10px;"><strong>仍需你补充</strong></div>
+    <div>${escapeHtml(needsInput.length ? needsInput.join("、") : "当前买卖规则都已形成可核对的结构化候选。")}</div>
+  `;
 }
 
 function buildManualParseValidationLines(summary) {

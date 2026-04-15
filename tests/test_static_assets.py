@@ -181,6 +181,7 @@ class StaticAssetTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
 
         self.assertIn('id="trade-manual-parse-summary" class="result-box light bounded-scroll bounded-scroll-md"', replay_html)
+        self.assertIn('id="trade-manual-rule-understanding" class="result-box light bounded-scroll bounded-scroll-md"', replay_html)
         self.assertIn('id="trade-parse-task-center" class="list empty-state bounded-scroll bounded-scroll-lg"', replay_html)
         self.assertIn('id="manual-trade-list" class="list empty-state bounded-scroll bounded-scroll-xl"', replay_html)
         self.assertIn(".bounded-scroll", theme_css)
@@ -314,7 +315,7 @@ class StaticAssetTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
 
         self.assertIn("--accent-deep", theme_css)
-        self.assertIn("linear-gradient(135deg, rgba(17, 30, 48, 0.98)", theme_css)
+        self.assertIn("linear-gradient(135deg, rgba(17, 30, 48, 0.04)", theme_css)
         self.assertIn(".hero::before", theme_css)
         self.assertIn(".quick-card:hover", theme_css)
         self.assertIn('family=Manrope', app_css)
@@ -967,6 +968,7 @@ console.log('mentor-bootstrapped');
         self.assertIn("registerBackgroundTask", replay_js)
         self.assertIn("subscribeBackgroundTasks", replay_js)
         self.assertIn("applyManualParseResult", replay_js)
+        self.assertIn("renderManualRuleUnderstanding", replay_js)
         self.assertIn("applyReplayResult", replay_js)
 
     def test_admin_and_shared_assets_include_error_logging_hooks(self) -> None:

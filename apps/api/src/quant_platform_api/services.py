@@ -4037,6 +4037,13 @@ class TradeUploadService:
             "record_count": len(records),
             "parse_mode": "hybrid_llm" if llm_parse else "deterministic",
             "ai_review": self._build_ai_review_summary(llm_parse),
+            "rule_understanding": self._build_trade_rule_understanding_summary(
+                text=normalized_text,
+                entry_rule=entry_rule,
+                exit_rule=exit_rule,
+                llm_parse=llm_parse,
+                grouped=False,
+            ),
             "input_truth_summary": _build_trade_input_truth_summary(
                 records,
                 source_context="text_parse",
@@ -4138,6 +4145,13 @@ class TradeUploadService:
             "record_count": len(records),
             "parse_mode": "hybrid_llm" if llm_parse else "deterministic",
             "ai_review": self._build_ai_review_summary(llm_parse),
+            "rule_understanding": self._build_trade_rule_understanding_summary(
+                text=text,
+                entry_rule=global_entry_rule,
+                exit_rule=global_exit_rule,
+                llm_parse=llm_parse,
+                grouped=True,
+            ),
             "group_summaries": group_summaries,
             "chunk_summary": chunk_summary,
             "input_truth_summary": _build_trade_input_truth_summary(
@@ -5507,6 +5521,78 @@ class TradeUploadService:
         if kind == "entry":
             return self._extract_entry_rule_or_none(text)
         return self._extract_exit_rule(text)
+
+    def _extract_labeled_rule_text(
+        self,
+        text: str,
+        label: str,
+        *,
+        stop_labels: tuple[str, ...] = (),
+    ) -> str | None:
+        stop_patterns = [re.escape(f"{item}：") for item in stop_labels] + [re.escape(f"{item}:") for item in stop_labels]
+        stop_clause = "|".join(stop_patterns + [r"[\r\n]"]) if stop_patterns else r"[\r\n]"
+        pattern = rf"{re.escape(label)}[:：]\s*(.+?)(?=(?:{stop_clause}|$))"
+        match = re.search(pattern, text, flags=re.I | re.S)
+        if match is None:
+            return None
+        value = re.sub(r"\s+", " ", match.group(1)).strip(" ，,；;。")
+        return value or None
+
+    def _build_trade_rule_understanding_summary(
+        self,
+        *,
+        text: str,
+        entry_rule: dict[str, Any] | None,
+        exit_rule: dict[str, Any] | None,
+        llm_parse: dict[str, Any] | None,
+        grouped: bool,
+    ) -> dict[str, Any]:
+        original_entry_text = self._extract_labeled_rule_text(text, "买入方式", stop_labels=("卖出方式",))
+        original_exit_text = self._extract_labeled_rule_text(text, "卖出方式")
+        llm_entry_text = str(llm_parse.get("global_entry_rule") or "").strip() if llm_parse else ""
+        llm_exit_text = str(llm_parse.get("global_exit_rule") or "").strip() if llm_parse else ""
+        understood_parts: list[str] = []
+        missing_parts: list[str] = []
+        if original_entry_text:
+            understood_parts.append("已识别买入规则原文")
+        if original_exit_text:
+            understood_parts.append("已识别卖出规则原文")
+        if llm_entry_text:
+            understood_parts.append("LLM 已理解买入规则语义")
+        if llm_exit_text:
+            understood_parts.append("LLM 已理解卖出规则语义")
+        if entry_rule:
+            understood_parts.append("平台已落地买入结构化规则")
+        else:
+            missing_parts.append("买入方式")
+        if exit_rule:
+            understood_parts.append("平台已落地卖出结构化规则")
+        else:
+            missing_parts.append("卖出方式")
+        if grouped and not original_entry_text and not original_exit_text and (entry_rule or exit_rule):
+            understood_parts.append("当前规则来自按日期块独立识别或全局推断")
+        return {
+            "original_rule_text": {
+                "entry": original_entry_text or "",
+                "exit": original_exit_text or "",
+            },
+            "llm_understood_rule": {
+                "entry": llm_entry_text,
+                "exit": llm_exit_text,
+                "used": bool(llm_parse),
+            },
+            "platform_structured_rule": {
+                "entry": entry_rule["label"] if entry_rule else "",
+                "exit": exit_rule["label"] if exit_rule else "",
+            },
+            "understood_parts": understood_parts,
+            "needs_input": missing_parts,
+            "confirmation_message": (
+                "平台已经把自然语言规则拆成了结构化候选，请重点核对买卖规则是否符合你的原始意图。"
+                if entry_rule or exit_rule
+                else "当前只识别到了日期和标的代码，买卖规则仍需你补充。"
+            ),
+        }
 
     def _match_llm_group(self, llm_parse: dict[str, Any] | None, *, trade_date: str) -> dict[str, Any] | None:
         if not llm_parse:
