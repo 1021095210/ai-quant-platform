@@ -1829,6 +1829,9 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertEqual("stub_feed", data["evidence_bundle"]["price_snapshot"]["provider"])
         self.assertEqual(18.5, data["evidence_bundle"]["valuation_snapshot"]["pe_ttm"])
         self.assertEqual(12.3, data["evidence_bundle"]["financial_quality_snapshot"]["roe"])
+        self.assertTrue(data["evidence_refs"])
+        self.assertTrue(data["report_sections"])
+        self.assertEqual("中高", data["confidence_label"])
 
     @patch("quant_platform_api.services.httpx.Client")
     def test_mentor_can_use_llm_answer_when_configured(self, client_mock) -> None:
@@ -1937,7 +1940,7 @@ class QuantPlatformApiTests(unittest.TestCase):
     def test_assistant_can_use_llm_answer_when_configured(self, client_mock) -> None:
         stream_response = Mock()
         stream_response.iter_lines.return_value = [
-            'data: {"choices":[{"delta":{"content":"{\\"executive_summary\\":\\"先做驱动拆解，再看多空分歧。\\",\\"desk_briefs\\":[{\\"desk\\":\\"基本面研究员\\",\\"title\\":\\"盈利驱动\\",\\"summary\\":\\"先看收入、利润和预期差。\\"}],\\"debate\\":[{\\"side\\":\\"多头\\",\\"view\\":\\"催化剂足够强。\\"},{\\"side\\":\\"空头\\",\\"view\\":\\"估值已经透支。\\"}],\\"risk_checklist\\":[\\"先核对市场制度\\"],\\"deliverables\\":[\\"执行摘要\\"],\\"next_actions\\":[\\"继续验证核心变量\\"],\\"related_modules\\":[{\\"label\\":\\"策略工坊\\",\\"path\\":\\"/strategy\\",\\"reason\\":\\"把研究转成规则\\"}]}"}}]}',
+            'data: {"choices":[{"delta":{"content":"{\\"executive_summary\\":\\"先做驱动拆解，再看多空分歧。\\",\\"confidence_label\\":\\"中等\\",\\"evidence_gap_note\\":\\"估值和财务还要继续补证据。\\",\\"report_sections\\":[{\\"title\\":\\"研究任务定义\\",\\"summary\\":\\"先定义研究边界。\\",\\"bullets\\":[\\"先看目标市场\\",\\"再看证据覆盖\\"]}],\\"evidence_refs\\":[{\\"label\\":\\"价格快照\\",\\"source\\":\\"stub_feed\\",\\"as_of\\":\\"2026-04-11\\",\\"detail\\":\\"收盘 10.4\\"}],\\"desk_briefs\\":[{\\"desk\\":\\"基本面研究员\\",\\"title\\":\\"盈利驱动\\",\\"summary\\":\\"先看收入、利润和预期差。\\"}],\\"debate\\":[{\\"side\\":\\"多头\\",\\"view\\":\\"催化剂足够强。\\"},{\\"side\\":\\"空头\\",\\"view\\":\\"估值已经透支。\\"}],\\"risk_checklist\\":[\\"先核对市场制度\\"],\\"deliverables\\":[\\"执行摘要\\"],\\"next_actions\\":[\\"继续验证核心变量\\"],\\"related_modules\\":[{\\"label\\":\\"策略工坊\\",\\"path\\":\\"/strategy\\",\\"reason\\":\\"把研究转成规则\\"}]}"}}]}',
             "data: [DONE]",
         ]
         stream_response.text = ""
@@ -1976,6 +1979,9 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertEqual("AI 研究编组", data["answer_mode_label"])
         self.assertIn("驱动拆解", data["executive_summary"])
         self.assertEqual("基本面研究员", data["desk_briefs"][0]["desk"])
+        self.assertEqual("中等", data["confidence_label"])
+        self.assertTrue(data["report_sections"])
+        self.assertTrue(data["evidence_refs"])
 
     def test_client_error_reports_are_visible_in_admin_app_logs(self) -> None:
         client = self._build_client()
@@ -4989,6 +4995,7 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertIn("workflow_title", first)
         self.assertIn("summary", first)
         self.assertEqual("600619.SH", first["target_symbol"])
+        self.assertIn("confidence_label", first)
 
     def test_manual_text_parse_accepts_cn_market_alias(self) -> None:
         client = self._build_client()

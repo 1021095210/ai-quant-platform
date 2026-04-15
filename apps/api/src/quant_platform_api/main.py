@@ -961,6 +961,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "market_scope": result.get("market_scope") or payload.get("market_scope", ""),
                     "answer_source": result.get("answer_source", ""),
                     "summary": result.get("executive_summary", ""),
+                    "confidence_label": result.get("confidence_label", ""),
                     "status_url": f"{app_settings.api_prefix}/assistant/research-tasks/{record.id}",
                     "created_at": record.created_at.isoformat(),
                     "ended_at": record.finished_at.isoformat() if record.finished_at else None,

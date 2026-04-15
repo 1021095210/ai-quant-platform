@@ -5573,7 +5573,11 @@ class FinancialAssistantService(MentorService):
         )
         normalized_request = request.model_copy(update={"target_symbol": normalized_target_symbol})
         evidence_bundle = self._build_assistant_evidence_bundle(normalized_request)
-        fallback = self._build_assistant_fallback(workflow=workflow, request=normalized_request)
+        fallback = self._build_assistant_fallback(
+            workflow=workflow,
+            request=normalized_request,
+            evidence_bundle=evidence_bundle,
+        )
         response = {
             "assistant_name": "金融助手",
             "assistant_role": "机构研究协作台",
@@ -5652,9 +5656,11 @@ class FinancialAssistantService(MentorService):
         *,
         workflow: dict[str, Any],
         request: AssistantResearchRequest,
+        evidence_bundle: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         target = request.target_symbol or "当前研究对象"
         workflow_id = workflow["workflow_id"]
+        evidence_bundle = evidence_bundle or self._build_assistant_evidence_bundle(request)
         summary_map = {
             "market_map": f"先把 {request.market_scope} 市场主线、情绪、风格和关键风险梳理清楚，再决定当天研究优先级。",
             "company_deep_dive": f"围绕 {target} 先拆盈利驱动、估值预期和催化剂，再判断研究是否值得继续加深。",
@@ -5708,6 +5714,14 @@ class FinancialAssistantService(MentorService):
             related_modules.insert(0, {"label": "指标设置", "path": "/indicators", "reason": "从指标和因子层补研究抓手"})
         return {
             "executive_summary": summary_map.get(workflow_id, summary_map["market_map"]),
+            "confidence_label": self._assistant_confidence_from_evidence(evidence_bundle),
+            "evidence_gap_note": self._assistant_evidence_gap_note(evidence_bundle),
+            "report_sections": self._build_assistant_report_sections(
+                workflow=workflow,
+                request=request,
+                evidence_bundle=evidence_bundle,
+            ),
+            "evidence_refs": list(evidence_bundle.get("evidence_refs") or []),
             "desk_briefs": desk_briefs,
             "debate": debate,
             "risk_checklist": risk_checklist,
@@ -5737,7 +5751,9 @@ class FinancialAssistantService(MentorService):
             "请只基于用户问题、平台给出的证据包和明确可见的市场制度边界输出，不要编造新闻、财务或价格事实。"
             "如果证据不足，就明确说证据不足，不要假装实时掌握外部信息。"
             "请用中文输出结构化研究结果，不要写成泛泛聊天。"
-            "输出必须是 JSON，对象字段固定为：executive_summary、desk_briefs、debate、risk_checklist、deliverables、next_actions、related_modules。"
+            "输出必须是 JSON，对象字段固定为：executive_summary、confidence_label、evidence_gap_note、report_sections、evidence_refs、desk_briefs、debate、risk_checklist、deliverables、next_actions、related_modules。"
+            "report_sections 是 3 到 5 个对象数组，每个对象含 title、summary、bullets。"
+            "evidence_refs 是 1 到 6 个对象数组，每个对象含 label、source、as_of、detail。"
             "desk_briefs 是 3 到 4 个对象数组，每个对象含 desk、title、summary。"
             "debate 是 2 个对象数组，每个对象含 side、view。"
             "risk_checklist、deliverables、next_actions 都是中文字符串数组。"
@@ -5800,6 +5816,10 @@ class FinancialAssistantService(MentorService):
         parsed = self._extract_json_object(content)
         return {
             "executive_summary": str(parsed.get("executive_summary") or fallback["executive_summary"]),
+            "confidence_label": str(parsed.get("confidence_label") or fallback.get("confidence_label") or ""),
+            "evidence_gap_note": str(parsed.get("evidence_gap_note") or fallback.get("evidence_gap_note") or ""),
+            "report_sections": self._normalize_report_sections(parsed.get("report_sections") or fallback.get("report_sections")),
+            "evidence_refs": self._normalize_evidence_refs(parsed.get("evidence_refs") or fallback.get("evidence_refs")),
             "desk_briefs": self._normalize_assistant_desks(parsed.get("desk_briefs") or fallback["desk_briefs"]),
             "debate": self._normalize_debate(parsed.get("debate") or fallback["debate"]),
             "risk_checklist": self._normalize_string_list(parsed.get("risk_checklist") or fallback["risk_checklist"]),
@@ -5823,6 +5843,8 @@ class FinancialAssistantService(MentorService):
             "price_snapshot": None,
             "valuation_snapshot": None,
             "financial_quality_snapshot": None,
+            "coverage_summary": {"available_sections": [], "missing_sections": ["price", "valuation", "financial_quality"]},
+            "evidence_refs": [],
             "warnings": [],
         }
         if not target_symbol or market_scope != "cn_equity" or self._market_data_service is None:
@@ -5853,6 +5875,14 @@ class FinancialAssistantService(MentorService):
                     "provider": metadata.get("provider"),
                     "bar_count": len(bars),
                 }
+                bundle["evidence_refs"].append(
+                    {
+                        "label": "价格快照",
+                        "source": metadata.get("provider") or "internal_feed",
+                        "as_of": last_bar.trade_date.isoformat() if hasattr(last_bar.trade_date, "isoformat") else str(last_bar.trade_date),
+                        "detail": f"收盘 {close:.2f}，20日 {round(((close / close_20) - 1) * 100, 2) if close_20 else 0.0}% ，60日 {round(((close / close_60) - 1) * 100, 2) if close_60 else 0.0}%",
+                    }
+                )
                 snapshot, basic_meta = self._market_data_service.load_daily_basic_snapshot(
                     ts_code=target_symbol,
                     trade_date=last_bar.trade_date,
@@ -5866,6 +5896,14 @@ class FinancialAssistantService(MentorService):
                         "circ_mv": getattr(snapshot, "circ_mv", None),
                         "provider": basic_meta.get("provider"),
                     }
+                    bundle["evidence_refs"].append(
+                        {
+                            "label": "估值快照",
+                            "source": basic_meta.get("provider") or "internal_feed",
+                            "as_of": last_bar.trade_date.isoformat() if hasattr(last_bar.trade_date, "isoformat") else str(last_bar.trade_date),
+                            "detail": f"PE(TTM) {getattr(snapshot, 'pe_ttm', None) or '-'}，PB {getattr(snapshot, 'pb', None) or '-'}，总市值 {getattr(snapshot, 'total_mv', None) or '-'}",
+                        }
+                    )
                 quality, quality_meta = self._market_data_service.load_financial_quality_snapshot(
                     ts_code=target_symbol,
                     trade_date=last_bar.trade_date,
@@ -5879,12 +5917,122 @@ class FinancialAssistantService(MentorService):
                         "op_yoy": getattr(quality, "op_yoy", None),
                         "provider": quality_meta.get("provider"),
                     }
+                    bundle["evidence_refs"].append(
+                        {
+                            "label": "财务质量快照",
+                            "source": quality_meta.get("provider") or "internal_feed",
+                            "as_of": getattr(quality, "end_date", None) or (last_bar.trade_date.isoformat() if hasattr(last_bar.trade_date, "isoformat") else str(last_bar.trade_date)),
+                            "detail": f"ROE {getattr(quality, 'roe', None) or '-'}，毛利率 {getattr(quality, 'grossprofit_margin', None) or '-'}，营业利润同比 {getattr(quality, 'op_yoy', None) or '-'}",
+                        }
+                    )
                 bundle["status"] = "ready"
             else:
                 bundle["warnings"].append("内部行情链路未返回目标标的的近端日线数据。")
         except Exception as exc:
             bundle["warnings"].append(f"内部证据包加载失败：{exc}")
+        available_sections: list[str] = []
+        missing_sections: list[str] = []
+        for section_key, label in (
+            ("price_snapshot", "price"),
+            ("valuation_snapshot", "valuation"),
+            ("financial_quality_snapshot", "financial_quality"),
+        ):
+            if bundle.get(section_key):
+                available_sections.append(label)
+            else:
+                missing_sections.append(label)
+        bundle["coverage_summary"] = {
+            "available_sections": available_sections,
+            "missing_sections": missing_sections,
+        }
         return bundle
+
+    def _assistant_confidence_from_evidence(self, evidence_bundle: dict[str, Any]) -> str:
+        coverage = evidence_bundle.get("coverage_summary") or {}
+        available_sections = coverage.get("available_sections") or []
+        if len(available_sections) >= 3:
+            return "中高"
+        if len(available_sections) == 2:
+            return "中等"
+        if len(available_sections) == 1:
+            return "偏低"
+        return "很低"
+
+    def _assistant_evidence_gap_note(self, evidence_bundle: dict[str, Any]) -> str:
+        coverage = evidence_bundle.get("coverage_summary") or {}
+        missing_sections = coverage.get("missing_sections") or []
+        if not missing_sections:
+            return "当前证据包已覆盖价格、估值和财务质量三层，可做较完整的一阶研究。"
+        mapping = {
+            "price": "价格",
+            "valuation": "估值",
+            "financial_quality": "财务质量",
+        }
+        missing_text = "、".join(mapping.get(item, item) for item in missing_sections)
+        return f"当前证据包仍缺 {missing_text} 维度，研究结论应保守，并继续补证据。"
+
+    def _build_assistant_report_sections(
+        self,
+        *,
+        workflow: dict[str, Any],
+        request: AssistantResearchRequest,
+        evidence_bundle: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        target = request.target_symbol or "当前研究对象"
+        price_snapshot = evidence_bundle.get("price_snapshot") or {}
+        valuation_snapshot = evidence_bundle.get("valuation_snapshot") or {}
+        quality_snapshot = evidence_bundle.get("financial_quality_snapshot") or {}
+        sections: list[dict[str, Any]] = [
+            {
+                "title": "研究任务定义",
+                "summary": f"本轮按「{workflow['title']}」工作流处理 {target}，目标是先给出一阶研究判断，再明确下一步验证重点。",
+                "bullets": [
+                    f"市场范围：{request.market_scope}",
+                    f"研究深度：{request.research_depth}",
+                    f"证据覆盖：{', '.join((evidence_bundle.get('coverage_summary') or {}).get('available_sections') or ['暂无'])}",
+                ],
+            }
+        ]
+        if price_snapshot:
+            sections.append(
+                {
+                    "title": "价格与趋势观察",
+                    "summary": f"最新价格快照显示 {target} 收盘 {price_snapshot.get('close')}，短中期相对位置已可做一阶趋势判断。",
+                    "bullets": [
+                        f"日涨跌：{price_snapshot.get('day_change_pct', '-') }%",
+                        f"20日收益：{price_snapshot.get('return_20d_pct', '-') }%",
+                        f"60日收益：{price_snapshot.get('return_60d_pct', '-') }%",
+                    ],
+                }
+            )
+        if valuation_snapshot or quality_snapshot:
+            bullets: list[str] = []
+            if valuation_snapshot:
+                bullets.append(f"PE(TTM)：{valuation_snapshot.get('pe_ttm', '-')}")
+                bullets.append(f"PB：{valuation_snapshot.get('pb', '-')}")
+                bullets.append(f"总市值：{valuation_snapshot.get('total_mv', '-')}")
+            if quality_snapshot:
+                bullets.append(f"ROE：{quality_snapshot.get('roe', '-')}")
+                bullets.append(f"毛利率：{quality_snapshot.get('grossprofit_margin', '-')}")
+                bullets.append(f"营业利润同比：{quality_snapshot.get('op_yoy', '-')}")
+            sections.append(
+                {
+                    "title": "估值与财务质量",
+                    "summary": "如果要继续深挖，估值位置与财务质量是当前最值得先确认的第二层证据。",
+                    "bullets": bullets[:6],
+                }
+            )
+        sections.append(
+            {
+                "title": "证据边界与下一步",
+                "summary": self._assistant_evidence_gap_note(evidence_bundle),
+                "bullets": [
+                    "先确认当前证据是否足以支持继续深研，而不是直接得出交易结论。",
+                    "若要进入策略或执行，下一步应去策略工坊或回测中心做规则化验证。",
+                ],
+            }
+        )
+        return sections[:5]
 
     def _normalize_assistant_desks(self, value: Any) -> list[dict[str, str]]:
         if not isinstance(value, list):
@@ -5917,6 +6065,35 @@ class FinancialAssistantService(MentorService):
         if not isinstance(value, list):
             return []
         return [str(item).strip() for item in value if str(item).strip()][:6]
+
+    def _normalize_report_sections(self, value: Any) -> list[dict[str, Any]]:
+        if not isinstance(value, list):
+            return []
+        items: list[dict[str, Any]] = []
+        for item in value[:6]:
+            if not isinstance(item, dict):
+                continue
+            title = str(item.get("title", "")).strip()
+            summary = str(item.get("summary", "")).strip()
+            bullets = [str(bullet).strip() for bullet in item.get("bullets", []) if str(bullet).strip()][:6]
+            if title and summary:
+                items.append({"title": title, "summary": summary, "bullets": bullets})
+        return items
+
+    def _normalize_evidence_refs(self, value: Any) -> list[dict[str, str]]:
+        if not isinstance(value, list):
+            return []
+        items: list[dict[str, str]] = []
+        for item in value[:8]:
+            if not isinstance(item, dict):
+                continue
+            label = str(item.get("label", "")).strip()
+            source = str(item.get("source", "")).strip()
+            as_of = str(item.get("as_of", "")).strip()
+            detail = str(item.get("detail", "")).strip()
+            if label and source and detail:
+                items.append({"label": label, "source": source, "as_of": as_of, "detail": detail})
+        return items
 
     def _normalize_related_modules(self, value: Any) -> list[dict[str, str]]:
         if not isinstance(value, list):

@@ -165,7 +165,7 @@ function renderTaskCenter() {
         <div class="list-item compact-item">
           <strong>${item.workflow_title || "研究任务"} · ${formatTaskStatus(item.status)}</strong>
           <div class="muted-note">${item.query || "未记录问题"}</div>
-          <div class="muted-note">标的 ${item.target_symbol || "-"} · 市场 ${item.market_scope || "-"} · 结果来源 ${item.answer_source || "-"}</div>
+          <div class="muted-note">标的 ${item.target_symbol || "-"} · 市场 ${item.market_scope || "-"} · 结果来源 ${item.answer_source || "-"}${item.confidence_label ? ` · 研究置信度 ${item.confidence_label}` : ""}</div>
           <div class="muted-note">${item.summary || "结果生成后会在这里显示摘要。"} </div>
           <div class="actions" style="margin-top:10px;">
             <button class="btn ghost assistant-open-task-btn" type="button" data-task-id="${item.research_task_id}" ${item.status === "succeeded" ? "" : "disabled"}>打开结果</button>
@@ -232,11 +232,38 @@ function renderResearch(payload) {
   const valuationSnapshot = evidence.valuation_snapshot || null;
   const qualitySnapshot = evidence.financial_quality_snapshot || null;
   const evidenceWarnings = Array.isArray(evidence.warnings) ? evidence.warnings : [];
+  const evidenceRefs = Array.isArray(payload.evidence_refs) ? payload.evidence_refs : [];
+  const reportSections = Array.isArray(payload.report_sections) ? payload.report_sections : [];
   nodes.summary.innerHTML = `
     <div class="list-item mentor-answer-card">
       <strong>${payload.workflow_title}</strong>
-      <div class="muted-note">当前模式：${payload.answer_mode_label || "平台研究模板"}${payload.llm_profile_label ? ` · ${payload.llm_profile_label}` : ""}</div>
+      <div class="muted-note">当前模式：${payload.answer_mode_label || "平台研究模板"}${payload.llm_profile_label ? ` · ${payload.llm_profile_label}` : ""}${payload.confidence_label ? ` · 研究置信度 ${payload.confidence_label}` : ""}</div>
       <div class="muted-note">${payload.executive_summary}</div>
+      ${payload.evidence_gap_note ? `<div class="muted-note" style="margin-top:8px;">证据边界：${payload.evidence_gap_note}</div>` : ""}
+    </div>
+    <div class="list-item mentor-answer-card">
+      <strong>长报告</strong>
+      <div class="assistant-desk-results">
+        ${
+          reportSections.length
+            ? reportSections
+                .map(
+                  (item) => `
+                    <div class="assistant-desk-result">
+                      <span>${item.title}</span>
+                      <strong>${item.summary}</strong>
+                      ${
+                        Array.isArray(item.bullets) && item.bullets.length
+                          ? `<ul class="mentor-step-list">${item.bullets.map((bullet) => `<li>${bullet}</li>`).join("")}</ul>`
+                          : ""
+                      }
+                    </div>
+                  `,
+                )
+                .join("")
+            : '<div class="assistant-desk-result"><span>暂无长报告</span><strong>当前没有可展开的长报告段落。</strong></div>'
+        }
+      </div>
     </div>
     <div class="list-item mentor-answer-card">
       <strong>专家拆解</strong>
@@ -275,6 +302,13 @@ function renderResearch(payload) {
         </div>
       </div>
       ${evidenceWarnings.length ? `<div class="muted-note" style="margin-top:10px;">${evidenceWarnings.map((item) => `- ${item}`).join("<br>")}</div>` : ""}
+      ${
+        evidenceRefs.length
+          ? `<div class="muted-note" style="margin-top:10px;">${evidenceRefs
+              .map((item) => `- ${item.label}｜${item.source}${item.as_of ? `｜${item.as_of}` : ""}｜${item.detail}`)
+              .join("<br>")}</div>`
+          : ""
+      }
     </div>
   `;
 
