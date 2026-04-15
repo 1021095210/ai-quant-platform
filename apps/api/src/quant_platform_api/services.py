@@ -5520,6 +5520,13 @@ class FinancialAssistantService(MentorService):
                 "deliverables": ["核心观点", "多空分歧", "催化剂与风险"],
             },
             {
+                "workflow_id": "stock_analysis",
+                "title": "个股研究",
+                "summary": "面向普通用户的一站式个股分析，结合价格位置、基本面快照、近端事件和风险位给出下一步观察建议。",
+                "best_for": "只想研究某只股票当前位置、是否继续观察、持有还是先控制风险",
+                "deliverables": ["位置判断", "关键风险位", "继续观察点", "下一步建议"],
+            },
+            {
                 "workflow_id": "event_impact",
                 "title": "事件冲击",
                 "summary": "把政策、财报、宏观数据或行业事件拆成影响链，判断受益与受损方向。",
@@ -5573,10 +5580,13 @@ class FinancialAssistantService(MentorService):
             inferred_target_symbol,
             request.market_scope,
         )
+        workflow_id = self._infer_assistant_workflow_override(
+            query=query,
+            requested_workflow_id=request.workflow_id,
+            target_symbol=normalized_target_symbol,
+        )
         workflow = self._resolve_workflow(
-            "company_deep_dive"
-            if normalized_target_symbol and request.workflow_id == "market_map"
-            else request.workflow_id
+            workflow_id
         )
         normalized_request = request.model_copy(update={"target_symbol": normalized_target_symbol})
         runtime = _resolve_llm_runtime(
@@ -5653,10 +5663,42 @@ class FinancialAssistantService(MentorService):
                 return item
         return self.list_workflows()[0]
 
+    def _infer_assistant_workflow_override(
+        self,
+        *,
+        query: str,
+        requested_workflow_id: str,
+        target_symbol: str,
+    ) -> str:
+        requested = (requested_workflow_id or "market_map").strip() or "market_map"
+        if not target_symbol or requested not in {"market_map", "company_deep_dive", "stock_analysis"}:
+            return requested
+        lowered = query.strip().lower()
+        retail_keywords = [
+            "该不该买",
+            "可以买",
+            "能不能买",
+            "继续持有",
+            "是否持有",
+            "止损",
+            "加仓",
+            "减仓",
+            "什么位置",
+            "怎么看",
+            "位置",
+            "风险位",
+        ]
+        if any(keyword in query for keyword in retail_keywords) or any(keyword in lowered for keyword in ["buy", "hold", "stop loss", "position"]):
+            return "stock_analysis"
+        if requested == "market_map":
+            return "company_deep_dive"
+        return requested
+
     def _workflow_steps_for(self, workflow_id: str) -> list[str]:
         mapping = {
             "market_map": ["先收拢市场主线", "再判断风格与情绪", "最后列出明日优先跟踪项"],
             "company_deep_dive": ["先明确研究对象与市场", "再拆核心驱动与风险", "最后沉淀验证清单与模块入口"],
+            "stock_analysis": ["先判断当前位置与趋势", "再核对基本面和近端事件", "最后给出风险位与观察建议"],
             "event_impact": ["先定义事件本身", "再拆影响链条", "最后判断受益、受损与验证点"],
             "bull_bear_debate": ["先写多头逻辑", "再强制写空头反驳", "最后提炼需要继续验证的关键变量"],
             "risk_committee": ["先列执行假设", "再审视仓位与约束", "最后给出执行前核对项"],
@@ -5677,6 +5719,7 @@ class FinancialAssistantService(MentorService):
         summary_map = {
             "market_map": f"先把 {request.market_scope} 市场主线、情绪、风格和关键风险梳理清楚，再决定当天研究优先级。",
             "company_deep_dive": f"围绕 {target} 先拆盈利驱动、估值预期和催化剂，再判断研究是否值得继续加深。",
+            "stock_analysis": f"围绕 {target} 先判断当前位置、关键风险位和近端催化，再给出更适合普通用户理解的观察建议。",
             "event_impact": f"这次更适合先把事件影响链拆开，看它会如何传导到 {target} 或相关板块。",
             "bull_bear_debate": f"对 {target} 不要只写单边理由，先把多头和空头都摆上桌，再决定是否值得下注。",
             "risk_committee": "先把成交假设、市场制度和仓位边界写清楚，再进入回测或执行。",
@@ -5725,6 +5768,8 @@ class FinancialAssistantService(MentorService):
         ]
         if workflow_id == "company_deep_dive":
             related_modules.insert(0, {"label": "指标设置", "path": "/indicators", "reason": "从指标和因子层补研究抓手"})
+        if workflow_id == "stock_analysis":
+            related_modules.insert(0, {"label": "交易复盘", "path": "/replay", "reason": "如果已有真实交易，可继续复盘验证买卖节奏"})
         return {
             "executive_summary": summary_map.get(workflow_id, summary_map["market_map"]),
             "confidence_label": self._assistant_confidence_from_evidence(evidence_bundle),
@@ -6063,7 +6108,7 @@ class FinancialAssistantService(MentorService):
             event_type = str(item.get("event_type", "")).strip() or "event"
             impact = str(item.get("impact", "")).strip()
             why_it_matters = str(item.get("why_it_matters", "")).strip()
-            if title and source:
+            if title and source and self._assistant_event_source_allowed(source) and self._assistant_event_is_recent(as_of):
                 items.append(
                     {
                         "title": title,
@@ -6074,6 +6119,8 @@ class FinancialAssistantService(MentorService):
                         "why_it_matters": why_it_matters,
                     }
                 )
+            elif title and source:
+                result["warnings"].append(f"已忽略未通过白名单或时效校验的事件来源：{source}")
         result["items"] = items
         result["warnings"] = [str(item).strip() for item in parsed.get("warnings", []) if str(item).strip()]
         result["status"] = "ready" if items else "unavailable"
@@ -6085,6 +6132,36 @@ class FinancialAssistantService(MentorService):
         base_url = str(runtime.get("base_url") or "").strip().lower()
         provider = str(runtime.get("provider") or "").strip().lower()
         return provider == "volcengine" or "ark.cn-beijing.volces.com" in base_url
+
+    def _assistant_event_source_allowed(self, source: str) -> bool:
+        normalized = source.strip()
+        if not normalized:
+            return False
+        allowed_keywords = [
+            "上海证券交易所",
+            "深圳证券交易所",
+            "上交所",
+            "深交所",
+            "巨潮资讯",
+            "中国证券报",
+            "证券时报",
+            "证券日报",
+            "证券之星",
+            "财联社",
+            "中国基金报",
+            "公司公告",
+        ]
+        return any(keyword in normalized for keyword in allowed_keywords)
+
+    def _assistant_event_is_recent(self, as_of: str) -> bool:
+        normalized = (as_of or "").strip()
+        if not re.fullmatch(r"20\d{2}-\d{2}-\d{2}", normalized):
+            return False
+        try:
+            event_date = date.fromisoformat(normalized)
+        except ValueError:
+            return False
+        return (utcnow().date() - event_date).days <= 30
 
     def _assistant_confidence_from_evidence(self, evidence_bundle: dict[str, Any]) -> str:
         coverage = evidence_bundle.get("coverage_summary") or {}
@@ -6170,6 +6247,18 @@ class FinancialAssistantService(MentorService):
                     "bullets": [
                         f"{item.get('title')}｜{item.get('source')}{('｜' + str(item.get('as_of'))) if item.get('as_of') else ''}"
                         for item in event_evidence.get("items", [])[:3]
+                    ],
+                }
+            )
+        if workflow["workflow_id"] == "stock_analysis":
+            sections.append(
+                {
+                    "title": "个股位置与应对",
+                    "summary": "这一工作流更偏普通用户视角，先看位置、再看证据、最后决定是继续观察、控制风险还是等待更强确认。",
+                    "bullets": [
+                        f"当前价格位置判断：{'近端偏强' if price_snapshot and (price_snapshot.get('return_20d_pct') or 0) > 0 else '近端未显著走强'}",
+                        f"证据层建议：{self._assistant_confidence_from_evidence(evidence_bundle)} 级研究置信度下，先重证据再谈操作。",
+                        "若已有持仓，优先看风险位和证据缺口，不要只凭单一事件决定继续加仓。",
                     ],
                 }
             )

@@ -1740,6 +1740,7 @@ class QuantPlatformApiTests(unittest.TestCase):
         workflows = workflows_response.json()["data"]
         self.assertTrue(workflows["items"])
         self.assertTrue(workflows["desks"])
+        self.assertTrue(any(item["workflow_id"] == "stock_analysis" for item in workflows["items"]))
         self.assertEqual(200, analyze_response.status_code)
         data = analyze_response.json()["data"]
         self.assertEqual("金融助手", data["assistant_name"])
@@ -1767,6 +1768,27 @@ class QuantPlatformApiTests(unittest.TestCase):
 
         self.assertEqual(200, response.status_code)
         self.assertEqual("688655.SH", response.json()["data"]["target_symbol"])
+
+    def test_assistant_infers_stock_analysis_workflow_for_retail_style_question(self) -> None:
+        client = self._build_client()
+        self._login(client)
+
+        response = client.post(
+            "/api/v1/assistant/analyze",
+            json={
+                "query": "请帮我分析 600619.SH 这个股票现在处于什么位置，应该止损还是继续持有？",
+                "workflow_id": "market_map",
+                "target_symbol": "",
+                "market_scope": "cn_equity",
+                "research_depth": "standard",
+                "current_module": "assistant",
+            },
+        )
+
+        self.assertEqual(200, response.status_code)
+        data = response.json()["data"]
+        self.assertEqual("stock_analysis", data["workflow_id"])
+        self.assertEqual("个股研究", data["workflow_title"])
 
     def test_assistant_adds_internal_evidence_bundle_when_market_data_available(self) -> None:
         class StubBar:
@@ -1916,6 +1938,96 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertEqual("announcement", data["evidence_bundle"]["event_evidence"]["items"][0]["event_type"])
         self.assertTrue(any(item["label"] == "announcement" for item in data["evidence_refs"]))
         self.assertTrue(any(section["title"] == "近端事件与公告" for section in data["report_sections"]))
+
+    @patch("quant_platform_api.services.httpx.Client")
+    def test_assistant_filters_event_evidence_by_source_whitelist_and_recency(self, client_mock) -> None:
+        class StubBar:
+            def __init__(self, **kwargs):
+                self.__dict__.update(kwargs)
+
+        class StubMarketDataService:
+            def load_daily_bars(self, **kwargs):
+                return (
+                    [
+                        StubBar(
+                            ts_code="600619.SH",
+                            trade_date=datetime(2026, 4, 11).date(),
+                            open=10.2,
+                            high=10.6,
+                            low=10.0,
+                            close=10.4,
+                            volume=1200,
+                            amount=11000,
+                            data_source="stub",
+                        ),
+                    ],
+                    {"provider": "stub_feed"},
+                )
+
+            def load_daily_basic_snapshot(self, **kwargs):
+                return None, {"provider": "stub_feed"}
+
+            def load_financial_quality_snapshot(self, **kwargs):
+                return None, {"provider": "stub_feed"}
+
+        post_response = Mock()
+        post_response.raise_for_status.return_value = None
+        post_response.json.return_value = {
+            "output_text": json.dumps(
+                {
+                    "event_items": [
+                        {
+                            "title": "旧闻",
+                            "source": "上海证券交易所公告",
+                            "as_of": "2025-01-10",
+                            "event_type": "announcement",
+                            "impact": "过旧",
+                            "why_it_matters": "无",
+                        },
+                        {
+                            "title": "来源不可信",
+                            "source": "某论坛传闻",
+                            "as_of": "2026-04-10",
+                            "event_type": "news",
+                            "impact": "不可信",
+                            "why_it_matters": "无",
+                        },
+                    ],
+                    "warnings": [],
+                },
+                ensure_ascii=False,
+            )
+        }
+
+        http_client = Mock()
+        http_client.post.return_value = post_response
+        http_client.stream.side_effect = RuntimeError("skip llm stream")
+        http_context = Mock()
+        http_context.__enter__ = Mock(return_value=http_client)
+        http_context.__exit__ = Mock(return_value=None)
+        client_mock.return_value = http_context
+
+        service = FinancialAssistantService(
+            Settings(
+                llm_base_url="https://ark.cn-beijing.volces.com/api/v3",
+                llm_api_key="sk-test",
+                llm_model_mentor="deepseek-v3-2-251201",
+            ),
+            market_data_service=StubMarketDataService(),
+        )
+        data = service.analyze(
+            AssistantResearchRequest(
+                query="请深度研究600619.SH这个个股。",
+                workflow_id="company_deep_dive",
+                target_symbol="600619.SH",
+                market_scope="cn_equity",
+                research_depth="deep",
+                current_module="assistant",
+            )
+        )
+
+        self.assertEqual("unavailable", data["evidence_bundle"]["event_evidence"]["status"])
+        self.assertFalse(data["evidence_bundle"]["event_evidence"]["items"])
 
     @patch("quant_platform_api.services.httpx.Client")
     def test_mentor_can_use_llm_answer_when_configured(self, client_mock) -> None:
