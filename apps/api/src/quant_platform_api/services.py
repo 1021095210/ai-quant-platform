@@ -5770,6 +5770,16 @@ class FinancialAssistantService(MentorService):
             related_modules.insert(0, {"label": "指标设置", "path": "/indicators", "reason": "从指标和因子层补研究抓手"})
         if workflow_id == "stock_analysis":
             related_modules.insert(0, {"label": "交易复盘", "path": "/replay", "reason": "如果已有真实交易，可继续复盘验证买卖节奏"})
+        event_evidence = evidence_bundle.get("event_evidence") or {}
+        retail_guidance = self._build_stock_analysis_guidance(evidence_bundle) if workflow_id == "stock_analysis" else None
+        debate = self._assistant_link_event_evidence_to_debate(
+            debate=debate,
+            event_evidence=event_evidence,
+        )
+        risk_checklist = self._assistant_link_event_evidence_to_risk_checklist(
+            checklist=risk_checklist,
+            event_evidence=event_evidence,
+        )
         return {
             "executive_summary": summary_map.get(workflow_id, summary_map["market_map"]),
             "confidence_label": self._assistant_confidence_from_evidence(evidence_bundle),
@@ -5786,6 +5796,7 @@ class FinancialAssistantService(MentorService):
             "deliverables": workflow["deliverables"],
             "next_actions": next_actions,
             "related_modules": related_modules,
+            "retail_guidance": retail_guidance,
         }
 
     def _answer_with_assistant_llm(
@@ -5810,13 +5821,14 @@ class FinancialAssistantService(MentorService):
             "请只基于用户问题、平台给出的证据包和明确可见的市场制度边界输出，不要编造新闻、财务或价格事实。"
             "如果证据不足，就明确说证据不足，不要假装实时掌握外部信息。"
             "请用中文输出结构化研究结果，不要写成泛泛聊天。"
-            "输出必须是 JSON，对象字段固定为：executive_summary、confidence_label、evidence_gap_note、report_sections、evidence_refs、desk_briefs、debate、risk_checklist、deliverables、next_actions、related_modules。"
+            "输出必须是 JSON，对象字段固定为：executive_summary、confidence_label、evidence_gap_note、report_sections、evidence_refs、desk_briefs、debate、risk_checklist、deliverables、next_actions、related_modules、retail_guidance。"
             "report_sections 是 3 到 5 个对象数组，每个对象含 title、summary、bullets。"
             "evidence_refs 是 1 到 6 个对象数组，每个对象含 label、source、as_of、detail。"
             "desk_briefs 是 3 到 4 个对象数组，每个对象含 desk、title、summary。"
             "debate 是 2 个对象数组，每个对象含 side、view。"
             "risk_checklist、deliverables、next_actions 都是中文字符串数组。"
             "related_modules 是对象数组，每个对象含 label、path、reason，路径仅限 /strategy /backtests /rules /indicators /replay /mentor /workspace。"
+            "retail_guidance 是对象，字段固定为 action_label、summary、bullets；只有个股研究工作流需要填充，其他工作流可返回 null。"
             "请优先给简洁、可执行、少废话但有依据的结果。"
         )
         prompt_payload = {
@@ -5832,6 +5844,7 @@ class FinancialAssistantService(MentorService):
                 "executive_summary": fallback["executive_summary"],
                 "deliverables": fallback["deliverables"],
                 "risk_checklist": fallback["risk_checklist"],
+                "retail_guidance": fallback.get("retail_guidance"),
             },
         }
         request_payload = {
@@ -5885,6 +5898,7 @@ class FinancialAssistantService(MentorService):
             "deliverables": self._normalize_string_list(parsed.get("deliverables") or fallback["deliverables"]),
             "next_actions": self._normalize_string_list(parsed.get("next_actions") or fallback["next_actions"]),
             "related_modules": self._normalize_related_modules(parsed.get("related_modules") or fallback["related_modules"]),
+            "retail_guidance": self._normalize_retail_guidance(parsed.get("retail_guidance") or fallback.get("retail_guidance")),
             "llm_profile": runtime["profile_id"],
             "llm_profile_label": runtime["label"],
         }
@@ -6122,7 +6136,9 @@ class FinancialAssistantService(MentorService):
             elif title and source:
                 result["warnings"].append(f"已忽略未通过白名单或时效校验的事件来源：{source}")
         result["items"] = items
-        result["warnings"] = [str(item).strip() for item in parsed.get("warnings", []) if str(item).strip()]
+        result["warnings"].extend(
+            [str(item).strip() for item in parsed.get("warnings", []) if str(item).strip()]
+        )
         result["status"] = "ready" if items else "unavailable"
         return result
 
@@ -6137,7 +6153,13 @@ class FinancialAssistantService(MentorService):
         normalized = source.strip()
         if not normalized:
             return False
-        allowed_keywords = [
+        allowed_keywords = self._assistant_event_source_keywords()
+        return any(keyword in normalized for keyword in allowed_keywords)
+
+    def _assistant_event_source_keywords(self) -> list[str]:
+        raw = str(self._settings.assistant_event_source_whitelist or "").strip()
+        keywords = [item.strip() for item in raw.split(",") if item.strip()]
+        return keywords or [
             "上海证券交易所",
             "深圳证券交易所",
             "上交所",
@@ -6151,7 +6173,6 @@ class FinancialAssistantService(MentorService):
             "中国基金报",
             "公司公告",
         ]
-        return any(keyword in normalized for keyword in allowed_keywords)
 
     def _assistant_event_is_recent(self, as_of: str) -> bool:
         normalized = (as_of or "").strip()
@@ -6251,14 +6272,15 @@ class FinancialAssistantService(MentorService):
                 }
             )
         if workflow["workflow_id"] == "stock_analysis":
+            guidance = self._build_stock_analysis_guidance(evidence_bundle)
             sections.append(
                 {
                     "title": "个股位置与应对",
-                    "summary": "这一工作流更偏普通用户视角，先看位置、再看证据、最后决定是继续观察、控制风险还是等待更强确认。",
+                    "summary": guidance["summary"],
                     "bullets": [
                         f"当前价格位置判断：{'近端偏强' if price_snapshot and (price_snapshot.get('return_20d_pct') or 0) > 0 else '近端未显著走强'}",
                         f"证据层建议：{self._assistant_confidence_from_evidence(evidence_bundle)} 级研究置信度下，先重证据再谈操作。",
-                        "若已有持仓，优先看风险位和证据缺口，不要只凭单一事件决定继续加仓。",
+                        *guidance["bullets"][:2],
                     ],
                 }
             )
@@ -6273,6 +6295,91 @@ class FinancialAssistantService(MentorService):
             }
         )
         return sections[:5]
+
+    def _build_stock_analysis_guidance(self, evidence_bundle: dict[str, Any]) -> dict[str, Any]:
+        price_snapshot = evidence_bundle.get("price_snapshot") or {}
+        coverage = evidence_bundle.get("coverage_summary") or {}
+        missing_sections = coverage.get("missing_sections") or []
+        confidence_label = self._assistant_confidence_from_evidence(evidence_bundle)
+        event_items = ((evidence_bundle.get("event_evidence") or {}).get("items") or [])
+        return_20d = float(price_snapshot.get("return_20d_pct") or 0.0)
+        day_change = float(price_snapshot.get("day_change_pct") or 0.0)
+
+        action_label = "等待确认"
+        summary = "当前更适合先等待证据进一步确认，再决定是否行动。"
+        bullets = [
+            "如果还没有形成完整证据链，不要把单一价格波动当成买入依据。",
+            "先看价格位置、财务质量和近端事件是否互相印证，再决定下一步。",
+            "若已有持仓，优先设好风险位和退出条件。",
+        ]
+
+        if not price_snapshot:
+            return {
+                "action_label": action_label,
+                "summary": summary,
+                "bullets": bullets,
+            }
+        if confidence_label == "中高" and return_20d > 0 and day_change > -3:
+            action_label = "继续观察"
+            summary = "当前位置并非明显失真，更适合继续观察关键位和证据变化，而不是仓促下结论。"
+            bullets = [
+                "近端价格位置仍偏强，但应继续跟踪成交承接和事件兑现，而不是只看涨跌。",
+                "若准备介入，先等证据包里的价格、财务和事件三层继续互相印证。",
+                "若已有持仓，优先按计划观察而不是追着价格加码。",
+            ]
+        if confidence_label in {"很低", "偏低"} or return_20d < -8 or ("event_news" in missing_sections and "financial_quality" in missing_sections):
+            action_label = "控制风险"
+            summary = "当前位置证据不足或价格承压，更适合先控制风险，再决定是否继续观察。"
+            bullets = [
+                "如果核心证据不完整或趋势明显转弱，应优先控制回撤和仓位暴露。",
+                "没有新的高质量事件或财务证据前，不宜把短期反弹直接当成反转。",
+                "若已有持仓，先定义风险位，再决定是否继续持有。",
+            ]
+        if event_items and action_label != "控制风险":
+            latest = event_items[0]
+            bullets[0] = f"先跟踪近端线索「{latest.get('title')}」是否得到正式公告或后续数据确认。"
+        return {
+            "action_label": action_label,
+            "summary": summary,
+            "bullets": bullets[:3],
+        }
+
+    def _assistant_link_event_evidence_to_debate(
+        self,
+        *,
+        debate: list[dict[str, str]],
+        event_evidence: dict[str, Any],
+    ) -> list[dict[str, str]]:
+        items = list(debate)
+        event_items = (event_evidence.get("items") or [])[:1]
+        if not event_items:
+            return items[:3]
+        event = event_items[0]
+        title = str(event.get("title") or "近端事件").strip()
+        source = str(event.get("source") or "").strip()
+        items.append(
+            {
+                "side": "事件验证",
+                "view": f"{title}（{source or '待确认来源'}）可作为研究线索，但必须继续验证它是否真的传导到业绩、估值或价格承接。",
+            }
+        )
+        return items[:3]
+
+    def _assistant_link_event_evidence_to_risk_checklist(
+        self,
+        *,
+        checklist: list[str],
+        event_evidence: dict[str, Any],
+    ) -> list[str]:
+        items = list(checklist)
+        for event in (event_evidence.get("items") or [])[:2]:
+            title = str(event.get("title") or "近端事件").strip()
+            source = str(event.get("source") or "").strip()
+            as_of = str(event.get("as_of") or "").strip()
+            items.append(
+                f"近端事件「{title}」来源 {source or '待确认'}{f'，日期 {as_of}' if as_of else ''}，需要继续核对正式公告和后续兑现路径。"
+            )
+        return items[:6]
 
     def _normalize_assistant_desks(self, value: Any) -> list[dict[str, str]]:
         if not isinstance(value, list):
@@ -6334,6 +6441,20 @@ class FinancialAssistantService(MentorService):
             if label and source and detail:
                 items.append({"label": label, "source": source, "as_of": as_of, "detail": detail})
         return items
+
+    def _normalize_retail_guidance(self, value: Any) -> dict[str, Any] | None:
+        if not isinstance(value, dict):
+            return None
+        action_label = str(value.get("action_label", "")).strip()
+        summary = str(value.get("summary", "")).strip()
+        bullets = [str(item).strip() for item in value.get("bullets", []) if str(item).strip()][:4]
+        if not action_label and not summary and not bullets:
+            return None
+        return {
+            "action_label": action_label or "等待确认",
+            "summary": summary or "当前更适合先等待更多证据确认。",
+            "bullets": bullets,
+        }
 
     def _extract_responses_content(self, response: httpx.Response) -> str:
         payload = response.json()

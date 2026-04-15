@@ -32,6 +32,10 @@ class Settings:
     llm_volcengine_base_url: str = "https://ark.cn-beijing.volces.com/api/v3"
     llm_volcengine_api_key: str = ""
     llm_volcengine_model: str = "deepseek-v3-2-251201"
+    assistant_event_source_whitelist: str = (
+        "上海证券交易所,深圳证券交易所,上交所,深交所,巨潮资讯,"
+        "中国证券报,证券时报,证券日报,证券之星,财联社,中国基金报,公司公告"
+    )
     allowed_llm_export_fields: str = "symbol,side,entry_time,exit_time,pnl,feature_snapshot"
     backtest_engine_version: str = "engine_v1"
     strategy_prompt_version: str = "v1"
@@ -126,6 +130,10 @@ class Settings:
             llm_volcengine_model=os.getenv(
                 "LLM_VOLCENGINE_MODEL",
                 os.getenv("ARK_MODEL", defaults.llm_volcengine_model),
+            ),
+            assistant_event_source_whitelist=os.getenv(
+                "ASSISTANT_EVENT_SOURCE_WHITELIST",
+                defaults.assistant_event_source_whitelist,
             ),
             allowed_llm_export_fields=os.getenv(
                 "ALLOWED_LLM_EXPORT_FIELDS",

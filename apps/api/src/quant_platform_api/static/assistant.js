@@ -235,6 +235,7 @@ function renderResearch(payload) {
   const evidenceWarnings = Array.isArray(evidence.warnings) ? evidence.warnings : [];
   const evidenceRefs = Array.isArray(payload.evidence_refs) ? payload.evidence_refs : [];
   const reportSections = Array.isArray(payload.report_sections) ? payload.report_sections : [];
+  const retailGuidance = payload.retail_guidance || null;
   nodes.summary.innerHTML = `
     <div class="list-item mentor-answer-card">
       <strong>${payload.workflow_title}</strong>
@@ -242,6 +243,21 @@ function renderResearch(payload) {
       <div class="muted-note">${payload.executive_summary}</div>
       ${payload.evidence_gap_note ? `<div class="muted-note" style="margin-top:8px;">证据边界：${payload.evidence_gap_note}</div>` : ""}
     </div>
+    ${
+      retailGuidance
+        ? `
+    <div class="list-item mentor-answer-card">
+      <strong>普通用户研判</strong>
+      <div class="muted-note">当前更适合：${retailGuidance.action_label || "等待确认"}</div>
+      <div class="muted-note">${retailGuidance.summary || ""}</div>
+      ${
+        Array.isArray(retailGuidance.bullets) && retailGuidance.bullets.length
+          ? `<ul class="mentor-step-list">${retailGuidance.bullets.map((item) => `<li>${item}</li>`).join("")}</ul>`
+          : ""
+      }
+    </div>`
+        : ""
+    }
     <div class="list-item mentor-answer-card">
       <strong>长报告</strong>
       <div class="assistant-desk-results">
