@@ -254,6 +254,7 @@ async function recognizeScreenshotTrade() {
 }
 
 function applyScreenshotOcrResult(data) {
+  applySourceMode("screenshot");
   state.pendingScreenshotRecords = (data.detected_records || []).map((item) => ({
     symbol: item.symbol,
     side: item.side,
@@ -311,6 +312,7 @@ function applyScreenshotOcrResult(data) {
       ? "截图 OCR 识别完成，可将批量识别结果加入手动记录。"
       : "截图 OCR 识别完成，请确认识别结果后再登记成交记录。"
   );
+  nodes.screenshotOcrSummary?.scrollIntoView({ behavior: "smooth", block: "center" });
 }
 
 function importScreenshotRecordsToManualList() {
@@ -382,6 +384,7 @@ async function parseManualText() {
 }
 
 function applyManualParseResult(result) {
+  applySourceMode("manual");
   const items = result.records || [];
   state.manualTrades.push(...items.map((item) => ({
     symbol: item.symbol,
@@ -400,6 +403,7 @@ function applyManualParseResult(result) {
   syncReplayActionState();
   setInlineStatus(nodes.manualInlineStatus, result.summary || "长文字智能识别完成，已加入手动记录。", "success");
   setStatus(result.summary || "长文字智能识别完成，已加入手动记录。");
+  nodes.manualParseSummary?.scrollIntoView({ behavior: "smooth", block: "center" });
 }
 
 function renderManualParseSummary(result) {
@@ -599,6 +603,8 @@ function renderParseTaskCenter() {
         return;
       }
       try {
+        node.disabled = true;
+        node.textContent = "正在打开...";
         const payload = await api(taskUrl);
         if (taskKind === "trade_screenshot_ocr") {
           applyScreenshotOcrResult(payload.data);
@@ -609,6 +615,9 @@ function renderParseTaskCenter() {
         }
       } catch (error) {
         setStatus(error.message);
+      } finally {
+        node.disabled = false;
+        node.textContent = "打开结果";
       }
     });
   });

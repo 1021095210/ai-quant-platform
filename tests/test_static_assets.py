@@ -199,6 +199,8 @@ class StaticAssetTests(unittest.TestCase):
         self.assertIn(".bounded-scroll-xl", theme_css)
         self.assertIn("replay-delete-parse-task-btn", replay_js)
         self.assertIn("buildTaskDeleteUrl", replay_js)
+        self.assertIn('node.textContent = "正在打开..."', replay_js)
+        self.assertIn("scrollIntoView", replay_js)
 
     def test_replay_assets_include_beginner_friendly_replay_sections(self) -> None:
         replay_js = (
