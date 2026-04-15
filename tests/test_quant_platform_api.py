@@ -1794,6 +1794,51 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertIn("risk_level", data["retail_guidance"])
         self.assertIn("observation_focus", data["retail_guidance"])
         self.assertIn("confirmation_condition", data["retail_guidance"])
+        self.assertIn("risk_trigger", data["retail_guidance"])
+        self.assertIn("observation_level", data["retail_guidance"])
+
+    def test_assistant_infers_stock_analysis_for_generic_single_stock_question(self) -> None:
+        client = self._build_client()
+        self._login(client)
+
+        response = client.post(
+            "/api/v1/assistant/analyze",
+            json={
+                "query": "请帮我分析600619这只股票",
+                "workflow_id": "market_map",
+                "target_symbol": "",
+                "market_scope": "cn_equity",
+                "research_depth": "standard",
+                "current_module": "assistant",
+            },
+        )
+
+        self.assertEqual(200, response.status_code)
+        data = response.json()["data"]
+        self.assertEqual("600619.SH", data["target_symbol"])
+        self.assertEqual("stock_analysis", data["workflow_id"])
+        self.assertEqual("个股研究", data["workflow_title"])
+
+    def test_assistant_keeps_company_deep_dive_for_explicit_deep_research_intent(self) -> None:
+        client = self._build_client()
+        self._login(client)
+
+        response = client.post(
+            "/api/v1/assistant/analyze",
+            json={
+                "query": "请深度研究600619这只股票的盈利驱动、估值和催化剂",
+                "workflow_id": "market_map",
+                "target_symbol": "",
+                "market_scope": "cn_equity",
+                "research_depth": "standard",
+                "current_module": "assistant",
+            },
+        )
+
+        self.assertEqual(200, response.status_code)
+        data = response.json()["data"]
+        self.assertEqual("600619.SH", data["target_symbol"])
+        self.assertEqual("company_deep_dive", data["workflow_id"])
 
     def test_assistant_adds_internal_evidence_bundle_when_market_data_available(self) -> None:
         class StubBar:
@@ -1913,6 +1958,8 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertEqual("中等", data["retail_guidance"]["risk_level"])
         self.assertTrue(data["retail_guidance"]["observation_focus"])
         self.assertTrue(data["retail_guidance"]["confirmation_condition"])
+        self.assertTrue(data["retail_guidance"]["risk_trigger"])
+        self.assertTrue(data["retail_guidance"]["observation_level"])
         self.assertTrue(any(section["title"] == "个股位置与应对" for section in data["report_sections"]))
 
     @patch("quant_platform_api.services.httpx.Client")
@@ -1996,6 +2043,7 @@ class QuantPlatformApiTests(unittest.TestCase):
 
         self.assertEqual("ready", data["evidence_bundle"]["event_evidence"]["status"])
         self.assertEqual("announcement", data["evidence_bundle"]["event_evidence"]["items"][0]["event_type"])
+        self.assertEqual("https://www.sse.com.cn/", data["evidence_bundle"]["event_evidence"]["items"][0]["source_url"])
         self.assertTrue(any(item["label"] == "announcement" for item in data["evidence_refs"]))
         self.assertTrue(any(section["title"] == "近端事件与公告" for section in data["report_sections"]))
 

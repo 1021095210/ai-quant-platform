@@ -259,7 +259,12 @@ function renderResearch(payload) {
         <div class="assistant-desk-result">
           <span>风险等级</span>
           <strong>${retailGuidance.risk_level || "中等"}</strong>
-          <div class="muted-note">${retailGuidance.observation_focus || "先继续观察价格、证据和事件是否能互相印证。"}</div>
+          <div class="muted-note">${retailGuidance.risk_trigger || "如果价格继续走弱且证据没有改善，应先控制风险。"}</div>
+        </div>
+        <div class="assistant-desk-result">
+          <span>观察位</span>
+          <strong>先盯关键变化</strong>
+          <div class="muted-note">${retailGuidance.observation_level || retailGuidance.observation_focus || "先继续观察价格、证据和事件是否能互相印证。"}</div>
         </div>
         <div class="assistant-desk-result">
           <span>再确认条件</span>
@@ -353,6 +358,11 @@ function renderResearch(payload) {
                               ? `<div class="muted-note">${[item.impact, item.why_it_matters].filter(Boolean).join(" · ")}</div>`
                               : ""
                           }
+                          ${
+                            item.source_url
+                              ? `<div class="muted-note"><a href="${item.source_url}" target="_blank" rel="noreferrer">查看来源站点</a></div>`
+                              : ""
+                          }
                         </div>
                       `,
                     )
@@ -365,9 +375,22 @@ function renderResearch(payload) {
       ${evidenceWarnings.length ? `<div class="muted-note" style="margin-top:10px;">${evidenceWarnings.map((item) => `- ${item}`).join("<br>")}</div>` : ""}
       ${
         evidenceRefs.length
-          ? `<div class="muted-note" style="margin-top:10px;">${evidenceRefs
-              .map((item) => `- ${item.label}｜${item.source}${item.as_of ? `｜${item.as_of}` : ""}｜${item.detail}`)
-              .join("<br>")}</div>`
+          ? `<div class="assistant-evidence-ref-list" style="margin-top:10px;">${evidenceRefs
+              .map(
+                (item) => `
+                  <div class="assistant-evidence-ref-item">
+                    <strong>${item.label}</strong>
+                    <div class="muted-note">${item.source || "-"}${item.as_of ? ` · ${item.as_of}` : ""}</div>
+                    <div class="muted-note">${item.detail || ""}</div>
+                    ${
+                      item.source_url
+                        ? `<div class="muted-note"><a href="${item.source_url}" target="_blank" rel="noreferrer">查看来源站点</a></div>`
+                        : ""
+                    }
+                  </div>
+                `,
+              )
+              .join("")}</div>`
           : ""
       }
     </div>

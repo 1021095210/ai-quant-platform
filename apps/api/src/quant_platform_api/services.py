@@ -5688,10 +5688,23 @@ class FinancialAssistantService(MentorService):
             "位置",
             "风险位",
         ]
+        deep_dive_keywords = [
+            "深度研究",
+            "公司深研",
+            "盈利驱动",
+            "估值",
+            "财报",
+            "预期差",
+            "催化剂",
+            "商业模式",
+            "现金流",
+        ]
         if any(keyword in query for keyword in retail_keywords) or any(keyword in lowered for keyword in ["buy", "hold", "stop loss", "position"]):
             return "stock_analysis"
         if requested == "market_map":
-            return "company_deep_dive"
+            if any(keyword in query for keyword in deep_dive_keywords):
+                return "company_deep_dive"
+            return "stock_analysis"
         return requested
 
     def _workflow_steps_for(self, workflow_id: str) -> list[str]:
@@ -6020,6 +6033,7 @@ class FinancialAssistantService(MentorService):
                     "source": item.get("source") or "external_search",
                     "as_of": item.get("as_of") or "",
                     "detail": item.get("title") or item.get("impact") or "",
+                    "source_url": item.get("source_url") or "",
                 }
             )
         if event_evidence.get("status") == "ready":
@@ -6127,6 +6141,7 @@ class FinancialAssistantService(MentorService):
                     {
                         "title": title,
                         "source": source,
+                        "source_url": self._assistant_event_source_url(source),
                         "as_of": as_of,
                         "event_type": event_type,
                         "impact": impact,
@@ -6173,6 +6188,26 @@ class FinancialAssistantService(MentorService):
             "中国基金报",
             "公司公告",
         ]
+
+    def _assistant_event_source_url(self, source: str) -> str:
+        normalized = source.strip()
+        mapping = [
+            (("上海证券交易所", "上交所"), "https://www.sse.com.cn/"),
+            (("深圳证券交易所", "深交所"), "https://www.szse.cn/"),
+            (("巨潮资讯",), "https://www.cninfo.com.cn/"),
+            (("中国证券报",), "https://www.cs.com.cn/"),
+            (("证券时报",), "https://www.stcn.com/"),
+            (("证券日报",), "https://www.zqrb.cn/"),
+            (("证券之星",), "https://stock.stockstar.com/"),
+            (("财联社",), "https://www.cls.cn/"),
+            (("中国基金报",), "https://www.chnfund.com/"),
+            (("公司公告",), "https://www.cninfo.com.cn/"),
+            (("新华财经",), "https://www.cnfin.com/"),
+        ]
+        for keywords, url in mapping:
+            if any(keyword in normalized for keyword in keywords):
+                return url
+        return ""
 
     def _assistant_event_is_recent(self, as_of: str) -> bool:
         normalized = (as_of or "").strip()
@@ -6304,6 +6339,7 @@ class FinancialAssistantService(MentorService):
         event_items = ((evidence_bundle.get("event_evidence") or {}).get("items") or [])
         return_20d = float(price_snapshot.get("return_20d_pct") or 0.0)
         day_change = float(price_snapshot.get("day_change_pct") or 0.0)
+        close_price = float(price_snapshot.get("close") or 0.0)
 
         action_label = "等待确认"
         summary = "当前更适合先等待证据进一步确认，再决定是否行动。"
@@ -6315,6 +6351,8 @@ class FinancialAssistantService(MentorService):
         risk_level = "中等"
         observation_focus = "先看价格位置、财务质量和近端事件是否能互相印证。"
         confirmation_condition = "至少补齐一层关键证据后，再决定是否继续行动。"
+        risk_trigger = "如果后续价格继续转弱且证据没有改善，应先控制风险。"
+        observation_level = "优先看当前位置是否能继续稳住，而不是只看单日波动。"
 
         if not price_snapshot:
             return {
@@ -6324,6 +6362,8 @@ class FinancialAssistantService(MentorService):
                 "risk_level": risk_level,
                 "observation_focus": observation_focus,
                 "confirmation_condition": confirmation_condition,
+                "risk_trigger": risk_trigger,
+                "observation_level": observation_level,
             }
         if confidence_label == "中高" and return_20d > 0 and day_change > -3:
             action_label = "继续观察"
@@ -6336,6 +6376,8 @@ class FinancialAssistantService(MentorService):
             risk_level = "中等"
             observation_focus = "重点观察价格承接、近端事件兑现和基本面证据是否继续站得住。"
             confirmation_condition = "若价格位置仍稳、事件继续兑现、且证据覆盖维持中高，再考虑进一步行动。"
+            observation_level = f"优先观察收盘价能否继续站稳在 {close_price:.2f} 附近并延续近端强势。"
+            risk_trigger = "若后续连续转弱、事件兑现落空或证据覆盖下降，应把观察切回防守。"
         if confidence_label in {"很低", "偏低"} or return_20d < -8 or ("event_news" in missing_sections and "financial_quality" in missing_sections):
             action_label = "控制风险"
             summary = "当前位置证据不足或价格承压，更适合先控制风险，再决定是否继续观察。"
@@ -6347,6 +6389,8 @@ class FinancialAssistantService(MentorService):
             risk_level = "较高"
             observation_focus = "先看风险位是否失守、趋势是否继续走弱，以及有没有新的高质量证据补上。"
             confirmation_condition = "只有在风险位企稳、趋势止跌且关键证据补齐后，才考虑从控制风险切回观察。"
+            observation_level = f"先观察价格能否在 {close_price:.2f} 一线附近止跌，而不是急着判断已经反转。"
+            risk_trigger = "如果价格继续走弱且没有新的高质量事件或财务证据，应继续控制风险。"
         if event_items and action_label != "控制风险":
             latest = event_items[0]
             bullets[0] = f"先跟踪近端线索「{latest.get('title')}」是否得到正式公告或后续数据确认。"
@@ -6359,6 +6403,8 @@ class FinancialAssistantService(MentorService):
             "risk_level": risk_level,
             "observation_focus": observation_focus,
             "confirmation_condition": confirmation_condition,
+            "risk_trigger": risk_trigger,
+            "observation_level": observation_level,
         }
 
     def _assistant_link_event_evidence_to_debate(
@@ -6468,6 +6514,8 @@ class FinancialAssistantService(MentorService):
         risk_level = str(value.get("risk_level", "")).strip()
         observation_focus = str(value.get("observation_focus", "")).strip()
         confirmation_condition = str(value.get("confirmation_condition", "")).strip()
+        risk_trigger = str(value.get("risk_trigger", "")).strip()
+        observation_level = str(value.get("observation_level", "")).strip()
         if not action_label and not summary and not bullets:
             return None
         return {
@@ -6477,6 +6525,8 @@ class FinancialAssistantService(MentorService):
             "risk_level": risk_level or "中等",
             "observation_focus": observation_focus or "先继续观察价格、证据和事件是否能互相印证。",
             "confirmation_condition": confirmation_condition or "等关键证据补齐后再决定下一步。",
+            "risk_trigger": risk_trigger or "如果价格继续走弱且证据没有改善，应先控制风险。",
+            "observation_level": observation_level or "优先看当前位置能否稳住，而不是只看单日波动。",
         }
 
     def _extract_responses_content(self, response: httpx.Response) -> str:
