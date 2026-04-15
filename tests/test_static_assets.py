@@ -311,6 +311,8 @@ class StaticAssetTests(unittest.TestCase):
         self.assertIn("validation_summary", replay_js)
         self.assertIn("buildManualParseValidationLines", replay_js)
         self.assertIn("/api/v1/trades/uploads/manual/parse-text-tasks", replay_js)
+        self.assertIn("/api/v1/trades/uploads/screenshot/ocr-tasks", replay_js)
+        self.assertIn("trade_screenshot_ocr", replay_js)
         self.assertIn("renderParseTaskCenter", replay_js)
         self.assertIn("验收摘要：", replay_js)
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -83,6 +84,7 @@ from quant_platform_api.services import (
     build_backtest_result,
     build_optimization_result,
     build_replay_result,
+    build_trade_screenshot_ocr_result,
     build_strategy_generation_result,
     build_trade_text_parse_result,
     list_llm_profiles,
@@ -1648,22 +1650,35 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get(f"{app_settings.api_prefix}/trades/uploads/manual/parse-text-tasks")
     def list_manual_trade_text_tasks(request: Request) -> JSONResponse:
         current_user = _require_current_user(request, services.auth_service)
-        records = services.trade_text_parse_service.list(
+        text_records = services.trade_text_parse_service.list(
             kind="trade_text_parse",
             user_id=current_user.user_id,
             workspace_id=current_user.workspace_id,
             limit=20,
         )
+        ocr_records = services.trade_text_parse_service.list(
+            kind="trade_screenshot_ocr",
+            user_id=current_user.user_id,
+            workspace_id=current_user.workspace_id,
+            limit=20,
+        )
+        records = sorted(
+            [*text_records, *ocr_records],
+            key=lambda item: item.created_at,
+            reverse=True,
+        )[:20]
         items = []
         for record in records:
             payload = record.payload or {}
             result = record.result or {}
             validation_summary = result.get("validation_summary") or {}
             chunk_summary = result.get("chunk_summary") or {}
+            task_kind = record.kind
             items.append(
                 {
                     "parse_task_id": record.id,
                     "task_id": record.id,
+                    "task_kind": task_kind,
                     "status": record.status.value,
                     "state": record.status.value,
                     "market": result.get("market") or payload.get("market", ""),
@@ -1675,7 +1690,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "summary": result.get("summary", ""),
                     "validation_readiness": validation_summary.get("validation_readiness", ""),
                     "sample_mode": validation_summary.get("sample_mode", ""),
-                    "status_url": f"{app_settings.api_prefix}/trades/uploads/manual/parse-text-tasks/{record.id}",
+                    "status_url": (
+                        f"{app_settings.api_prefix}/trades/uploads/screenshot/ocr-tasks/{record.id}"
+                        if task_kind == "trade_screenshot_ocr"
+                        else f"{app_settings.api_prefix}/trades/uploads/manual/parse-text-tasks/{record.id}"
+                    ),
                     "created_at": record.created_at.isoformat(),
                     "ended_at": record.finished_at.isoformat() if record.finished_at else None,
                 }
@@ -1757,6 +1776,61 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             market=market,
         )
         return _success_response(request, data=suggestion)
+
+    @app.post(f"{app_settings.api_prefix}/trades/uploads/screenshot/ocr-tasks")
+    async def create_trade_screenshot_ocr_task(
+        request: Request,
+        file: UploadFile = File(...),
+        market: str = Form("cn_equity"),
+    ) -> JSONResponse:
+        current_user = _require_current_user(request, services.auth_service)
+        content = await file.read()
+        payload_dict = {
+            "market": market,
+            "file_name": file.filename or "trade-screenshot.png",
+            "content_type": file.content_type or "image/png",
+            "file_content_b64": base64.b64encode(content).decode("utf-8"),
+            "user_id": current_user.user_id,
+            "workspace_id": current_user.workspace_id,
+        }
+        record = services.trade_text_parse_service.submit(
+            kind="trade_screenshot_ocr",
+            payload=payload_dict,
+            build_result=build_trade_screenshot_ocr_result(services.trade_upload_service),
+            request_id=request.state.request_id,
+            user_id=current_user.user_id,
+            workspace_id=current_user.workspace_id,
+            idempotency_key=request.headers.get("Idempotency-Key"),
+        )
+        return _success_response(
+            request,
+            data={
+                "ocr_task_id": record.id,
+                "task_id": record.id,
+                "status": record.status.value,
+                "state": record.status.value,
+                "progress_pct": record.progress_pct,
+                "config_revision": record.config_revision,
+                "status_url": f"{app_settings.api_prefix}/trades/uploads/screenshot/ocr-tasks/{record.id}",
+                "result_url": f"{app_settings.api_prefix}/trades/uploads/screenshot/ocr-tasks/{record.id}",
+            },
+            status_code=status.HTTP_202_ACCEPTED,
+        )
+
+    @app.get(f"{app_settings.api_prefix}/trades/uploads/screenshot/ocr-tasks/{{ocr_task_id}}")
+    def get_trade_screenshot_ocr_task(
+        request: Request,
+        ocr_task_id: str,
+    ) -> JSONResponse:
+        current_user = _require_current_user(request, services.auth_service)
+        record = _require_task(
+            services.trade_text_parse_service.get(
+                ocr_task_id,
+                user_id=current_user.user_id,
+                workspace_id=current_user.workspace_id,
+            )
+        )
+        return _success_response(request, data=_serialize_task(record, "ocr_task_id"))
 
     @app.post(f"{app_settings.api_prefix}/trades/uploads/{{upload_id}}/parse")
     def parse_trade_upload(

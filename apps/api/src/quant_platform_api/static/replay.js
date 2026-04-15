@@ -22,6 +22,7 @@ const state = {
   objectiveVersions: [],
   selectedObjective: "sharpe_max",
   pendingParseTaskId: null,
+  pendingScreenshotOcrTaskId: null,
   pendingReplayTaskId: null,
   parseTaskCenterItems: [],
 };
@@ -213,15 +214,32 @@ async function recognizeScreenshotTrade() {
   if (!file) {
     throw new Error("请先选择成交截图。");
   }
-  setStatus("正在识别截图中的日期、代码和方向...");
+  setStatus("正在后台识别截图中的日期、代码和方向...");
   const formData = new FormData();
   formData.append("file", file);
   formData.append("market", nodes.screenshotMarket.value);
-  const payload = await api("/api/v1/trades/uploads/screenshot/ocr", {
+  const created = await api("/api/v1/trades/uploads/screenshot/ocr-tasks", {
     method: "POST",
     body: formData,
   });
-  const data = payload.data;
+  state.pendingScreenshotOcrTaskId = created.data.task_id;
+  registerBackgroundTask({
+    task_id: created.data.task_id,
+    status_url: created.data.status_url,
+    label: "成交截图 OCR",
+    module: "trade_screenshot_ocr",
+    queued_message: "截图识别已转入后台，你可以先去使用其他模块。",
+    success_message: "成交截图识别已完成。",
+    failure_message: "成交截图识别失败。",
+  });
+  loadParseTaskCenter().catch(() => {});
+  nodes.screenshotOcrSummary.textContent =
+    "截图识别已转入后台处理，完成后会自动提醒你，也可以在下方“后台解析任务”里重新打开结果。";
+  syncReplayActionState();
+  return;
+}
+
+function applyScreenshotOcrResult(data) {
   state.pendingScreenshotRecords = (data.detected_records || []).map((item) => ({
     symbol: item.symbol,
     side: item.side,
@@ -479,12 +497,12 @@ function renderParseTaskCenter() {
     .map(
       (item) => `
         <div class="list-item compact-item">
-          <strong>长文字识别 · ${formatTaskStatus(item.status)}</strong>
+          <strong>${item.task_kind === "trade_screenshot_ocr" ? "截图 OCR" : "长文字识别"} · ${formatTaskStatus(item.status)}</strong>
           <div class="muted-note">市场 ${item.market || "-"} · 日期块 ${item.group_count || 0} · 记录 ${item.record_count || 0} · 分块 ${item.chunk_count || 1}</div>
           <div class="muted-note">${item.summary || "任务完成后会在这里显示结果摘要。"} </div>
           <div class="muted-note">验收状态：${item.validation_readiness || "-"}</div>
           <div class="actions" style="margin-top:10px;">
-            <button class="btn ghost replay-open-parse-task-btn" type="button" data-task-id="${item.parse_task_id}" ${item.status === "succeeded" ? "" : "disabled"}>打开结果</button>
+            <button class="btn ghost replay-open-parse-task-btn" type="button" data-task-url="${item.status_url}" data-task-kind="${item.task_kind || "trade_text_parse"}" ${item.status === "succeeded" ? "" : "disabled"}>打开结果</button>
           </div>
         </div>
       `,
@@ -492,14 +510,20 @@ function renderParseTaskCenter() {
     .join("");
   nodes.parseTaskCenter.querySelectorAll(".replay-open-parse-task-btn").forEach((node) => {
     node.addEventListener("click", async () => {
-      const taskId = node.dataset.taskId;
-      if (!taskId) {
+      const taskUrl = node.dataset.taskUrl;
+      const taskKind = node.dataset.taskKind || "trade_text_parse";
+      if (!taskUrl) {
         return;
       }
       try {
-        const payload = await api(`/api/v1/trades/uploads/manual/parse-text-tasks/${taskId}`);
-        applyManualParseResult(payload.data);
-        setStatus("已重新打开长文字识别结果。");
+        const payload = await api(taskUrl);
+        if (taskKind === "trade_screenshot_ocr") {
+          applyScreenshotOcrResult(payload.data);
+          setStatus("已重新打开截图识别结果。");
+        } else {
+          applyManualParseResult(payload.data);
+          setStatus("已重新打开长文字识别结果。");
+        }
       } catch (error) {
         setStatus(error.message);
       }
@@ -1855,6 +1879,22 @@ subscribeBackgroundTasks((task) => {
       );
       setStatus(task.data?.error?.message || task.error_message || "长文字识别失败。");
       state.pendingParseTaskId = null;
+      loadParseTaskCenter().catch(() => {});
+    }
+    return;
+  }
+  if (task.module === "trade_screenshot_ocr" && task.task_id === state.pendingScreenshotOcrTaskId) {
+    if (task.status === "succeeded" && task.data) {
+      applyScreenshotOcrResult(task.data);
+      state.pendingScreenshotOcrTaskId = null;
+      loadParseTaskCenter().catch(() => {});
+      return;
+    }
+    if (["failed", "canceled"].includes(task.status)) {
+      const message = task.data?.error?.message || task.error_message || "成交截图识别失败。";
+      nodes.screenshotOcrSummary.textContent = message;
+      setStatus(message);
+      state.pendingScreenshotOcrTaskId = null;
       loadParseTaskCenter().catch(() => {});
     }
     return;

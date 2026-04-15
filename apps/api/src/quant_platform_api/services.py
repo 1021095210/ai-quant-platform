@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 from concurrent.futures import ThreadPoolExecutor
 import csv
 from datetime import date, datetime, timedelta, timezone
@@ -6931,6 +6932,27 @@ def build_trade_text_parse_result(
             workspace_id=str(payload.get("workspace_id", "ws_default")),
         )
         result["parse_task_id"] = task_id
+        return result
+
+    return _builder
+
+
+def build_trade_screenshot_ocr_result(
+    trade_upload_service: TradeUploadService,
+) -> Callable[[str, dict[str, Any]], dict[str, Any]]:
+    def _builder(task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        encoded_content = str(payload.get("file_content_b64") or "")
+        if not encoded_content:
+            raise TaskExecutionError("INVALID_ARGUMENT", "截图内容为空，无法执行 OCR。")
+        try:
+            content = base64.b64decode(encoded_content.encode("utf-8"))
+        except Exception as exc:  # pragma: no cover - defensive
+            raise TaskExecutionError("INVALID_ARGUMENT", "截图内容损坏，无法执行 OCR。") from exc
+        result = trade_upload_service.recognize_trade_screenshot(
+            content=content,
+            market=str(payload.get("market", "cn_equity")),
+        )
+        result["ocr_task_id"] = task_id
         return result
 
     return _builder
