@@ -5407,10 +5407,29 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertIn("卖出规则：下跌 3% 止损卖出", data["records"][-1]["notes"])
 
     @patch("quant_platform_api.services.httpx.Client")
-    def test_manual_text_parse_skips_llm_for_large_grouped_text(self, client_mock) -> None:
+    def test_manual_text_parse_uses_llm_rule_hints_for_large_grouped_text(self, client_mock) -> None:
         class FakeMarketDataService:
             def load_daily_bars(self, **kwargs):
                 return [], {"provider": "cache", "fallback_reason": "sync_skipped_for_batch_parse"}
+
+        stream_response = Mock()
+        stream_response.iter_lines.return_value = [
+            'data: {"choices":[{"delta":{"content":"{\\"global_entry_rule\\":\\"当日开盘价买入\\",\\"global_exit_rule\\":\\"现价低于第二日或之后任何一日开盘价-0.5倍atr时卖出\\",\\"groups\\":[],\\"warnings\\":[\\"大批量文本已切换为规则语义理解模式，请人工确认卖出条件\\"]}"}}]}',
+            "data: [DONE]",
+        ]
+        stream_response.text = ""
+        stream_response.raise_for_status.return_value = None
+
+        stream_context = Mock()
+        stream_context.__enter__ = Mock(return_value=stream_response)
+        stream_context.__exit__ = Mock(return_value=None)
+
+        http_client = Mock()
+        http_client.stream.return_value = stream_context
+        http_context = Mock()
+        http_context.__enter__ = Mock(return_value=http_client)
+        http_context.__exit__ = Mock(return_value=None)
+        client_mock.return_value = http_context
 
         service = TradeUploadService(
             Mock(),
@@ -5427,7 +5446,7 @@ class QuantPlatformApiTests(unittest.TestCase):
                 f"2025-08-{day:02d}\n（2 只）：603590.SH, 002225.SZ"
                 for day in range(1, 10)
             ]
-        ) + "\n\n买入方式：当日开盘价买入\n卖出方式：价格低于买入后任何一天的开盘价-0.5倍atr时卖出"
+        ) + "\n\n买入方式：当日开盘价买入\n卖出方式：后面哪天盘中跌到开盘减半个atr就卖"
 
         result = service.parse_manual_trade_text(
             text=text,
@@ -5438,8 +5457,13 @@ class QuantPlatformApiTests(unittest.TestCase):
             workspace_id="ws_test",
         )
 
-        self.assertEqual("deterministic", result["parse_mode"])
-        client_mock.assert_not_called()
+        self.assertEqual("hybrid_llm", result["parse_mode"])
+        self.assertTrue(result["ai_review"]["used"])
+        self.assertIn("第二日或之后任一天开盘价", result["exit_rule"])
+        self.assertTrue(
+            all("第二日或之后任一天开盘价" in item["notes"] for item in result["records"])
+        )
+        client_mock.assert_called()
 
     def test_assistant_endpoint_infers_cn_symbol_from_query_and_uses_company_deep_dive(self) -> None:
         client = self._build_client(

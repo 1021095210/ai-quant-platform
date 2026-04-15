@@ -4763,6 +4763,13 @@ class TradeUploadService:
         ) or self._find_first_bar_on_or_after(bars, trade_date)
         if entry_bar is None:
             if allow_unpriced_placeholder:
+                placeholder_notes = (
+                    "来源：长文字智能识别；当前批量解析未命中本地行情缓存，"
+                    "已保留结构化记录，待人工确认或后续补价。"
+                    f"；买入规则：{entry_rule['label']}"
+                )
+                if exit_rule is not None:
+                    placeholder_notes = f"{placeholder_notes}；卖出规则：{exit_rule['label']}"
                 return TradeRecordItem(
                     trade_id=f"text_trade_{index:03d}",
                     symbol=symbol,
@@ -4773,10 +4780,7 @@ class TradeUploadService:
                     entry_price=None,
                     exit_price=None,
                     quantity=None,
-                    notes=(
-                        "来源：长文字智能识别；当前批量解析未命中本地行情缓存，"
-                        "已保留结构化记录，待人工确认或后续补价。"
-                    ),
+                    notes=placeholder_notes,
                     source_kind="text_parse_hybrid" if llm_used else "text_parse_rule",
                     input_confidence="needs_review",
                     provenance_tags=[
@@ -5289,8 +5293,6 @@ class TradeUploadService:
         llm_profile: str = "module_default",
         grouped_candidate_count: int = 0,
     ) -> dict[str, Any] | None:
-        if grouped_candidate_count >= 8 or len(text) >= 2800:
-            return None
         runtime = _resolve_llm_runtime(
             self._settings,
             llm_profile,
@@ -5298,6 +5300,13 @@ class TradeUploadService:
         )
         if not runtime:
             return None
+        if grouped_candidate_count >= 8 or len(text) >= 2800:
+            return self._parse_trade_rule_hints_with_llm(
+                text=text,
+                market=market,
+                runtime=runtime,
+                grouped_candidate_count=grouped_candidate_count,
+            )
         endpoint = _llm_endpoint(runtime["base_url"])
         system_prompt = (
             "你是交易记录文本解析助手。请把中文长文本里的多日期交易清单解析成 JSON。"
@@ -5363,6 +5372,98 @@ class TradeUploadService:
             }
         except Exception:
             return None
+
+    def _parse_trade_rule_hints_with_llm(
+        self,
+        *,
+        text: str,
+        market: str,
+        runtime: dict[str, Any],
+        grouped_candidate_count: int,
+    ) -> dict[str, Any] | None:
+        endpoint = _llm_endpoint(runtime["base_url"])
+        system_prompt = (
+            "你是交易规则语义解析助手。系统已经能稳定识别日期块和股票代码，你的任务只负责理解自然语言里的买入规则、卖出规则和明确的卖出日期。"
+            "不要重复输出股票代码，不要编造不存在的规则。"
+            "输出必须是 JSON 对象，字段固定为：global_entry_rule、global_exit_rule、groups、warnings。"
+            "groups 是数组，每个对象字段固定为：trade_date、entry_rule_text、exit_rule_text、explicit_exit_date、confidence。"
+            "trade_date 必须是 YYYY-MM-DD。"
+            "如果用户写了“之后任何一日”“第二日或之后任何一日”，请按 A 股 T+1 语义理解成买入日后的交易日，不包含买入日。"
+            "如果规则只在全文末尾统一给出，请放到 global_entry_rule 或 global_exit_rule。"
+        )
+        request_payload = {
+            "model": runtime["model"],
+            "temperature": 0.1,
+            "stream": True,
+            "response_format": {"type": "json_object"},
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {
+                    "role": "user",
+                    "content": json.dumps(
+                        {
+                            "market": market,
+                            "grouped_candidate_count": grouped_candidate_count,
+                            "text": self._build_trade_rule_focus_text(text),
+                        },
+                        ensure_ascii=False,
+                    ),
+                },
+            ],
+        }
+        try:
+            with httpx.Client(timeout=60) as client:
+                with client.stream(
+                    "POST",
+                    endpoint,
+                    headers={
+                        "Authorization": f"Bearer {runtime['api_key']}",
+                        "Content-Type": "application/json",
+                    },
+                    json=request_payload,
+                ) as response:
+                    response.raise_for_status()
+                    content = self._extract_stream_content(response)
+            parsed = self._extract_json_object(content)
+            groups = parsed.get("groups")
+            if not isinstance(groups, list):
+                return None
+            return {
+                "global_entry_rule": str(parsed.get("global_entry_rule") or "").strip(),
+                "global_exit_rule": str(parsed.get("global_exit_rule") or "").strip(),
+                "llm_profile": runtime["profile_id"],
+                "llm_profile_label": runtime["label"],
+                "groups": [
+                    {
+                        "trade_date": str(item.get("trade_date") or "").strip(),
+                        "symbols": [],
+                        "entry_rule_text": str(item.get("entry_rule_text") or "").strip(),
+                        "exit_rule_text": str(item.get("exit_rule_text") or "").strip(),
+                        "explicit_exit_date": str(item.get("explicit_exit_date") or "").strip(),
+                        "confidence": str(item.get("confidence") or "").strip(),
+                    }
+                    for item in groups
+                    if isinstance(item, dict)
+                ],
+                "warnings": [str(item).strip() for item in parsed.get("warnings", []) if str(item).strip()],
+            }
+        except Exception:
+            return None
+
+    def _build_trade_rule_focus_text(self, text: str) -> str:
+        normalized = re.sub(r"[ \t]+", " ", text).strip()
+        if len(normalized) <= 6000:
+            return normalized
+        lines = [line.strip() for line in normalized.splitlines() if line.strip()]
+        kept: list[str] = []
+        for line in lines:
+            if re.search(r"20\d{2}-\d{2}-\d{2}", line):
+                kept.append(line)
+                continue
+            if any(marker in line for marker in ("买入方式", "卖出方式", "买入价", "卖出价", "止损", "止盈", "ATR", "atr", "开盘价", "收盘价", "次日", "第二日", "之后任何")):
+                kept.append(line)
+        focus_text = "\n".join(kept).strip()
+        return focus_text or normalized[:6000]
 
     def _extract_stream_content(self, response: httpx.Response) -> str:
         content_parts: list[str] = []
