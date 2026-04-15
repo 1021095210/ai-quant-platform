@@ -217,6 +217,11 @@ class StaticAssetTests(unittest.TestCase):
         self.assertIn("这版更适合什么人", replay_js)
         self.assertIn("高级研究细节（进阶用户再看）", replay_js)
         self.assertIn("friendlyParameterLabel", replay_js)
+        self.assertIn("translateInternalReplayTerms", replay_js)
+        self.assertIn("对应可调规则", replay_js)
+        self.assertIn("已经纳入参数组合对照", replay_js)
+        self.assertIn("哪类改法最常有效", replay_js)
+        self.assertIn("最多持有", replay_js)
         self.assertIn("buildSpecificReplayAdvice", replay_js)
 
     def test_strategy_and_backtests_assets_include_capability_guidance(self) -> None:

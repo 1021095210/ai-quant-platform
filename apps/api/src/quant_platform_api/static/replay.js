@@ -943,6 +943,7 @@ function renderReplayFeatureList(container, items, emptyText) {
 }
 
 function friendlyParameterLabel(key) {
+  const normalizedKey = String(key || "");
   const map = {
     stop_loss_pct: "止损比例",
     take_profit_pct: "止盈比例",
@@ -956,21 +957,83 @@ function friendlyParameterLabel(key) {
     min_roe: "最低ROE",
     min_grossprofit_margin: "最低毛利率",
     min_op_yoy: "最低营业利润增速",
+    min_volume_ratio: "最低量比",
+    min_trend_score: "最低趋势强度",
+    min_open_strength_pct: "开盘强度下限",
+    max_open_gap_down_pct: "低开幅度上限",
   };
-  return map[key] || key;
+  return map[normalizedKey] || normalizedKey || "-";
+}
+
+function formatReadableNumber(value, digits = 2) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) {
+    return String(value);
+  }
+  return number
+    .toFixed(digits)
+    .replace(/\.?0+$/, "");
 }
 
 function friendlyParameterValue(key, value) {
   if (value == null || value === "") {
     return "-";
   }
-  if (key.includes("_pct")) {
-    return `${Number(value) * 100}%`;
+  const normalizedKey = String(key || "");
+  if (normalizedKey.includes("_pct")) {
+    return `${formatReadableNumber(Number(value) * 100)}%`;
   }
-  if (key === "max_holding_bars") {
-    return `${value}天`;
+  if (normalizedKey === "max_holding_bars") {
+    return `最多持有 ${formatReadableNumber(value)} 天`;
   }
-  return String(value);
+  return formatReadableNumber(value);
+}
+
+function formatReplayRegime(value) {
+  const normalized = String(value || "");
+  if (normalized === "trend" || normalized === "趋势环境") {
+    return "趋势环境";
+  }
+  if (normalized === "range" || normalized === "震荡环境") {
+    return "震荡环境";
+  }
+  if (normalized === "unknown" || !normalized) {
+    return "环境未识别";
+  }
+  return normalized;
+}
+
+function translateInternalReplayTerms(text) {
+  let normalized = String(text || "");
+  const parameterKeys = [
+    "stop_loss_pct",
+    "take_profit_pct",
+    "max_holding_bars",
+    "max_first_15m_return_pct",
+    "min_first_15m_return_pct",
+    "min_last_15m_return_pct",
+    "max_peak_to_close_drawdown_pct",
+    "max_prior_return_pct",
+    "max_volume_ratio",
+    "min_volume_ratio",
+    "min_trend_score",
+    "min_open_strength_pct",
+    "max_open_gap_down_pct",
+    "min_roe",
+    "min_grossprofit_margin",
+    "min_op_yoy",
+  ];
+  parameterKeys.forEach((key) => {
+    normalized = normalized.replaceAll(key, friendlyParameterLabel(key));
+  });
+  return normalized
+    .replaceAll("trend", "趋势环境")
+    .replaceAll("range", "震荡环境")
+    .replaceAll("路径级调整", "交易路径调整")
+    .replaceAll("参数归因", "规则归因")
+    .replaceAll("敏感参数", "敏感规则")
+    .replaceAll("热力图", "参数组合对照")
+    .replaceAll("二维参数组合对照", "二维参数组合对照");
 }
 
 function buildFriendlyRuleText(text) {
@@ -1039,6 +1102,19 @@ function buildReplayDecisionSummary(current) {
   return summary.slice(0, 3);
 }
 
+function getReplayObjectiveAudience(objective) {
+  if (objective === "sharpe_max") {
+    return "适合想先把收益质量和回撤控制稳住的人";
+  }
+  if (objective === "win_rate_max") {
+    return "适合更在意做对比例、希望减少连续亏损的人";
+  }
+  if (objective === "drawdown_min") {
+    return "适合把大回撤看得最重的人";
+  }
+  return "适合更在意总收益提升的人";
+}
+
 function renderReplayFriendlyAdjustments(current) {
   const replacements = current.condition_replacements || [];
   const changes = current.parameter_changes || [];
@@ -1069,13 +1145,11 @@ function translateReplayText(text) {
   if (!text) {
     return "暂无";
   }
-  return String(text)
+  return translateInternalReplayTerms(text)
     .replaceAll("sharpe_max", "夏普优先")
     .replaceAll("win_rate_max", "胜率优先")
     .replaceAll("drawdown_min", "回撤优先")
     .replaceAll("profit_max", "收益优先")
-    .replaceAll("trend", "趋势环境")
-    .replaceAll("range", "震荡环境")
     .replaceAll("1d", "日线")
     .replaceAll("ATR", "ATR")
     .replaceAll("MA5", "5日线");
@@ -1133,36 +1207,35 @@ function renderReplayObjectiveDetail() {
     .join(" ");
   const decisionSummary = buildReplayDecisionSummary(current);
   nodes.objectiveDetail.innerHTML = `
-    <div class="list-item">
-      <strong>${current.label}</strong>
-      <div class="muted-note">${translateReplayText(current.summary || "暂无说明")}</div>
-      <div class="muted-note">${translateReplayText(current.comparison_note || "")}</div>
-      ${
-        decisionSummary.length
-          ? `<div class="result-box light" style="margin-top:12px;">
-              <strong>先看结论</strong>
-              <div class="list" style="margin-top:10px;">
-                ${decisionSummary.map((item) => `<div class="list-item compact-item"><div class="muted-note">${translateReplayText(item)}</div></div>`).join("")}
-              </div>
-            </div>`
-          : ""
-      }
-      <div class="result-box light" style="margin-top:12px;">
-        <strong>这版更适合什么人</strong>
-        <div class="muted-note" style="margin-top:8px;">
-          ${
-            current.objective === "sharpe_max"
-              ? "更适合想先把收益质量和回撤控制稳住的人。"
-              : current.objective === "win_rate_max"
-                ? "更适合更在意做对比例、希望减少连续亏损的人。"
-                : current.objective === "drawdown_min"
-                  ? "更适合把大回撤看得最重的人。"
-                  : "更适合更在意总收益提升的人。"
-          }
+    <div class="replay-objective-panel">
+      <div class="result-box light" style="padding:14px 16px;">
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;">
+          <div>
+            <strong>${current.label}</strong>
+            <div class="muted-note" style="margin-top:6px;">${translateReplayText(current.summary || "暂无说明")}</div>
+            <div class="muted-note">${translateReplayText(current.comparison_note || "")}</div>
+          </div>
+          <span class="pill">先看结论</span>
         </div>
+        <div class="grid-2" style="margin-top:12px;">
+          <div class="list-item compact-item">
+            <strong>这版直接改变了什么</strong>
+            <div class="muted-note" style="margin-top:6px;">
+              ${
+                decisionSummary.length
+                  ? decisionSummary.map((item) => `<div>${translateReplayText(item)}</div>`).join("")
+                  : "当前还没有足够明确的变化摘要。"
+              }
+            </div>
+          </div>
+          <div class="list-item compact-item">
+            <strong>这版更适合什么人</strong>
+            <div class="muted-note" style="margin-top:6px;">${getReplayObjectiveAudience(current.objective)}。</div>
+          </div>
+        </div>
+        ${renderReplayObjectiveMetrics(current.metrics || {}, current.baseline_metrics || {})}
+        ${renderReplayFriendlyAdjustments(current)}
       </div>
-      ${renderReplayFriendlyAdjustments(current)}
-      ${renderReplayObjectiveMetrics(current.metrics || {}, current.baseline_metrics || {})}
       <div class="result-box light" style="margin-top:12px;">
         <strong>收益曲线</strong>
         <div class="muted-note" style="margin-top:6px;">先看曲线是不是更平稳、回撤是不是更浅，不用先看复杂参数。</div>
@@ -1222,7 +1295,7 @@ function renderReplayObjectiveCounterfactual(summary) {
   return `
     <div class="result-box light" style="margin-top:12px;">
       <strong>这套版本对 Top 亏损单的影响</strong>
-      <div class="muted-note" style="margin-top:6px;">${summary.summary || "暂无说明"}</div>
+      <div class="muted-note" style="margin-top:6px;">${translateReplayText(summary.summary || "暂无说明")}</div>
       <div class="muted-note">
         对照 ${summary.considered_count ?? 0} 笔 · 改善 ${summary.improved_count ?? 0} 笔 ·
         过滤 ${summary.skipped_count ?? 0} 笔 · 变差 ${summary.worsened_count ?? 0} 笔
@@ -1236,7 +1309,7 @@ function renderReplayObjectiveCounterfactual(summary) {
                   (item) => `
                     <div class="list-item compact-item">
                       <strong>${item.symbol}</strong>
-                      <div class="muted-note">${item.summary || "暂无说明"}</div>
+                      <div class="muted-note">${translateReplayText(item.summary || "暂无说明")}</div>
                       <div class="muted-note">
                         原始盈亏 ${item.original_pnl} · 反事实盈亏 ${item.counterfactual_pnl} · 变化 ${formatSignedValue(item.pnl_delta)}
                       </div>
@@ -1259,7 +1332,7 @@ function renderReplayObjectiveCounterfactual(summary) {
                     (item) => `
                       <div class="list-item compact-item">
                         <strong>${item.symbol}</strong>
-                        <div class="muted-note">${item.summary || "暂无说明"}</div>
+                        <div class="muted-note">${translateReplayText(item.summary || "暂无说明")}</div>
                         <div class="muted-note">
                           原始盈亏 ${item.original_pnl} · 反事实盈亏 ${item.counterfactual_pnl} · 变化 ${formatSignedValue(item.pnl_delta)}
                         </div>
@@ -1277,7 +1350,7 @@ function renderReplayObjectiveCounterfactual(summary) {
           ? `
             <div class="result-box light" style="margin-top:12px;">
               <strong>全样本亏损单的参数候选联动</strong>
-              <div class="muted-note" style="margin-top:6px;">${searchLinked.summary || "暂无说明"}</div>
+              <div class="muted-note" style="margin-top:6px;">${translateReplayText(searchLinked.summary || "暂无说明")}</div>
               <div class="muted-note">
                 对照 ${searchLinked.considered_count ?? 0} 笔 · 改善 ${searchLinked.improved_count ?? 0} 笔 ·
                 过滤 ${searchLinked.skipped_count ?? 0} 笔 · 变差 ${searchLinked.worsened_count ?? 0} 笔
@@ -1390,7 +1463,7 @@ function renderReplayObjectiveCounterfactual(summary) {
                       <div class="list-item compact-item">
                         <strong>${item.symbol}</strong>
                         <div class="muted-note">${item.candidate_label} · 评分 ${item.candidate_score ?? "-"}</div>
-                        <div class="muted-note">${item.summary || "暂无说明"}</div>
+                        <div class="muted-note">${translateReplayText(item.summary || "暂无说明")}</div>
                         <div class="muted-note">原始盈亏 ${item.original_pnl} · 候选结果 ${item.counterfactual_pnl} · 变化 ${formatSignedValue(item.pnl_delta)}</div>
                         <div class="muted-note">关键调整：${renderReplayReadableFocus(item.focus || {})}</div>
                         ${
@@ -1427,19 +1500,6 @@ function renderReplayObjectiveCounterfactual(summary) {
       }
     </div>
   `;
-}
-
-function formatReplayRegime(value) {
-  if (value === "trend") {
-    return "趋势环境";
-  }
-  if (value === "range") {
-    return "震荡环境";
-  }
-  if (value === "unknown") {
-    return "环境未识别";
-  }
-  return value || "环境未识别";
 }
 
 function renderReplayParameterStability(stability) {
@@ -1493,7 +1553,7 @@ function renderReplayParameterPairHeatmaps(items) {
       ${items
         .map(
           (item) => `
-            <div class="muted-note" style="margin-top:8px;">纵轴 ${item.y_label} · 横轴 ${item.x_label}</div>
+            <div class="muted-note" style="margin-top:8px;">纵轴 ${friendlyParameterLabel(item.y_label)} · 横轴 ${friendlyParameterLabel(item.x_label)}</div>
             <div class="muted-note">${friendlyParameterLabel(item.y_label)} 对比 ${friendlyParameterLabel(item.x_label)}</div>
             <div class="bounded-scroll bounded-scroll-md" style="overflow:auto; margin-top:10px;">
               <table>
@@ -1763,11 +1823,11 @@ function renderReplayObjectiveMetrics(metrics, baselineMetrics) {
     ["样本夏普近似", metrics.sharpe_like ?? "-", baselineMetrics.sharpe_like ?? "-"],
   ];
   return `
-    <div class="grid-2" style="margin-top:12px;">
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(128px,1fr));gap:10px;margin-top:12px;">
       ${items
         .map(
           ([label, value, baseline]) => `
-            <div class="result-box light">
+            <div class="list-item compact-item" style="margin:0;">
               <strong>${label}</strong>
               <div class="muted-note" style="margin-top:6px;">当前版本：${value ?? "-"}</div>
               <div class="muted-note">原样本：${baseline ?? "-"}</div>
@@ -1795,32 +1855,41 @@ function renderReplayParameterChanges(items) {
     : "尚未生成参数改动列表。";
 }
 
+function renderReplayLinkedAxis(axis) {
+  const key = axis.parameter || axis.label;
+  const label = friendlyParameterLabel(key);
+  const value = friendlyParameterValue(key, axis.best_value);
+  const suffix = axis.in_pair_heatmap ? "，已经纳入参数组合对照" : "";
+  return `${label}（当前最合适值 ${value}${suffix}）`;
+}
+
 function renderReplayCounterfactualCases(items, templateSummary) {
   const summaryHtml = templateSummary?.length
     ? `
       <div class="result-box light" style="margin-bottom:12px;">
-        <strong>反事实模板命中摘要</strong>
+        <strong>哪类改法最常有效</strong>
+        <div class="muted-note" style="margin-top:6px;">这里把复杂的单笔对照翻译成“哪种改法帮到了多少笔”，先看方向，再看明细。</div>
         <div class="list" style="margin-top:10px;">
           ${templateSummary
             .map(
               (item) => `
                   <div class="list-item compact-item">
                     <strong>${item.title}</strong>
-                    <div class="muted-note">样本 ${item.sample_count} · 改善 ${item.improved_count} · 过滤 ${item.skipped_count} · 变差 ${item.worsened_count}</div>
-                    <div class="muted-note">被推荐为优先路径 ${item.best_choice_count} 次 · 平均盈亏变化 ${formatSignedValue(item.avg_pnl_improvement)}</div>
-                  <div class="muted-note">关联参数：${renderReplayReadableFocus(item.focus || {})}</div>
-                  <div class="muted-note">${item.attribution_summary || ""}</div>
+                    <div class="muted-note">测试了 ${item.sample_count} 笔；帮到 ${item.improved_count} 笔；直接过滤 ${item.skipped_count} 笔；变差 ${item.worsened_count} 笔。</div>
+                    <div class="muted-note">被推荐为优先路径 ${item.best_choice_count} 次；平均让单笔结果变化 ${formatSignedValue(item.avg_pnl_improvement)}。</div>
+                  <div class="muted-note">对应可调规则：${renderReplayReadableFocus(item.focus || {})}</div>
+                  <div class="muted-note">${translateReplayText(item.attribution_summary || "当前还没有明确的规则归因。")}</div>
                   ${
                     (item.dominant_regimes || []).length
-                      ? `<div class="muted-note">主要生效环境：${item.dominant_regimes
-                          .map((regime) => `${regime.regime}（${regime.count}）`)
+                      ? `<div class="muted-note">更常在哪种行情里生效：${item.dominant_regimes
+                          .map((regime) => `${formatReplayRegime(regime.regime)}（${regime.count}笔）`)
                           .join("；")}</div>`
                       : ""
                   }
                   ${
                     (item.linked_axes || []).length
-                      ? `<div class="muted-note">关联热力图轴：${item.linked_axes
-                          .map((axis) => `${axis.label}（最优值 ${axis.best_value}${axis.in_pair_heatmap ? "，已进入二维热力图" : ""}）`)
+                      ? `<div class="muted-note">对应的可调数值：${item.linked_axes
+                          .map((axis) => renderReplayLinkedAxis(axis))
                           .join("；")}</div>`
                       : ""
                   }
@@ -1841,7 +1910,7 @@ function renderReplayCounterfactualCases(items, templateSummary) {
             <details class="list-item">
               <summary>
                 <strong>Top ${item.rank} · ${item.symbol}</strong>
-                <span class="muted-note" style="margin-left:8px;">${item.summary || ""}</span>
+                <span class="muted-note" style="margin-left:8px;">${translateReplayText(item.summary || "")}</span>
               </summary>
               <div class="result-box light" style="margin-top:12px;">
                 <strong>原始路径</strong>
@@ -1860,7 +1929,7 @@ function renderReplayCounterfactualCases(items, templateSummary) {
                     (alternative) => `
                       <div class="list-item compact-item">
                         <strong>${alternative.title}</strong>
-                        <div class="muted-note">${alternative.summary || "无说明"}</div>
+                        <div class="muted-note">${translateReplayText(alternative.summary || "无说明")}</div>
                         <div class="muted-note">
                           结果：${alternative.result_type === "skipped" ? "不成交 / 被过滤" : "真实重放"}
                           · 盈亏变化 ${formatSignedValue(alternative.comparison?.pnl_delta)}
