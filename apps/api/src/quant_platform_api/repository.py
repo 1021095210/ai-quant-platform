@@ -57,6 +57,14 @@ class TaskRepository(Protocol):
 
     def mark_running(self, task_id: str) -> TaskRecord | None: ...
 
+    def update_progress(
+        self,
+        task_id: str,
+        *,
+        progress_pct: int,
+        partial_result: dict | None = None,
+    ) -> TaskRecord | None: ...
+
     def complete(self, task_id: str, result: dict) -> TaskRecord | None: ...
 
     def fail(self, task_id: str, error: ErrorPayload) -> TaskRecord | None: ...
@@ -234,6 +242,25 @@ class InMemoryTaskRepository:
             record.status = TaskStatus.RUNNING
             record.progress_pct = 25
             record.started_at = utcnow()
+            return deepcopy(record)
+
+    def update_progress(
+        self,
+        task_id: str,
+        *,
+        progress_pct: int,
+        partial_result: dict | None = None,
+    ) -> TaskRecord | None:
+        with self._lock:
+            record = self._items.get(task_id)
+            if record is None or record.status in {TaskStatus.CANCELED, TaskStatus.FAILED, TaskStatus.SUCCEEDED}:
+                return deepcopy(record) if record else None
+            record.progress_pct = max(0, min(int(progress_pct), 99))
+            if partial_result:
+                record.result = {
+                    **record.result,
+                    **deepcopy(partial_result),
+                }
             return deepcopy(record)
 
     def complete(self, task_id: str, result: dict) -> TaskRecord | None:
@@ -856,6 +883,30 @@ class SQLAlchemyTaskRepository:
             orm.status = TaskStatus.RUNNING.value
             orm.progress_pct = 25
             orm.started_at = utcnow()
+            session.commit()
+            session.refresh(orm)
+            return self._from_orm(orm)
+
+    def update_progress(
+        self,
+        task_id: str,
+        *,
+        progress_pct: int,
+        partial_result: dict | None = None,
+    ) -> TaskRecord | None:
+        with self._session_factory() as session:
+            orm = session.get(TaskORM, task_id)
+            if orm is None or orm.status in {
+                TaskStatus.CANCELED.value,
+                TaskStatus.FAILED.value,
+                TaskStatus.SUCCEEDED.value,
+            }:
+                return self._from_orm(orm) if orm else None
+            orm.progress_pct = max(0, min(int(progress_pct), 99))
+            current_result = json.loads(orm.result_json) if orm.result_json else {}
+            if partial_result:
+                current_result.update(partial_result)
+                orm.result_json = json.dumps(current_result, ensure_ascii=False)
             session.commit()
             session.refresh(orm)
             return self._from_orm(orm)

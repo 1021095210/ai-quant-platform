@@ -25,6 +25,8 @@ const state = {
   pendingScreenshotOcrTaskId: null,
   pendingReplayTaskId: null,
   parseTaskCenterItems: [],
+  parseTaskFilterKind: "all",
+  parseTaskFilterStatus: "all",
 };
 
 const SOURCE_MODE_META = {
@@ -88,6 +90,8 @@ const nodes = {
   manualParseSummary: document.querySelector("#trade-manual-parse-summary"),
   parseTaskCenter: document.querySelector("#trade-parse-task-center"),
   refreshParseTasksButton: document.querySelector("#trade-parse-refresh-tasks-btn"),
+  parseTaskFilterKind: document.querySelector("#trade-parse-filter-kind"),
+  parseTaskFilterStatus: document.querySelector("#trade-parse-filter-status"),
   manualList: document.querySelector("#manual-trade-list"),
   uploadId: document.querySelector("#current-upload-id"),
   recordsBody: document.querySelector("#replay-records-body"),
@@ -210,13 +214,13 @@ async function uploadScreenshotTrade() {
 
 async function recognizeScreenshotTrade() {
   syncReplayActionState({ uploadBusy: true });
-  const file = nodes.screenshotFile.files[0];
-  if (!file) {
+  const files = Array.from(nodes.screenshotFile.files || []);
+  if (!files.length) {
     throw new Error("请先选择成交截图。");
   }
-  setStatus("正在后台识别截图中的日期、代码和方向...");
+  setStatus(`正在后台识别 ${files.length} 张截图中的日期、代码和成交行...`);
   const formData = new FormData();
-  formData.append("file", file);
+  files.forEach((file) => formData.append("files", file));
   formData.append("market", nodes.screenshotMarket.value);
   const created = await api("/api/v1/trades/uploads/screenshot/ocr-tasks", {
     method: "POST",
@@ -234,7 +238,7 @@ async function recognizeScreenshotTrade() {
   });
   loadParseTaskCenter().catch(() => {});
   nodes.screenshotOcrSummary.textContent =
-    "截图识别已转入后台处理，完成后会自动提醒你，也可以在下方“后台解析任务”里重新打开结果。";
+    `已把 ${files.length} 张截图转入后台 OCR。完成后会自动提醒你，也可以在下方“后台解析任务”里重新打开结果。`;
   syncReplayActionState();
   return;
 }
@@ -270,7 +274,12 @@ function applyScreenshotOcrResult(data) {
     nodes.screenshotNotes.value = data.suggested_notes;
   }
   nodes.screenshotOcrSummary.textContent = [
-    data.screenshot_mode === "history_list" ? "识别模式：历史成交列表批量识别" : "识别模式：单笔截图识别",
+    data.screenshot_mode === "history_list_batch"
+      ? "识别模式：历史成交列表跨页批量识别"
+      : data.screenshot_mode === "history_list"
+        ? "识别模式：历史成交列表批量识别"
+        : "识别模式：单笔截图识别",
+    data.page_count != null ? `截图页数：${data.page_count}` : "",
     data.detected_execution_count != null ? `识别成交行：${data.detected_execution_count}` : "",
     data.detected_record_count != null ? `配对成交记录：${data.detected_record_count}` : "",
     data.pending_execution_count != null ? `仍待后续截图补全的成交行：${data.pending_execution_count}` : "",
@@ -486,6 +495,20 @@ function formatTaskStatus(status) {
   return status || "未知";
 }
 
+function buildTaskProgressMeta(item) {
+  const progressPct = Number(item.progress_pct || 0);
+  const label = item.progress_label || "";
+  const labelPart = label ? ` · ${label}` : "";
+  return `进度 ${progressPct}%${labelPart}`;
+}
+
+function buildTaskRetryUrl(item) {
+  if (item.task_kind === "trade_screenshot_ocr") {
+    return `/api/v1/trades/uploads/screenshot/ocr-tasks/${item.task_id}/retry`;
+  }
+  return `/api/v1/trades/uploads/manual/parse-text-tasks/${item.task_id}/retry`;
+}
+
 function renderParseTaskCenter() {
   if (!state.parseTaskCenterItems.length) {
     nodes.parseTaskCenter.textContent = "还没有后台解析任务。";
@@ -499,10 +522,15 @@ function renderParseTaskCenter() {
         <div class="list-item compact-item">
           <strong>${item.task_kind === "trade_screenshot_ocr" ? "截图 OCR" : "长文字识别"} · ${formatTaskStatus(item.status)}</strong>
           <div class="muted-note">市场 ${item.market || "-"} · 日期块 ${item.group_count || 0} · 记录 ${item.record_count || 0} · 分块 ${item.chunk_count || 1}</div>
+          <div class="task-progress-line">
+            <div class="task-progress-bar"><span style="width:${Math.max(6, Number(item.progress_pct || 0))}%"></span></div>
+            <div class="muted-note">${buildTaskProgressMeta(item)}</div>
+          </div>
           <div class="muted-note">${item.summary || "任务完成后会在这里显示结果摘要。"} </div>
           <div class="muted-note">验收状态：${item.validation_readiness || "-"}</div>
           <div class="actions" style="margin-top:10px;">
             <button class="btn ghost replay-open-parse-task-btn" type="button" data-task-url="${item.status_url}" data-task-kind="${item.task_kind || "trade_text_parse"}" ${item.status === "succeeded" ? "" : "disabled"}>打开结果</button>
+            <button class="btn ghost replay-retry-parse-task-btn" type="button" data-retry-url="${buildTaskRetryUrl(item)}" ${item.status === "failed" ? "" : "disabled"}>重试</button>
           </div>
         </div>
       `,
@@ -529,10 +557,51 @@ function renderParseTaskCenter() {
       }
     });
   });
+  nodes.parseTaskCenter.querySelectorAll(".replay-retry-parse-task-btn").forEach((node) => {
+    node.addEventListener("click", async () => {
+      const retryUrl = node.dataset.retryUrl;
+      if (!retryUrl) {
+        return;
+      }
+      try {
+        const payload = await api(retryUrl, { method: "POST" });
+        const taskId = payload.data.task_id;
+        const taskKind = retryUrl.includes("/screenshot/ocr-tasks/")
+          ? "trade_screenshot_ocr"
+          : "trade_text_parse";
+        if (taskKind === "trade_screenshot_ocr") {
+          state.pendingScreenshotOcrTaskId = taskId;
+        } else {
+          state.pendingParseTaskId = taskId;
+        }
+        registerBackgroundTask({
+          task_id: taskId,
+          status_url: payload.data.status_url,
+          label: taskKind === "trade_screenshot_ocr" ? "成交截图 OCR" : "长文字智能识别",
+          module: taskKind,
+          queued_message: "任务已重新加入后台队列。",
+          success_message: "后台任务已完成。",
+          failure_message: "后台任务再次失败。",
+        });
+        await loadParseTaskCenter();
+        setStatus("已重新提交后台解析任务。");
+      } catch (error) {
+        setStatus(error.message);
+      }
+    });
+  });
 }
 
 async function loadParseTaskCenter() {
-  const payload = await api("/api/v1/trades/uploads/manual/parse-text-tasks");
+  const params = new URLSearchParams();
+  if (state.parseTaskFilterKind !== "all") {
+    params.set("task_kind", state.parseTaskFilterKind);
+  }
+  if (state.parseTaskFilterStatus !== "all") {
+    params.set("task_status", state.parseTaskFilterStatus);
+  }
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  const payload = await api(`/api/v1/trades/uploads/manual/parse-text-tasks${suffix}`);
   state.parseTaskCenterItems = payload.data.items || [];
   renderParseTaskCenter();
 }
@@ -1696,8 +1765,8 @@ function syncReplayActionState(options = {}) {
     screenshotOcrReady && !uploadBusy ? "btn secondary" : "btn disabled";
   nodes.screenshotOcrButton.textContent = uploadBusy ? "正在识别..." : "智能识别截图内容";
   nodes.screenshotOcrButton.title = screenshotOcrReady
-    ? "先用 OCR 读取截图里的日期、股票代码和方向，再人工确认。"
-    : "请先上传一张成交截图。";
+    ? "先用 OCR 读取截图里的日期、股票代码和方向；多张截图会自动做跨页合并。"
+    : "请先上传至少一张成交截图。";
 
   if (nodes.importScreenshotRecordsButton) {
     const screenshotBatchReady = Boolean(state.pendingScreenshotRecords.length);
@@ -1844,11 +1913,21 @@ nodes.screenshotFile.addEventListener("change", () => {
   nodes.importScreenshotRecordsButton.disabled = true;
   nodes.importScreenshotRecordsButton.className = "btn ghost disabled";
   nodes.screenshotOcrSummary.textContent =
-    "上传截图后，可以先用 OCR 识别日期、代码和方向。对于券商历史成交列表截图，系统会尽量批量提取并配对成多笔记录。";
+    `已选择 ${nodes.screenshotFile.files.length || 0} 张截图。上传后可以先用 OCR 识别日期、代码和方向；对于券商历史成交列表截图，系统会尽量批量提取、跨页合并并配对成多笔记录。`;
   syncReplayActionState();
 });
 
 nodes.refreshParseTasksButton.addEventListener("click", () => {
+  loadParseTaskCenter().catch((error) => setStatus(error.message));
+});
+
+nodes.parseTaskFilterKind?.addEventListener("change", () => {
+  state.parseTaskFilterKind = nodes.parseTaskFilterKind.value || "all";
+  loadParseTaskCenter().catch((error) => setStatus(error.message));
+});
+
+nodes.parseTaskFilterStatus?.addEventListener("change", () => {
+  state.parseTaskFilterStatus = nodes.parseTaskFilterStatus.value || "all";
   loadParseTaskCenter().catch((error) => setStatus(error.message));
 });
 
@@ -1865,6 +1944,15 @@ document.querySelector("#run-replay-btn").addEventListener(
 
 subscribeBackgroundTasks((task) => {
   if (task.module === "trade_text_parse" && task.task_id === state.pendingParseTaskId) {
+    if (task.status === "running") {
+      setInlineStatus(
+        nodes.manualInlineStatus,
+        task.data?.progress_label
+          ? `${task.data.progress_label}（${task.data.progress_pct || task.progress_pct || 0}%）`
+          : `长文字识别正在进行（${task.data?.progress_pct || task.progress_pct || 0}%）`,
+        "running",
+      );
+    }
     if (task.status === "succeeded" && task.data) {
       applyManualParseResult(task.data);
       state.pendingParseTaskId = null;
@@ -1884,6 +1972,12 @@ subscribeBackgroundTasks((task) => {
     return;
   }
   if (task.module === "trade_screenshot_ocr" && task.task_id === state.pendingScreenshotOcrTaskId) {
+    if (task.status === "running") {
+      nodes.screenshotOcrSummary.textContent =
+        task.data?.progress_label
+          ? `${task.data.progress_label}（${task.data.progress_pct || task.progress_pct || 0}%）`
+          : `截图 OCR 正在进行（${task.data?.progress_pct || task.progress_pct || 0}%）`;
+    }
     if (task.status === "succeeded" && task.data) {
       applyScreenshotOcrResult(task.data);
       state.pendingScreenshotOcrTaskId = null;

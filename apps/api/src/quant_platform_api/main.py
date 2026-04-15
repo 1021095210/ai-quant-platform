@@ -1648,8 +1648,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
 
     @app.get(f"{app_settings.api_prefix}/trades/uploads/manual/parse-text-tasks")
-    def list_manual_trade_text_tasks(request: Request) -> JSONResponse:
+    def list_manual_trade_text_tasks(
+        request: Request,
+        task_kind: str | None = None,
+        task_status: str | None = None,
+    ) -> JSONResponse:
         current_user = _require_current_user(request, services.auth_service)
+        requested_task_kind = task_kind
         text_records = services.trade_text_parse_service.list(
             kind="trade_text_parse",
             user_id=current_user.user_id,
@@ -1673,32 +1678,39 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             result = record.result or {}
             validation_summary = result.get("validation_summary") or {}
             chunk_summary = result.get("chunk_summary") or {}
-            task_kind = record.kind
+            record_task_kind = record.kind
             items.append(
                 {
                     "parse_task_id": record.id,
                     "task_id": record.id,
-                    "task_kind": task_kind,
+                    "task_kind": record_task_kind,
                     "status": record.status.value,
                     "state": record.status.value,
+                    "progress_pct": record.progress_pct,
                     "market": result.get("market") or payload.get("market", ""),
                     "record_count": result.get("record_count", 0),
                     "group_count": result.get("group_count", 0),
                     "chunk_count": chunk_summary.get("chunk_count")
                     or validation_summary.get("chunk_count")
                     or 1,
+                    "progress_label": result.get("progress_label", ""),
+                    "progress_detail": result.get("progress_detail", {}),
                     "summary": result.get("summary", ""),
                     "validation_readiness": validation_summary.get("validation_readiness", ""),
                     "sample_mode": validation_summary.get("sample_mode", ""),
                     "status_url": (
                         f"{app_settings.api_prefix}/trades/uploads/screenshot/ocr-tasks/{record.id}"
-                        if task_kind == "trade_screenshot_ocr"
+                        if record_task_kind == "trade_screenshot_ocr"
                         else f"{app_settings.api_prefix}/trades/uploads/manual/parse-text-tasks/{record.id}"
                     ),
                     "created_at": record.created_at.isoformat(),
                     "ended_at": record.finished_at.isoformat() if record.finished_at else None,
                 }
             )
+        if requested_task_kind:
+            items = [item for item in items if item["task_kind"] == requested_task_kind]
+        if task_status:
+            items = [item for item in items if item["status"] == task_status]
         return _success_response(request, data={"items": items})
 
     @app.get(f"{app_settings.api_prefix}/trades/uploads/manual/parse-text-tasks/{{parse_task_id}}")
@@ -1715,6 +1727,40 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         )
         return _success_response(request, data=_serialize_task(record, "parse_task_id"))
+
+    @app.post(f"{app_settings.api_prefix}/trades/uploads/manual/parse-text-tasks/{{parse_task_id}}/retry")
+    def retry_manual_trade_text_task(
+        request: Request,
+        parse_task_id: str,
+    ) -> JSONResponse:
+        current_user = _require_current_user(request, services.auth_service)
+        original = _require_task(
+            services.trade_text_parse_service.get(
+                parse_task_id,
+                user_id=current_user.user_id,
+                workspace_id=current_user.workspace_id,
+            )
+        )
+        record = services.trade_text_parse_service.submit(
+            kind="trade_text_parse",
+            payload=dict(original.payload),
+            build_result=build_trade_text_parse_result(services.trade_upload_service),
+            request_id=request.state.request_id,
+            user_id=current_user.user_id,
+            workspace_id=current_user.workspace_id,
+        )
+        return _success_response(
+            request,
+            data={
+                "parse_task_id": record.id,
+                "task_id": record.id,
+                "status": record.status.value,
+                "state": record.status.value,
+                "progress_pct": record.progress_pct,
+                "status_url": f"{app_settings.api_prefix}/trades/uploads/manual/parse-text-tasks/{record.id}",
+            },
+            status_code=status.HTTP_202_ACCEPTED,
+        )
 
     @app.post(f"{app_settings.api_prefix}/trades/uploads/screenshot")
     async def upload_trade_screenshot(
@@ -1780,16 +1826,29 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.post(f"{app_settings.api_prefix}/trades/uploads/screenshot/ocr-tasks")
     async def create_trade_screenshot_ocr_task(
         request: Request,
-        file: UploadFile = File(...),
+        files: list[UploadFile] = File(...),
         market: str = Form("cn_equity"),
     ) -> JSONResponse:
         current_user = _require_current_user(request, services.auth_service)
-        content = await file.read()
+        uploaded_files = [item for item in files if item.filename]
+        if not uploaded_files:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=ErrorPayload(code="INVALID_ARGUMENT", message="至少需要上传一张成交截图。").model_dump(),
+            )
+        encoded_files: list[str] = []
+        file_names: list[str] = []
+        content_types: list[str] = []
+        for file in uploaded_files:
+            content = await file.read()
+            encoded_files.append(base64.b64encode(content).decode("utf-8"))
+            file_names.append(file.filename or "trade-screenshot.png")
+            content_types.append(file.content_type or "image/png")
         payload_dict = {
             "market": market,
-            "file_name": file.filename or "trade-screenshot.png",
-            "content_type": file.content_type or "image/png",
-            "file_content_b64": base64.b64encode(content).decode("utf-8"),
+            "file_names": file_names,
+            "content_types": content_types,
+            "files_b64": encoded_files,
             "user_id": current_user.user_id,
             "workspace_id": current_user.workspace_id,
         }
@@ -1831,6 +1890,40 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         )
         return _success_response(request, data=_serialize_task(record, "ocr_task_id"))
+
+    @app.post(f"{app_settings.api_prefix}/trades/uploads/screenshot/ocr-tasks/{{ocr_task_id}}/retry")
+    def retry_trade_screenshot_ocr_task(
+        request: Request,
+        ocr_task_id: str,
+    ) -> JSONResponse:
+        current_user = _require_current_user(request, services.auth_service)
+        original = _require_task(
+            services.trade_text_parse_service.get(
+                ocr_task_id,
+                user_id=current_user.user_id,
+                workspace_id=current_user.workspace_id,
+            )
+        )
+        record = services.trade_text_parse_service.submit(
+            kind="trade_screenshot_ocr",
+            payload=dict(original.payload),
+            build_result=build_trade_screenshot_ocr_result(services.trade_upload_service),
+            request_id=request.state.request_id,
+            user_id=current_user.user_id,
+            workspace_id=current_user.workspace_id,
+        )
+        return _success_response(
+            request,
+            data={
+                "ocr_task_id": record.id,
+                "task_id": record.id,
+                "status": record.status.value,
+                "state": record.status.value,
+                "progress_pct": record.progress_pct,
+                "status_url": f"{app_settings.api_prefix}/trades/uploads/screenshot/ocr-tasks/{record.id}",
+            },
+            status_code=status.HTTP_202_ACCEPTED,
+        )
 
     @app.post(f"{app_settings.api_prefix}/trades/uploads/{{upload_id}}/parse")
     def parse_trade_upload(
