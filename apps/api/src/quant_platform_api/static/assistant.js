@@ -231,6 +231,7 @@ function renderResearch(payload) {
   const priceSnapshot = evidence.price_snapshot || null;
   const valuationSnapshot = evidence.valuation_snapshot || null;
   const qualitySnapshot = evidence.financial_quality_snapshot || null;
+  const eventEvidence = evidence.event_evidence || { items: [] };
   const evidenceWarnings = Array.isArray(evidence.warnings) ? evidence.warnings : [];
   const evidenceRefs = Array.isArray(payload.evidence_refs) ? payload.evidence_refs : [];
   const reportSections = Array.isArray(payload.report_sections) ? payload.report_sections : [];
@@ -299,6 +300,18 @@ function renderResearch(payload) {
           <span>财务质量</span>
           <strong>${qualitySnapshot ? `ROE ${qualitySnapshot.roe ?? "-"} · 毛利率 ${qualitySnapshot.grossprofit_margin ?? "-"}` : "暂无"}</strong>
           <div class="muted-note">${qualitySnapshot ? `ROA ${qualitySnapshot.roa ?? "-"} · 营业利润同比 ${qualitySnapshot.op_yoy ?? "-"} · 来源 ${qualitySnapshot.provider || "-"}` : "当前没有可用的财务质量快照。"} </div>
+        </div>
+        <div class="assistant-desk-result">
+          <span>近端事件与公告</span>
+          <strong>${eventEvidence.items?.length ? `已收录 ${eventEvidence.items.length} 条线索` : "暂无"}</strong>
+          <div class="muted-note">${
+            eventEvidence.items?.length
+              ? eventEvidence.items
+                  .slice(0, 3)
+                  .map((item) => `${item.title}｜${item.source}${item.as_of ? `｜${item.as_of}` : ""}`)
+                  .join("<br>")
+              : "当前模型链路未提供近端事件检索结果，或暂无可确认线索。"
+          }</div>
         </div>
       </div>
       ${evidenceWarnings.length ? `<div class="muted-note" style="margin-top:10px;">${evidenceWarnings.map((item) => `- ${item}`).join("<br>")}</div>` : ""}

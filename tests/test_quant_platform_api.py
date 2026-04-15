@@ -1834,6 +1834,90 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertEqual("中高", data["confidence_label"])
 
     @patch("quant_platform_api.services.httpx.Client")
+    def test_assistant_adds_event_evidence_when_volcengine_search_is_available(self, client_mock) -> None:
+        class StubBar:
+            def __init__(self, **kwargs):
+                self.__dict__.update(kwargs)
+
+        class StubMarketDataService:
+            def load_daily_bars(self, **kwargs):
+                return (
+                    [
+                        StubBar(
+                            ts_code="600619.SH",
+                            trade_date=datetime(2026, 4, 11).date(),
+                            open=10.2,
+                            high=10.6,
+                            low=10.0,
+                            close=10.4,
+                            volume=1200,
+                            amount=11000,
+                            data_source="stub",
+                        ),
+                    ],
+                    {"provider": "stub_feed"},
+                )
+
+            def load_daily_basic_snapshot(self, **kwargs):
+                return None, {"provider": "stub_feed"}
+
+            def load_financial_quality_snapshot(self, **kwargs):
+                return None, {"provider": "stub_feed"}
+
+        post_response = Mock()
+        post_response.raise_for_status.return_value = None
+        post_response.json.return_value = {
+            "output_text": json.dumps(
+                {
+                    "event_items": [
+                        {
+                            "title": "公司披露年度分红预案",
+                            "source": "上海证券交易所公告",
+                            "as_of": "2026-04-10",
+                            "event_type": "announcement",
+                            "impact": "提升分红预期",
+                            "why_it_matters": "直接影响股东回报预期",
+                        }
+                    ],
+                    "warnings": [],
+                },
+                ensure_ascii=False,
+            )
+        }
+
+        http_client = Mock()
+        http_client.post.return_value = post_response
+        http_client.stream.side_effect = RuntimeError("skip llm stream")
+        http_context = Mock()
+        http_context.__enter__ = Mock(return_value=http_client)
+        http_context.__exit__ = Mock(return_value=None)
+        client_mock.return_value = http_context
+
+        service = FinancialAssistantService(
+            Settings(
+                llm_base_url="https://ark.cn-beijing.volces.com/api/v3",
+                llm_api_key="sk-test",
+                llm_model_mentor="deepseek-v3-2-251201",
+            ),
+            market_data_service=StubMarketDataService(),
+        )
+        data = service.analyze(
+            AssistantResearchRequest(
+                query="请深度研究600619.SH这个个股。",
+                workflow_id="company_deep_dive",
+                target_symbol="600619.SH",
+                market_scope="cn_equity",
+                research_depth="deep",
+                current_module="assistant",
+            )
+        )
+
+        self.assertEqual("ready", data["evidence_bundle"]["event_evidence"]["status"])
+        self.assertEqual("announcement", data["evidence_bundle"]["event_evidence"]["items"][0]["event_type"])
+        self.assertTrue(any(item["label"] == "announcement" for item in data["evidence_refs"]))
+        self.assertTrue(any(section["title"] == "近端事件与公告" for section in data["report_sections"]))
+
+    @patch("quant_platform_api.services.httpx.Client")
     def test_mentor_can_use_llm_answer_when_configured(self, client_mock) -> None:
         stream_response = Mock()
         stream_response.iter_lines.return_value = [

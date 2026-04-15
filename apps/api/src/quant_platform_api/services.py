@@ -498,6 +498,13 @@ def _llm_endpoint(base_url: str) -> str:
     return endpoint
 
 
+def _llm_responses_endpoint(base_url: str) -> str:
+    endpoint = base_url.rstrip("/")
+    if not endpoint.endswith("/responses"):
+        endpoint = f"{endpoint}/responses"
+    return endpoint
+
+
 def _normalize_market_alias(market: str | None) -> str:
     normalized = (market or "").strip()
     if not normalized:
@@ -5572,7 +5579,12 @@ class FinancialAssistantService(MentorService):
             else request.workflow_id
         )
         normalized_request = request.model_copy(update={"target_symbol": normalized_target_symbol})
-        evidence_bundle = self._build_assistant_evidence_bundle(normalized_request)
+        runtime = _resolve_llm_runtime(
+            self._settings,
+            normalized_request.llm_profile,
+            module="assistant",
+        )
+        evidence_bundle = self._build_assistant_evidence_bundle(normalized_request, runtime=runtime)
         fallback = self._build_assistant_fallback(
             workflow=workflow,
             request=normalized_request,
@@ -5600,6 +5612,7 @@ class FinancialAssistantService(MentorService):
                 workflow=workflow,
                 request=normalized_request,
                 fallback=response,
+                runtime=runtime,
             )
             if llm_payload:
                 response.update(llm_payload)
@@ -5736,8 +5749,9 @@ class FinancialAssistantService(MentorService):
         workflow: dict[str, Any],
         request: AssistantResearchRequest,
         fallback: dict[str, Any],
+        runtime: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
-        runtime = _resolve_llm_runtime(
+        runtime = runtime or _resolve_llm_runtime(
             self._settings,
             request.llm_profile,
             module="assistant",
@@ -5833,6 +5847,7 @@ class FinancialAssistantService(MentorService):
     def _build_assistant_evidence_bundle(
         self,
         request: AssistantResearchRequest,
+        runtime: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         market_scope = _normalize_market_alias(request.market_scope)
         target_symbol = request.target_symbol or ""
@@ -5843,6 +5858,10 @@ class FinancialAssistantService(MentorService):
             "price_snapshot": None,
             "valuation_snapshot": None,
             "financial_quality_snapshot": None,
+            "event_evidence": {
+                "status": "unavailable",
+                "items": [],
+            },
             "coverage_summary": {"available_sections": [], "missing_sections": ["price", "valuation", "financial_quality"]},
             "evidence_refs": [],
             "warnings": [],
@@ -5930,6 +5949,24 @@ class FinancialAssistantService(MentorService):
                 bundle["warnings"].append("内部行情链路未返回目标标的的近端日线数据。")
         except Exception as exc:
             bundle["warnings"].append(f"内部证据包加载失败：{exc}")
+        event_evidence = self._build_assistant_event_evidence(
+            request=request,
+            runtime=runtime,
+        )
+        bundle["event_evidence"] = event_evidence
+        for item in event_evidence.get("items", [])[:3]:
+            bundle["evidence_refs"].append(
+                {
+                    "label": item.get("event_type") or "事件线索",
+                    "source": item.get("source") or "external_search",
+                    "as_of": item.get("as_of") or "",
+                    "detail": item.get("title") or item.get("impact") or "",
+                }
+            )
+        if event_evidence.get("status") == "ready":
+            bundle["warnings"].extend([str(item) for item in event_evidence.get("warnings", []) if str(item).strip()])
+        elif event_evidence.get("warnings"):
+            bundle["warnings"].extend([str(item) for item in event_evidence.get("warnings", []) if str(item).strip()])
         available_sections: list[str] = []
         missing_sections: list[str] = []
         for section_key, label in (
@@ -5941,11 +5978,113 @@ class FinancialAssistantService(MentorService):
                 available_sections.append(label)
             else:
                 missing_sections.append(label)
+        if event_evidence.get("status") == "ready" and event_evidence.get("items"):
+            available_sections.append("event_news")
+        else:
+            missing_sections.append("event_news")
         bundle["coverage_summary"] = {
             "available_sections": available_sections,
             "missing_sections": missing_sections,
         }
         return bundle
+
+    def _build_assistant_event_evidence(
+        self,
+        *,
+        request: AssistantResearchRequest,
+        runtime: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        result = {"status": "unavailable", "items": [], "warnings": []}
+        target_symbol = request.target_symbol or ""
+        market_scope = _normalize_market_alias(request.market_scope)
+        if not target_symbol or market_scope != "cn_equity":
+            return result
+        if not self._runtime_supports_event_search(runtime):
+            result["warnings"].append("当前模型链路不支持新闻/公告检索，事件链证据暂不可用。")
+            return result
+        prompt = {
+            "market_scope": market_scope,
+            "target_symbol": target_symbol,
+            "workflow_id": request.workflow_id,
+            "query": request.query,
+            "task": "提取最近 3 条与标的直接相关的新闻、公告或事件线索。只保留能够明确给出来源名称与日期的线索。不要编造不存在的事件。",
+            "output_schema": {
+                "event_items": [
+                    {
+                        "title": "事件标题",
+                        "source": "来源名称",
+                        "as_of": "YYYY-MM-DD",
+                        "event_type": "news|announcement|event",
+                        "impact": "对研究的潜在影响",
+                        "why_it_matters": "为什么值得跟踪",
+                    }
+                ],
+                "warnings": ["无法确认时写在这里"],
+            },
+        }
+        try:
+            with httpx.Client(timeout=45) as client:
+                response = client.post(
+                    _llm_responses_endpoint(runtime["base_url"]),
+                    headers={
+                        "Authorization": f"Bearer {runtime['api_key']}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": runtime["model"],
+                        "stream": False,
+                        "tools": [{"type": "web_search", "max_keyword": 3}],
+                        "input": [
+                            {
+                                "role": "user",
+                                "content": [
+                                    {
+                                        "type": "input_text",
+                                        "text": json.dumps(prompt, ensure_ascii=False),
+                                    }
+                                ],
+                            }
+                        ],
+                    },
+                )
+                response.raise_for_status()
+                content = self._extract_responses_content(response)
+            parsed = self._extract_json_object(content)
+        except Exception as exc:
+            result["warnings"].append(f"事件链证据检索失败：{exc}")
+            return result
+        items: list[dict[str, str]] = []
+        for item in parsed.get("event_items", [])[:3]:
+            if not isinstance(item, dict):
+                continue
+            title = str(item.get("title", "")).strip()
+            source = str(item.get("source", "")).strip()
+            as_of = str(item.get("as_of", "")).strip()
+            event_type = str(item.get("event_type", "")).strip() or "event"
+            impact = str(item.get("impact", "")).strip()
+            why_it_matters = str(item.get("why_it_matters", "")).strip()
+            if title and source:
+                items.append(
+                    {
+                        "title": title,
+                        "source": source,
+                        "as_of": as_of,
+                        "event_type": event_type,
+                        "impact": impact,
+                        "why_it_matters": why_it_matters,
+                    }
+                )
+        result["items"] = items
+        result["warnings"] = [str(item).strip() for item in parsed.get("warnings", []) if str(item).strip()]
+        result["status"] = "ready" if items else "unavailable"
+        return result
+
+    def _runtime_supports_event_search(self, runtime: dict[str, Any] | None) -> bool:
+        if not runtime:
+            return False
+        base_url = str(runtime.get("base_url") or "").strip().lower()
+        provider = str(runtime.get("provider") or "").strip().lower()
+        return provider == "volcengine" or "ark.cn-beijing.volces.com" in base_url
 
     def _assistant_confidence_from_evidence(self, evidence_bundle: dict[str, Any]) -> str:
         coverage = evidence_bundle.get("coverage_summary") or {}
@@ -6022,6 +6161,18 @@ class FinancialAssistantService(MentorService):
                     "bullets": bullets[:6],
                 }
             )
+        event_evidence = evidence_bundle.get("event_evidence") or {}
+        if event_evidence.get("items"):
+            sections.append(
+                {
+                    "title": "近端事件与公告",
+                    "summary": "当前模型链路已补到近端事件线索，但仍应把它视为研究提示，不应直接代替完整公告核验。",
+                    "bullets": [
+                        f"{item.get('title')}｜{item.get('source')}{('｜' + str(item.get('as_of'))) if item.get('as_of') else ''}"
+                        for item in event_evidence.get("items", [])[:3]
+                    ],
+                }
+            )
         sections.append(
             {
                 "title": "证据边界与下一步",
@@ -6094,6 +6245,26 @@ class FinancialAssistantService(MentorService):
             if label and source and detail:
                 items.append({"label": label, "source": source, "as_of": as_of, "detail": detail})
         return items
+
+    def _extract_responses_content(self, response: httpx.Response) -> str:
+        payload = response.json()
+        output_text = payload.get("output_text")
+        if isinstance(output_text, str) and output_text.strip():
+            return output_text
+        output_items = payload.get("output") or []
+        content_parts: list[str] = []
+        for item in output_items:
+            if not isinstance(item, dict):
+                continue
+            for content in item.get("content", []) or []:
+                if not isinstance(content, dict):
+                    continue
+                text = content.get("text") or content.get("output_text")
+                if isinstance(text, str) and text.strip():
+                    content_parts.append(text)
+        if content_parts:
+            return "\n".join(content_parts)
+        return json.dumps(payload, ensure_ascii=False)
 
     def _normalize_related_modules(self, value: Any) -> list[dict[str, str]]:
         if not isinstance(value, list):
