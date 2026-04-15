@@ -907,6 +907,24 @@ th {
   padding-right: 6px;
 }
 
+.bounded-scroll {
+  overflow-y: auto;
+  min-height: 0;
+  padding-right: 8px;
+}
+
+.bounded-scroll-md {
+  max-height: 260px;
+}
+
+.bounded-scroll-lg {
+  max-height: 340px;
+}
+
+.bounded-scroll-xl {
+  max-height: 420px;
+}
+
 .accordion-list {
   display: grid;
   gap: 12px;

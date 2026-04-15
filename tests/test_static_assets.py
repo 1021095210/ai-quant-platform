@@ -160,6 +160,34 @@ class StaticAssetTests(unittest.TestCase):
         self.assertIn("detected_records", replay_js)
         self.assertIn("importScreenshotRecordsToManualList", replay_js)
 
+    def test_replay_assets_bound_long_manual_sections_with_scroll_containers(self) -> None:
+        replay_html = (
+            WORKSPACE_ROOT
+            / "apps"
+            / "api"
+            / "src"
+            / "quant_platform_api"
+            / "static"
+            / "replay.html"
+        ).read_text(encoding="utf-8")
+        theme_css = (
+            WORKSPACE_ROOT
+            / "apps"
+            / "api"
+            / "src"
+            / "quant_platform_api"
+            / "static"
+            / "theme.css"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn('id="trade-manual-parse-summary" class="result-box light bounded-scroll bounded-scroll-md"', replay_html)
+        self.assertIn('id="trade-parse-task-center" class="list empty-state bounded-scroll bounded-scroll-lg"', replay_html)
+        self.assertIn('id="manual-trade-list" class="list empty-state bounded-scroll bounded-scroll-xl"', replay_html)
+        self.assertIn(".bounded-scroll", theme_css)
+        self.assertIn(".bounded-scroll-md", theme_css)
+        self.assertIn(".bounded-scroll-lg", theme_css)
+        self.assertIn(".bounded-scroll-xl", theme_css)
+
     def test_strategy_and_backtests_assets_include_capability_guidance(self) -> None:
         strategy_html = (
             WORKSPACE_ROOT

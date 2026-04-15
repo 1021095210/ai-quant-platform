@@ -5162,6 +5162,57 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertIn("买入后任一天开盘价", data["exit_rule"])
         self.assertIn("买入后任一天开盘价减 ATR 阈值", data["records"][0]["notes"])
 
+    def test_manual_text_parse_endpoint_supports_second_day_or_later_open_atr_exit_rule(self) -> None:
+        client = self._build_client()
+        self._login(client)
+
+        response = client.post(
+            "/api/v1/trades/uploads/manual/parse-text",
+            json={
+                "text": (
+                    "2025-07-25 买入：603590.SH；"
+                    "买入方式：当日开盘价买入；"
+                    "卖出方式：现价低于第二日或之后任何一日开盘价-0.5倍atr时卖出"
+                ),
+                "market": "cn_equity",
+                "adjustment_mode": "qfq",
+            },
+        )
+
+        self.assertEqual(200, response.status_code)
+        data = response.json()["data"]
+        self.assertIn("第二日或之后任一天开盘价", data["exit_rule"])
+        self.assertIn("第二日或之后任一天开盘价减 ATR 阈值", data["records"][0]["notes"])
+
+    def test_manual_text_parse_endpoint_supports_grouped_global_rules_without_summary_prefix(self) -> None:
+        client = self._build_client()
+        self._login(client)
+
+        response = client.post(
+            "/api/v1/trades/uploads/manual/parse-text",
+            json={
+                "text": (
+                    "2025-07-25 (Friday)\n"
+                    "（2 只）：603590.SH, 002225.SZ\n\n"
+                    "2025-08-01 (Friday)\n"
+                    "（2 只）：603579.SH, 002675.SZ\n\n"
+                    "买入方式：当日开盘价买入\n"
+                    "卖出方式：现价低于第二日或之后任何一日开盘价-0.5倍atr时卖出"
+                ),
+                "market": "cn_equity",
+                "adjustment_mode": "qfq",
+            },
+        )
+
+        self.assertEqual(200, response.status_code)
+        data = response.json()["data"]
+        self.assertEqual(4, data["record_count"])
+        self.assertIn("第二日或之后任一天开盘价", data["exit_rule"])
+        self.assertTrue(all("第二日或之后任一天开盘价减 ATR 阈值" in item["notes"] for item in data["records"]))
+        self.assertTrue(
+            all("第二日或之后任一天开盘价" in item["exit_rule"] for item in data["group_summaries"])
+        )
+
     def test_manual_text_parse_reuses_daily_bar_cache_for_repeated_symbols(self) -> None:
         class StubMarketDataService:
             def __init__(self) -> None:

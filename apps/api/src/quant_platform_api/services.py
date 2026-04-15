@@ -4945,11 +4945,14 @@ class TradeUploadService:
             }
 
         if exit_rule["type"] == "atr_daily_open_break":
-            future_bars = [
+            start_offset = int(exit_rule.get("start_offset", 1))
+            rule_window = str(exit_rule.get("rule_window") or "")
+            eligible_bars = [
                 bar
                 for bar in bars
                 if date.fromisoformat(bar.trade_date) >= date.fromisoformat(entry_bar.trade_date)
             ]
+            future_bars = eligible_bars[start_offset:] if len(eligible_bars) > start_offset else []
             for bar in future_bars:
                 atr_value = self._estimate_atr14(bars, bar.trade_date)
                 threshold = round(float(bar.open) - exit_rule["multiplier"] * atr_value, 4)
@@ -4959,7 +4962,11 @@ class TradeUploadService:
                         "exit_price": threshold,
                         "exit_time": exit_time,
                         "pnl": threshold - entry_price,
-                        "note": f"按买入后任一天开盘价减 ATR 阈值 {threshold:.4f} 触发卖出",
+                        "note": (
+                            f"按第二日或之后任一天开盘价减 ATR 阈值 {threshold:.4f} 触发卖出"
+                            if rule_window == "second_day_or_later"
+                            else f"按买入后任一天开盘价减 ATR 阈值 {threshold:.4f} 触发卖出"
+                        ),
                     }
             fallback_bar = future_bars[min(9, len(future_bars) - 1)] if future_bars else entry_bar
             fallback_price = float(fallback_bar.close)
@@ -4967,7 +4974,11 @@ class TradeUploadService:
                 "exit_price": fallback_price,
                 "exit_time": datetime.fromisoformat(f"{fallback_bar.trade_date}T15:00:00+00:00"),
                 "pnl": fallback_price - entry_price,
-                "note": "数据范围内未触发买入后任一天开盘价减 ATR 阈值，已按后续可用收盘价补全",
+                "note": (
+                    "数据范围内未触发第二日或之后任一天开盘价减 ATR 阈值，已按后续可用收盘价补全"
+                    if rule_window == "second_day_or_later"
+                    else "数据范围内未触发买入后任一天开盘价减 ATR 阈值，已按后续可用收盘价补全"
+                ),
             }
 
         if exit_rule["type"] == "explicit_price":
@@ -5477,15 +5488,24 @@ class TradeUploadService:
                 "multiplier": float(atr_match.group(1)),
             }
         atr_daily_open_match = re.search(
-            r"(?:最低价|价格)(?:低于|跌破)买入后任何一天的开盘价-([0-9]+(?:\.[0-9]+)?)倍atr(?:的值)?(?:则)?(?:时卖出|卖出)?",
+            r"(?:现价|最低价|价格)(?:低于|跌破)(买入后任何一(?:天|日)|第二日或之后任何一(?:天|日))(?:的)?开盘价-([0-9]+(?:\.[0-9]+)?)倍atr(?:的值)?(?:则)?(?:时卖出|卖出)?",
             text,
             flags=re.I,
         )
         if atr_daily_open_match is not None:
+            rule_window = atr_daily_open_match.group(1)
+            multiplier = float(atr_daily_open_match.group(2))
+            starts_from_second_day = "第二日" in rule_window
             return {
                 "type": "atr_daily_open_break",
-                "label": f"当价格低于买入后任一天开盘价减去 {atr_daily_open_match.group(1)} 倍 ATR 时卖出",
-                "multiplier": float(atr_daily_open_match.group(1)),
+                "label": (
+                    f"当价格低于第二日或之后任一天开盘价减去 {multiplier:g} 倍 ATR 时卖出"
+                    if starts_from_second_day
+                    else f"当价格低于买入后任一天开盘价减去 {multiplier:g} 倍 ATR 时卖出"
+                ),
+                "multiplier": multiplier,
+                "rule_window": "second_day_or_later" if starts_from_second_day else "after_entry_any_day",
+                "start_offset": 1 if starts_from_second_day else 1,
             }
         if "次日收盘价卖出" in text:
             return {"type": "next_close", "label": "次日收盘价卖出"}
