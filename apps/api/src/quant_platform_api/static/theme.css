@@ -768,6 +768,26 @@ button:disabled:hover {
   margin-bottom: 6px;
 }
 
+.task-progress-line {
+  display: grid;
+  gap: 8px;
+  margin: 10px 0;
+}
+
+.task-progress-bar {
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(185, 200, 219, 0.42);
+  overflow: hidden;
+}
+
+.task-progress-bar span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #1f5ed9, #6aa2ff);
+}
+
 .table-wrap {
   overflow: auto;
   border: 1px solid rgba(185, 200, 219, 0.72);

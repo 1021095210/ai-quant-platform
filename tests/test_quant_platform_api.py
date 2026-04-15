@@ -5257,7 +5257,7 @@ class QuantPlatformApiTests(unittest.TestCase):
         created = client.post(
             "/api/v1/trades/uploads/screenshot/ocr-tasks",
             data={"market": "cn_equity"},
-            files={"file": ("trade.png", image_bytes, "image/png")},
+            files=[("files", ("trade.png", image_bytes, "image/png"))],
         )
 
         self.assertEqual(202, created.status_code)
@@ -5273,6 +5273,90 @@ class QuantPlatformApiTests(unittest.TestCase):
         first = items[0]
         self.assertEqual("trade_screenshot_ocr", first["task_kind"])
         self.assertIn("/api/v1/trades/uploads/screenshot/ocr-tasks/", first["status_url"])
+
+    def test_screenshot_ocr_task_supports_multiple_files_and_retry(self) -> None:
+        client = self._build_client()
+        self._login(client)
+        mocked_lines = [
+            [
+                "历史成交",
+                "买入",
+                "悦心健康",
+                "300",
+                "6.060",
+                "1818.000",
+                "买2026030410:20:39",
+            ],
+            [
+                "历史成交",
+                "卖出",
+                "悦心健康",
+                "300",
+                "6.350",
+                "1905.000",
+                "卖2026030511:08:32",
+            ],
+        ]
+        with patch.object(TradeUploadService, "_ocr_image_lines", side_effect=mocked_lines), patch.object(
+            TradeUploadService,
+            "_lookup_cn_equity_symbols_by_names",
+            return_value={"悦心健康": "002162.SZ"},
+        ):
+            created = client.post(
+                "/api/v1/trades/uploads/screenshot/ocr-tasks",
+                data={"market": "cn_equity"},
+                files=[
+                    ("files", ("trade-1.png", b"fake-image-1", "image/png")),
+                    ("files", ("trade-2.png", b"fake-image-2", "image/png")),
+                ],
+            )
+
+        self.assertEqual(202, created.status_code)
+        task_id = created.json()["data"]["task_id"]
+        fetched = client.get(f"/api/v1/trades/uploads/screenshot/ocr-tasks/{task_id}")
+        self.assertEqual(200, fetched.status_code)
+        data = fetched.json()["data"]
+        self.assertEqual("history_list_batch", data["screenshot_mode"])
+        self.assertEqual(2, data["page_count"])
+        self.assertEqual(1, data["detected_record_count"])
+        self.assertEqual(2, data["detected_execution_count"])
+        self.assertIn("识别页数 2", data["suggested_notes"])
+
+        filtered = client.get(
+            "/api/v1/trades/uploads/manual/parse-text-tasks",
+            params={"task_kind": "trade_screenshot_ocr", "task_status": "succeeded"},
+        )
+        self.assertEqual(200, filtered.status_code)
+        items = filtered.json()["data"]["items"]
+        self.assertEqual(1, len(items))
+        self.assertEqual(100, items[0]["progress_pct"])
+
+        with patch.object(TradeUploadService, "_ocr_image_lines", side_effect=mocked_lines), patch.object(
+            TradeUploadService,
+            "_lookup_cn_equity_symbols_by_names",
+            return_value={"悦心健康": "002162.SZ"},
+        ):
+            retried = client.post(f"/api/v1/trades/uploads/screenshot/ocr-tasks/{task_id}/retry")
+        self.assertEqual(202, retried.status_code)
+        self.assertNotEqual(task_id, retried.json()["data"]["task_id"])
+
+    def test_manual_text_parse_task_supports_retry(self) -> None:
+        client = self._build_client()
+        self._login(client)
+        created = client.post(
+            "/api/v1/trades/uploads/manual/parse-text-tasks",
+            json={
+                "text": "2025-07-25 买入：603590.SH；买入方式：开盘价买入；卖出方式：收盘价卖出",
+                "market": "cn_equity",
+                "adjustment_mode": "qfq",
+            },
+        )
+        self.assertEqual(202, created.status_code)
+        task_id = created.json()["data"]["task_id"]
+
+        retried = client.post(f"/api/v1/trades/uploads/manual/parse-text-tasks/{task_id}/retry")
+        self.assertEqual(202, retried.status_code)
+        self.assertNotEqual(task_id, retried.json()["data"]["task_id"])
 
     def test_replay_page_supports_csv_screenshot_and_manual_sources(self) -> None:
         client = self._build_client()

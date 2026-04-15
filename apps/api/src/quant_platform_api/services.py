@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 from concurrent.futures import ThreadPoolExecutor
+import inspect
 import csv
 from datetime import date, datetime, timedelta, timezone
 import hashlib
@@ -4300,6 +4301,111 @@ class TradeUploadService:
             "pairing_summary": "",
         }
 
+    def recognize_trade_screenshot_batch(
+        self,
+        *,
+        contents: list[bytes],
+        market: str,
+        file_names: list[str] | None = None,
+        progress_callback: Callable[[int, dict[str, Any] | None], Any] | None = None,
+    ) -> dict[str, Any]:
+        non_empty_contents = [item for item in contents if item]
+        if not non_empty_contents:
+            raise TaskExecutionError("INVALID_ARGUMENT", "截图内容为空，无法执行 OCR。")
+        aggregated_texts: list[str] = []
+        history_execution_groups: list[list[dict[str, Any]]] = []
+        history_unresolved_names: list[str] = []
+        single_results: list[dict[str, Any]] = []
+        total = len(non_empty_contents)
+        file_names = file_names or []
+        for index, content in enumerate(non_empty_contents, start=1):
+            lines = self._ocr_image_lines(content)
+            combined_text = "\n".join(lines).strip()
+            if combined_text:
+                page_label = file_names[index - 1] if index - 1 < len(file_names) else f"第 {index} 张"
+                aggregated_texts.append(f"[{page_label}]\n{combined_text}")
+            executions = self._extract_cn_equity_history_screenshot_executions(lines) if market == "cn_equity" else []
+            if executions:
+                history_execution_groups.append(executions)
+            else:
+                single_results.append(self.recognize_trade_screenshot(content=content, market=market))
+            if progress_callback is not None:
+                pct = 30 + int((index / total) * 45)
+                progress_callback(
+                    pct,
+                    {
+                        "progress_label": f"正在识别第 {index}/{total} 张截图",
+                        "progress_detail": {
+                            "processed_pages": index,
+                            "total_pages": total,
+                        },
+                    },
+                )
+
+        if history_execution_groups and not single_results:
+            executions = [item for group in history_execution_groups for item in group]
+            deduped_names = list(
+                dict.fromkeys([item.get("name", "").strip() for item in executions if item.get("name")])
+            )
+            name_map = self._lookup_cn_equity_symbols_by_names(deduped_names)
+            unresolved_names: list[str] = []
+            for item in executions:
+                symbol = name_map.get(item.get("name", ""))
+                item["symbol"] = symbol
+                if not symbol and item.get("name") and item["name"] not in unresolved_names:
+                    unresolved_names.append(item["name"])
+            paired = self._pair_cn_equity_history_executions_to_trades(executions)
+            records = paired["records"]
+            first_record = records[0] if records else {}
+            detected_date = None
+            if first_record.get("entry_time"):
+                detected_date = first_record["entry_time"].split("T", 1)[0]
+            notes_parts = [
+                "来源：截图 OCR 批量识别",
+                f"识别页数 {total}",
+                f"识别成交行 {len(executions)}",
+                f"配对成交记录 {len(records)}",
+            ]
+            if paired["pending_execution_count"]:
+                notes_parts.append(f"仍有 {paired['pending_execution_count']} 条未配对成交行待后续补全")
+            if unresolved_names:
+                notes_parts.append(f"未映射证券名称：{', '.join(unresolved_names[:5])}")
+            return {
+                "raw_text": "\n\n".join(aggregated_texts).strip(),
+                "symbol_candidates": [item["symbol"] for item in records if item.get("symbol")][:8],
+                "suggested_symbol": first_record.get("symbol", ""),
+                "suggested_side": first_record.get("side", "long"),
+                "suggested_market": market,
+                "detected_trade_date": detected_date,
+                "suggested_entry_time": first_record.get("entry_time"),
+                "suggested_exit_time": first_record.get("exit_time"),
+                "suggested_pnl": first_record.get("pnl", 0.0),
+                "suggested_notes": "；".join(notes_parts),
+                "screenshot_mode": "history_list_batch",
+                "detected_records": records,
+                "detected_execution_count": len(executions),
+                "detected_record_count": len(records),
+                "pending_execution_count": paired["pending_execution_count"],
+                "unresolved_names": unresolved_names,
+                "pairing_summary": (
+                    f"从 {total} 张历史成交截图识别 {len(executions)} 条成交行，"
+                    f"已配对 {len(records)} 笔记录，"
+                    f"剩余 {paired['pending_execution_count']} 条未完成成交。"
+                ),
+                "page_count": total,
+            }
+
+        primary = single_results[0] if single_results else self.recognize_trade_screenshot(content=non_empty_contents[0], market=market)
+        primary["raw_text"] = "\n\n".join(aggregated_texts).strip() or primary.get("raw_text", "")
+        primary["page_count"] = total
+        primary["suggested_notes"] = "；".join(
+            [
+                primary.get("suggested_notes", ""),
+                f"共上传 {total} 张截图",
+            ]
+        ).strip("；")
+        return primary
+
     def _extract_cn_equity_history_screenshot_records(
         self,
         lines: list[str],
@@ -4325,6 +4431,7 @@ class TradeUploadService:
         paired = self._pair_cn_equity_history_executions_to_trades(executions)
         records = paired["records"]
         return {
+            "executions": executions,
             "records": records,
             "detected_execution_count": len(executions),
             "detected_record_count": len(records),
@@ -6502,6 +6609,19 @@ class AsyncTaskService:
     def cancel(self, task_id: str) -> TaskRecord | None:
         return self._repository.cancel(task_id)
 
+    def update_progress(
+        self,
+        task_id: str,
+        *,
+        progress_pct: int,
+        partial_result: dict[str, Any] | None = None,
+    ) -> TaskRecord | None:
+        return self._repository.update_progress(
+            task_id,
+            progress_pct=progress_pct,
+            partial_result=partial_result,
+        )
+
     def _run(
         self,
         task_id: str,
@@ -6521,7 +6641,18 @@ class AsyncTaskService:
             return
 
         try:
-            result = build_result(task_id, payload)
+            if len(inspect.signature(build_result).parameters) >= 3:
+                result = build_result(
+                    task_id,
+                    payload,
+                    lambda progress_pct, partial_result=None: self.update_progress(
+                        task_id,
+                        progress_pct=progress_pct,
+                        partial_result=partial_result,
+                    ),
+                )
+            else:
+                result = build_result(task_id, payload)
             result.setdefault("config_revision", current.config_revision)
             result.setdefault("request_id", current.request_id)
             result.setdefault("trace_id", current.trace_id)
@@ -6921,8 +7052,19 @@ def build_assistant_research_result(
 
 def build_trade_text_parse_result(
     trade_upload_service: TradeUploadService,
-) -> Callable[[str, dict[str, Any]], dict[str, Any]]:
-    def _builder(task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+) -> Callable[[str, dict[str, Any], Callable[[int, dict[str, Any] | None], Any] | None], dict[str, Any]]:
+    def _builder(
+        task_id: str,
+        payload: dict[str, Any],
+        progress_callback: Callable[[int, dict[str, Any] | None], Any] | None = None,
+    ) -> dict[str, Any]:
+        if progress_callback is not None:
+            progress_callback(
+                35,
+                {
+                    "progress_label": "正在拆分日期块并提取交易规则",
+                },
+            )
         result = trade_upload_service.parse_manual_trade_text(
             text=str(payload.get("text", "")),
             market=str(payload.get("market", "cn_equity")),
@@ -6931,6 +7073,18 @@ def build_trade_text_parse_result(
             user_id=str(payload.get("user_id", "")),
             workspace_id=str(payload.get("workspace_id", "ws_default")),
         )
+        if progress_callback is not None:
+            progress_callback(
+                90,
+                {
+                    "progress_label": "正在整理识别结果与验收摘要",
+                    "progress_detail": {
+                        "chunk_count": (result.get("chunk_summary") or {}).get("chunk_count", 1),
+                        "group_count": result.get("group_count", 0),
+                        "record_count": result.get("record_count", 0),
+                    },
+                },
+            )
         result["parse_task_id"] = task_id
         return result
 
@@ -6939,8 +7093,29 @@ def build_trade_text_parse_result(
 
 def build_trade_screenshot_ocr_result(
     trade_upload_service: TradeUploadService,
-) -> Callable[[str, dict[str, Any]], dict[str, Any]]:
-    def _builder(task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+) -> Callable[[str, dict[str, Any], Callable[[int, dict[str, Any] | None], Any] | None], dict[str, Any]]:
+    def _builder(
+        task_id: str,
+        payload: dict[str, Any],
+        progress_callback: Callable[[int, dict[str, Any] | None], Any] | None = None,
+    ) -> dict[str, Any]:
+        encoded_contents = payload.get("files_b64")
+        if isinstance(encoded_contents, list) and encoded_contents:
+            contents: list[bytes] = []
+            for item in encoded_contents:
+                try:
+                    contents.append(base64.b64decode(str(item).encode("utf-8")))
+                except Exception as exc:  # pragma: no cover - defensive
+                    raise TaskExecutionError("INVALID_ARGUMENT", "截图内容损坏，无法执行 OCR。") from exc
+            result = trade_upload_service.recognize_trade_screenshot_batch(
+                contents=contents,
+                market=str(payload.get("market", "cn_equity")),
+                file_names=[str(item) for item in payload.get("file_names", []) if str(item).strip()],
+                progress_callback=progress_callback,
+            )
+            result["ocr_task_id"] = task_id
+            return result
+
         encoded_content = str(payload.get("file_content_b64") or "")
         if not encoded_content:
             raise TaskExecutionError("INVALID_ARGUMENT", "截图内容为空，无法执行 OCR。")
@@ -6948,10 +7123,23 @@ def build_trade_screenshot_ocr_result(
             content = base64.b64decode(encoded_content.encode("utf-8"))
         except Exception as exc:  # pragma: no cover - defensive
             raise TaskExecutionError("INVALID_ARGUMENT", "截图内容损坏，无法执行 OCR。") from exc
+        if progress_callback is not None:
+            progress_callback(45, {"progress_label": "正在识别截图中的文字与成交行"})
         result = trade_upload_service.recognize_trade_screenshot(
             content=content,
             market=str(payload.get("market", "cn_equity")),
         )
+        if progress_callback is not None:
+            progress_callback(
+                90,
+                {
+                    "progress_label": "正在整理 OCR 结果与配对摘要",
+                    "progress_detail": {
+                        "page_count": 1,
+                        "detected_record_count": result.get("detected_record_count", 0),
+                    },
+                },
+            )
         result["ocr_task_id"] = task_id
         return result
 
