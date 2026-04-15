@@ -5247,6 +5247,33 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertEqual(300, record["quantity"])
         self.assertIn("历史成交列表配对生成", record["notes"])
 
+    def test_screenshot_ocr_task_endpoint_lists_recent_items(self) -> None:
+        client = self._build_client()
+        self._login(client)
+        image_bytes = self._build_trade_screenshot_bytes(
+            "2025-07-25\n603590.SH\n买入\n盈亏: 1280"
+        )
+
+        created = client.post(
+            "/api/v1/trades/uploads/screenshot/ocr-tasks",
+            data={"market": "cn_equity"},
+            files={"file": ("trade.png", image_bytes, "image/png")},
+        )
+
+        self.assertEqual(202, created.status_code)
+        task_id = created.json()["data"]["task_id"]
+        fetched = client.get(f"/api/v1/trades/uploads/screenshot/ocr-tasks/{task_id}")
+        self.assertEqual(200, fetched.status_code)
+        self.assertEqual("603590.SH", fetched.json()["data"]["suggested_symbol"])
+
+        listed = client.get("/api/v1/trades/uploads/manual/parse-text-tasks")
+        self.assertEqual(200, listed.status_code)
+        items = listed.json()["data"]["items"]
+        self.assertGreaterEqual(len(items), 1)
+        first = items[0]
+        self.assertEqual("trade_screenshot_ocr", first["task_kind"])
+        self.assertIn("/api/v1/trades/uploads/screenshot/ocr-tasks/", first["status_url"])
+
     def test_replay_page_supports_csv_screenshot_and_manual_sources(self) -> None:
         client = self._build_client()
         self._login(client)
