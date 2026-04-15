@@ -1791,6 +1791,9 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertEqual("个股研究", data["workflow_title"])
         self.assertEqual("控制风险", data["retail_guidance"]["action_label"])
         self.assertTrue(data["retail_guidance"]["bullets"])
+        self.assertIn("risk_level", data["retail_guidance"])
+        self.assertIn("observation_focus", data["retail_guidance"])
+        self.assertIn("confirmation_condition", data["retail_guidance"])
 
     def test_assistant_adds_internal_evidence_bundle_when_market_data_available(self) -> None:
         class StubBar:
@@ -1907,6 +1910,9 @@ class QuantPlatformApiTests(unittest.TestCase):
 
         self.assertEqual("stock_analysis", data["workflow_id"])
         self.assertEqual("继续观察", data["retail_guidance"]["action_label"])
+        self.assertEqual("中等", data["retail_guidance"]["risk_level"])
+        self.assertTrue(data["retail_guidance"]["observation_focus"])
+        self.assertTrue(data["retail_guidance"]["confirmation_condition"])
         self.assertTrue(any(section["title"] == "个股位置与应对" for section in data["report_sections"]))
 
     @patch("quant_platform_api.services.httpx.Client")

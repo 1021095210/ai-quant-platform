@@ -5828,7 +5828,7 @@ class FinancialAssistantService(MentorService):
             "debate 是 2 个对象数组，每个对象含 side、view。"
             "risk_checklist、deliverables、next_actions 都是中文字符串数组。"
             "related_modules 是对象数组，每个对象含 label、path、reason，路径仅限 /strategy /backtests /rules /indicators /replay /mentor /workspace。"
-            "retail_guidance 是对象，字段固定为 action_label、summary、bullets；只有个股研究工作流需要填充，其他工作流可返回 null。"
+            "retail_guidance 是对象，字段固定为 action_label、summary、bullets、risk_level、observation_focus、confirmation_condition；只有个股研究工作流需要填充，其他工作流可返回 null。"
             "请优先给简洁、可执行、少废话但有依据的结果。"
         )
         prompt_payload = {
@@ -6312,12 +6312,18 @@ class FinancialAssistantService(MentorService):
             "先看价格位置、财务质量和近端事件是否互相印证，再决定下一步。",
             "若已有持仓，优先设好风险位和退出条件。",
         ]
+        risk_level = "中等"
+        observation_focus = "先看价格位置、财务质量和近端事件是否能互相印证。"
+        confirmation_condition = "至少补齐一层关键证据后，再决定是否继续行动。"
 
         if not price_snapshot:
             return {
                 "action_label": action_label,
                 "summary": summary,
                 "bullets": bullets,
+                "risk_level": risk_level,
+                "observation_focus": observation_focus,
+                "confirmation_condition": confirmation_condition,
             }
         if confidence_label == "中高" and return_20d > 0 and day_change > -3:
             action_label = "继续观察"
@@ -6327,6 +6333,9 @@ class FinancialAssistantService(MentorService):
                 "若准备介入，先等证据包里的价格、财务和事件三层继续互相印证。",
                 "若已有持仓，优先按计划观察而不是追着价格加码。",
             ]
+            risk_level = "中等"
+            observation_focus = "重点观察价格承接、近端事件兑现和基本面证据是否继续站得住。"
+            confirmation_condition = "若价格位置仍稳、事件继续兑现、且证据覆盖维持中高，再考虑进一步行动。"
         if confidence_label in {"很低", "偏低"} or return_20d < -8 or ("event_news" in missing_sections and "financial_quality" in missing_sections):
             action_label = "控制风险"
             summary = "当前位置证据不足或价格承压，更适合先控制风险，再决定是否继续观察。"
@@ -6335,13 +6344,21 @@ class FinancialAssistantService(MentorService):
                 "没有新的高质量事件或财务证据前，不宜把短期反弹直接当成反转。",
                 "若已有持仓，先定义风险位，再决定是否继续持有。",
             ]
+            risk_level = "较高"
+            observation_focus = "先看风险位是否失守、趋势是否继续走弱，以及有没有新的高质量证据补上。"
+            confirmation_condition = "只有在风险位企稳、趋势止跌且关键证据补齐后，才考虑从控制风险切回观察。"
         if event_items and action_label != "控制风险":
             latest = event_items[0]
             bullets[0] = f"先跟踪近端线索「{latest.get('title')}」是否得到正式公告或后续数据确认。"
+            observation_focus = f"先跟踪「{latest.get('title')}」是否得到正式公告、财报或价格承接的继续验证。"
+            confirmation_condition = "事件线索必须得到正式来源和后续数据印证，不能只凭一次新闻刺激行动。"
         return {
             "action_label": action_label,
             "summary": summary,
             "bullets": bullets[:3],
+            "risk_level": risk_level,
+            "observation_focus": observation_focus,
+            "confirmation_condition": confirmation_condition,
         }
 
     def _assistant_link_event_evidence_to_debate(
@@ -6448,12 +6465,18 @@ class FinancialAssistantService(MentorService):
         action_label = str(value.get("action_label", "")).strip()
         summary = str(value.get("summary", "")).strip()
         bullets = [str(item).strip() for item in value.get("bullets", []) if str(item).strip()][:4]
+        risk_level = str(value.get("risk_level", "")).strip()
+        observation_focus = str(value.get("observation_focus", "")).strip()
+        confirmation_condition = str(value.get("confirmation_condition", "")).strip()
         if not action_label and not summary and not bullets:
             return None
         return {
             "action_label": action_label or "等待确认",
             "summary": summary or "当前更适合先等待更多证据确认。",
             "bullets": bullets,
+            "risk_level": risk_level or "中等",
+            "observation_focus": observation_focus or "先继续观察价格、证据和事件是否能互相印证。",
+            "confirmation_condition": confirmation_condition or "等关键证据补齐后再决定下一步。",
         }
 
     def _extract_responses_content(self, response: httpx.Response) -> str:

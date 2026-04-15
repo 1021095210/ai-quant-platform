@@ -250,6 +250,23 @@ function renderResearch(payload) {
       <strong>普通用户研判</strong>
       <div class="muted-note">当前更适合：${retailGuidance.action_label || "等待确认"}</div>
       <div class="muted-note">${retailGuidance.summary || ""}</div>
+      <div class="assistant-desk-results" style="margin-top:12px;">
+        <div class="assistant-desk-result">
+          <span>当前动作</span>
+          <strong>${retailGuidance.action_label || "等待确认"}</strong>
+          <div class="muted-note">${retailGuidance.summary || "先等待更多证据确认。"}</div>
+        </div>
+        <div class="assistant-desk-result">
+          <span>风险等级</span>
+          <strong>${retailGuidance.risk_level || "中等"}</strong>
+          <div class="muted-note">${retailGuidance.observation_focus || "先继续观察价格、证据和事件是否能互相印证。"}</div>
+        </div>
+        <div class="assistant-desk-result">
+          <span>再确认条件</span>
+          <strong>满足后再行动</strong>
+          <div class="muted-note">${retailGuidance.confirmation_condition || "等关键证据补齐后再决定下一步。"}</div>
+        </div>
+      </div>
       ${
         Array.isArray(retailGuidance.bullets) && retailGuidance.bullets.length
           ? `<ul class="mentor-step-list">${retailGuidance.bullets.map((item) => `<li>${item}</li>`).join("")}</ul>`
@@ -320,14 +337,29 @@ function renderResearch(payload) {
         <div class="assistant-desk-result">
           <span>近端事件与公告</span>
           <strong>${eventEvidence.items?.length ? `已收录 ${eventEvidence.items.length} 条线索` : "暂无"}</strong>
-          <div class="muted-note">${
+          ${
             eventEvidence.items?.length
-              ? eventEvidence.items
-                  .slice(0, 3)
-                  .map((item) => `${item.title}｜${item.source}${item.as_of ? `｜${item.as_of}` : ""}`)
-                  .join("<br>")
-              : "当前模型链路未提供近端事件检索结果，或暂无可确认线索。"
-          }</div>
+              ? `<div class="assistant-desk-results" style="margin-top:10px;">
+                  ${eventEvidence.items
+                    .slice(0, 3)
+                    .map(
+                      (item) => `
+                        <div class="assistant-desk-result">
+                          <span>${item.event_type || "event"}</span>
+                          <strong>${item.title}</strong>
+                          <div class="muted-note">${item.source || "-"}${item.as_of ? ` · ${item.as_of}` : ""}</div>
+                          ${
+                            item.impact || item.why_it_matters
+                              ? `<div class="muted-note">${[item.impact, item.why_it_matters].filter(Boolean).join(" · ")}</div>`
+                              : ""
+                          }
+                        </div>
+                      `,
+                    )
+                    .join("")}
+                </div>`
+              : `<div class="muted-note">当前模型链路未提供近端事件检索结果，或暂无可确认线索。</div>`
+          }
         </div>
       </div>
       ${evidenceWarnings.length ? `<div class="muted-note" style="margin-top:10px;">${evidenceWarnings.map((item) => `- ${item}`).join("<br>")}</div>` : ""}
