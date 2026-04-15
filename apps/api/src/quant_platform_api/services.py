@@ -4793,7 +4793,7 @@ class TradeUploadService:
                     pnl=0.0,
                     entry_price=None,
                     exit_price=None,
-                    quantity=None,
+                    quantity=100 if market == "cn_equity" else None,
                     notes=placeholder_notes,
                     source_kind="text_parse_hybrid" if llm_used else "text_parse_rule",
                     input_confidence="needs_review",
@@ -4865,7 +4865,7 @@ class TradeUploadService:
             pnl=round(pnl, 4),
             entry_price=round(entry_price, 4),
             exit_price=round(exit_price, 4) if exit_price is not None else None,
-            quantity=None,
+            quantity=100 if market == "cn_equity" else None,
             notes=notes,
             source_kind="text_parse_hybrid" if llm_used else "text_parse_rule",
             input_confidence="needs_review",
@@ -4878,6 +4878,7 @@ class TradeUploadService:
                 "exit_time": "text_llm_parse" if llm_used and exit_rule is not None else "market_fill",
                 "entry_price": "market_fill",
                 "exit_price": "market_fill" if exit_price is not None else "pending_confirmation",
+                "quantity": "platform_default_lot" if market == "cn_equity" else "pending_confirmation",
                 "pnl": "derived_from_prices" if exit_price is not None else "pending_confirmation",
                 "notes": "system_generated",
             },
@@ -7567,6 +7568,19 @@ class AsyncTaskService:
 
     def cancel(self, task_id: str) -> TaskRecord | None:
         return self._repository.cancel(task_id)
+
+    def delete(
+        self,
+        task_id: str,
+        *,
+        user_id: str | None = None,
+        workspace_id: str | None = None,
+    ) -> bool:
+        return self._repository.delete(
+            task_id,
+            user_id=user_id,
+            workspace_id=workspace_id,
+        )
 
     def update_progress(
         self,

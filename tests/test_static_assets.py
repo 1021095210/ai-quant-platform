@@ -170,6 +170,15 @@ class StaticAssetTests(unittest.TestCase):
             / "static"
             / "replay.html"
         ).read_text(encoding="utf-8")
+        replay_js = (
+            WORKSPACE_ROOT
+            / "apps"
+            / "api"
+            / "src"
+            / "quant_platform_api"
+            / "static"
+            / "replay.js"
+        ).read_text(encoding="utf-8")
         theme_css = (
             WORKSPACE_ROOT
             / "apps"
@@ -188,6 +197,25 @@ class StaticAssetTests(unittest.TestCase):
         self.assertIn(".bounded-scroll-md", theme_css)
         self.assertIn(".bounded-scroll-lg", theme_css)
         self.assertIn(".bounded-scroll-xl", theme_css)
+        self.assertIn("replay-delete-parse-task-btn", replay_js)
+        self.assertIn("buildTaskDeleteUrl", replay_js)
+
+    def test_replay_assets_include_beginner_friendly_replay_sections(self) -> None:
+        replay_js = (
+            WORKSPACE_ROOT
+            / "apps"
+            / "api"
+            / "src"
+            / "quant_platform_api"
+            / "static"
+            / "replay.js"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("先看结论", replay_js)
+        self.assertIn("这版更适合什么人", replay_js)
+        self.assertIn("高级研究细节（进阶用户再看）", replay_js)
+        self.assertIn("friendlyParameterLabel", replay_js)
+        self.assertIn("buildSpecificReplayAdvice", replay_js)
 
     def test_strategy_and_backtests_assets_include_capability_guidance(self) -> None:
         strategy_html = (

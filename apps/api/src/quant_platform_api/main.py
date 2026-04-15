@@ -1766,6 +1766,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             status_code=status.HTTP_202_ACCEPTED,
         )
 
+    @app.delete(f"{app_settings.api_prefix}/trades/uploads/manual/parse-text-tasks/{{parse_task_id}}")
+    def delete_manual_trade_text_task(
+        request: Request,
+        parse_task_id: str,
+    ) -> JSONResponse:
+        current_user = _require_current_user(request, services.auth_service)
+        deleted = services.trade_text_parse_service.delete(
+            parse_task_id,
+            user_id=current_user.user_id,
+            workspace_id=current_user.workspace_id,
+        )
+        if not deleted:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=ErrorPayload(code="NOT_FOUND", message="未找到对应的长文字解析任务。").model_dump(),
+            )
+        return _success_response(request, data={"task_id": parse_task_id, "deleted": True})
+
     @app.post(f"{app_settings.api_prefix}/trades/uploads/screenshot")
     async def upload_trade_screenshot(
         request: Request,
@@ -1928,6 +1946,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             },
             status_code=status.HTTP_202_ACCEPTED,
         )
+
+    @app.delete(f"{app_settings.api_prefix}/trades/uploads/screenshot/ocr-tasks/{{ocr_task_id}}")
+    def delete_trade_screenshot_ocr_task(
+        request: Request,
+        ocr_task_id: str,
+    ) -> JSONResponse:
+        current_user = _require_current_user(request, services.auth_service)
+        deleted = services.trade_text_parse_service.delete(
+            ocr_task_id,
+            user_id=current_user.user_id,
+            workspace_id=current_user.workspace_id,
+        )
+        if not deleted:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=ErrorPayload(code="NOT_FOUND", message="未找到对应的截图 OCR 任务。").model_dump(),
+            )
+        return _success_response(request, data={"task_id": ocr_task_id, "deleted": True})
 
     @app.post(f"{app_settings.api_prefix}/trades/uploads/{{upload_id}}/parse")
     def parse_trade_upload(

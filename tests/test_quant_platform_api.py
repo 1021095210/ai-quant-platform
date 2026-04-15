@@ -5831,6 +5831,57 @@ class QuantPlatformApiTests(unittest.TestCase):
         self.assertIn("chunk_count", first)
         self.assertIn("validation_readiness", first)
 
+    def test_manual_text_parse_task_can_be_deleted(self) -> None:
+        client = self._build_client()
+        self._login(client)
+
+        created = client.post(
+            "/api/v1/trades/uploads/manual/parse-text-tasks",
+            json={
+                "text": (
+                    "2025-08-14\n"
+                    "（2 只）：603590.SH, 002225.SZ\n\n"
+                    "买入方式：当日开盘价买入\n"
+                    "卖出方式：现价低于之后任何一日开盘价-0.5倍atr时卖出"
+                ),
+                "market": "cn_equity",
+                "adjustment_mode": "qfq",
+            },
+        )
+        self.assertEqual(202, created.status_code)
+        task_id = created.json()["data"]["task_id"]
+
+        deleted = client.delete(f"/api/v1/trades/uploads/manual/parse-text-tasks/{task_id}")
+        self.assertEqual(200, deleted.status_code)
+
+        listed = client.get("/api/v1/trades/uploads/manual/parse-text-tasks")
+        self.assertEqual(200, listed.status_code)
+        self.assertNotIn(task_id, {item["task_id"] for item in listed.json()["data"]["items"]})
+
+    def test_manual_text_parse_defaults_cn_equity_quantity_to_one_lot(self) -> None:
+        client = self._build_client()
+        self._login(client)
+
+        response = client.post(
+            "/api/v1/trades/uploads/manual/parse-text",
+            json={
+                "text": (
+                    "2025-07-25 (Friday)\n"
+                    "（2 只）：603590.SH, 002225.SZ\n"
+                    "买入方式：当日开盘价买入\n"
+                    "卖出方式：现价低于之后任何一日开盘价-0.5倍atr时卖出"
+                ),
+                "market": "cn_equity",
+                "adjustment_mode": "qfq",
+            },
+        )
+
+        self.assertEqual(200, response.status_code)
+        records = response.json()["data"]["records"]
+        self.assertTrue(records)
+        self.assertTrue(all(item["quantity"] == 100 for item in records))
+        self.assertTrue(all(item["field_sources"]["quantity"] == "platform_default_lot" for item in records))
+
     def test_screenshot_trade_upload_creates_structured_record(self) -> None:
         client = self._build_client()
         self._login(client)
@@ -5957,6 +6008,29 @@ class QuantPlatformApiTests(unittest.TestCase):
         first = items[0]
         self.assertEqual("trade_screenshot_ocr", first["task_kind"])
         self.assertIn("/api/v1/trades/uploads/screenshot/ocr-tasks/", first["status_url"])
+
+    def test_screenshot_ocr_task_can_be_deleted(self) -> None:
+        client = self._build_client()
+        self._login(client)
+        image_bytes = self._build_trade_screenshot_bytes("2025-07-25\n603590.SH\n买入\n盈亏: 1280")
+
+        created = client.post(
+            "/api/v1/trades/uploads/screenshot/ocr-tasks",
+            data={"market": "cn_equity"},
+            files=[("files", ("trade.png", image_bytes, "image/png"))],
+        )
+        self.assertEqual(202, created.status_code)
+        task_id = created.json()["data"]["task_id"]
+
+        deleted = client.delete(f"/api/v1/trades/uploads/screenshot/ocr-tasks/{task_id}")
+        self.assertEqual(200, deleted.status_code)
+
+        listed = client.get(
+            "/api/v1/trades/uploads/manual/parse-text-tasks",
+            params={"task_kind": "trade_screenshot_ocr"},
+        )
+        self.assertEqual(200, listed.status_code)
+        self.assertNotIn(task_id, {item["task_id"] for item in listed.json()["data"]["items"]})
 
     def test_screenshot_ocr_task_supports_multiple_files_and_retry(self) -> None:
         client = self._build_client()
